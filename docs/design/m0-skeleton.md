@@ -236,7 +236,7 @@ protocol Collector: AnyObject {            // 实例归 SamplingEngine 这个 ac
   - 订阅接口是 `events() -> AsyncStream<EngineEvent>`：`.tick(TickResult)` 每个 tick 一次；另有 `.status(EngineStatus)`，在订阅时、需求或降频变化、自检后推送，这样定时器停掉之后诊断页也能看到需求列表和降频状态的变化。每个订阅者只缓存最新 16 个事件。
   - 降频接口为 `setThrottle(factor: ThrottleFactor, reasons: Set<ThrottleReason>)`，`ThrottleFactor` 取 `.normal`、`.slowed(n)`、`.paused`。
 - **2026-09-28 · K19 运行中复检的落点**
-  - 引擎在某个采集器连续 10 次输出 `unavailable` 后自动重新自检；采集器首次获得需求时如果还没自检过，先自检。启动、唤醒、系统 build 号变化这三个时机由 app 层调用 `runSelfTests()`。
+  - 引擎在某个采集器连续 10 次输出 `unavailable` 后自动重新自检；复检后仍不可用时门槛翻倍（最多 64 倍，1 Hz 下约 10 分钟一次），恢复后回到初始值，避免长期故障时反复自检、刷日志。采集器首次获得需求时如果还没自检过，先自检。启动、唤醒、系统 build 号变化这三个时机由 app 层调用 `runSelfTests()`。
 - **2026-09-28 · §7 命令行补充**
   - `selftest` 另支持 `--json`；`cpu --json` 输出 JSON Lines（每次一行）；`cpu` 按绝对截止时间休眠，读数陈旧或核数变化的那一次不计入 `--count`。
   - 新增 `engine [--demand 3] [--idle 3]`：经 `SamplingEngine` 采样，注销需求后检查 tick 计数不再增长、定时器已停（验收第 5 条的命令行验证）。
