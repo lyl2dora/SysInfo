@@ -8,7 +8,17 @@ extension MetricID {
 
     /// 第 `index` 个逻辑核的占用，0…1。`index` 与 `host_processor_info` 的顺序一致，从 0 开始。
     public static func cpuUsageCore(_ index: Int) -> MetricID {
-        MetricID("cpu.usage.core.\(index)")
+        MetricID("\(cpuUsageCorePrefix)\(index)")
+    }
+
+    private static let cpuUsageCorePrefix = "cpu.usage.core."
+
+    /// 若是每核占用 `cpu.usage.core.<n>`，返回 n；否则为 nil。
+    public var cpuCoreIndex: Int? {
+        guard rawValue.hasPrefix(Self.cpuUsageCorePrefix),
+            let index = Int(rawValue.dropFirst(Self.cpuUsageCorePrefix.count)), index >= 0
+        else { return nil }
+        return index
     }
 
     /// 本进程 CPU 占用，按单核的比例（K24）：1 表示占满一个核，多线程时可以大于 1。

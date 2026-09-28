@@ -17,6 +17,15 @@ import SysModel
         #expect(MetricID.appSelfFootprint.rawValue == "app.self.footprint")
     }
 
+    @Test func cpuCoreIndexParsesOnlyPerCoreIDs() {
+        #expect(MetricID.cpuUsageCore(0).cpuCoreIndex == 0)
+        #expect(MetricID.cpuUsageCore(17).cpuCoreIndex == 17)
+        #expect(MetricID.cpuUsageTotal.cpuCoreIndex == nil)
+        #expect(MetricID("cpu.usage.core.").cpuCoreIndex == nil)
+        #expect(MetricID("cpu.usage.core.x").cpuCoreIndex == nil)
+        #expect(MetricID("cpu.usage.core.-1").cpuCoreIndex == nil)
+    }
+
     @Test func collectorIDIsOrderedByRawValue() {
         let ids: [CollectorID] = ["cpu.load", "app.self"]
         #expect(ids.sorted() == ["app.self", "cpu.load"])
