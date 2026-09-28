@@ -1,0 +1,50 @@
+// SysInfo app target 的公共构建设置（M0 设计 §3）。
+// 只挂在 app target 上；Package 内的 target 由 Packages/SysKit/Package.swift 自己配置。
+
+// 部署与架构（D03）
+SDKROOT = macosx
+SUPPORTED_PLATFORMS = macosx
+MACOSX_DEPLOYMENT_TARGET = 27.0
+ARCHS = arm64
+
+// 语言：Swift 6 语言模式；app target 默认 MainActor 隔离（D23）。
+// 保留 Xcode 27 模板的 Approachable Concurrency 与 MemberImportVisibility。
+SWIFT_VERSION = 6.0
+SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
+SWIFT_APPROACHABLE_CONCURRENCY = YES
+SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES
+
+// 沙盒与签名：不开沙盒（D03），开启 Hardened Runtime；Debug/Release 都用 Developer ID 手动签名（D11、D23）。
+// Debug 保留 Xcode 注入的 get-task-allow；不加 disable-library-validation。
+ENABLE_APP_SANDBOX = NO
+ENABLE_HARDENED_RUNTIME = YES
+RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Developer ID Application
+DEVELOPMENT_TEAM = D8MFB2YNN3
+PROVISIONING_PROFILE_SPECIFIER =
+
+// Info.plist：由构建设置生成；LSUIElement 使 app 默认没有 Dock 图标（D23）。
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_KEY_LSUIElement = YES
+INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.utilities
+INFOPLIST_KEY_NSPrincipalClass = NSApplication
+
+// 标识与版本（K30）：CURRENT_PROJECT_VERSION 由 Makefile 用 `git rev-list --count HEAD` 覆盖。
+PRODUCT_NAME = SysInfo
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+// 本地化：开发语言 zh-Hans（工程的 developmentRegion），文案统一放进 String Catalog（D23）。
+LOCALIZATION_PREFERS_STRING_CATALOGS = YES
+SWIFT_EMIT_LOC_STRINGS = YES
+STRING_CATALOG_GENERATE_SYMBOLS = YES
+
+// 其他（沿用 Xcode 27 模板）
+COMBINE_HIDPI_IMAGES = YES
+DEAD_CODE_STRIPPING = YES
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
+
+// 「Check private imports」构建阶段要递归读取 App/ 下的源码（D05、D23 的隔离检查），
+// 而用户脚本沙盒不允许读取目录输入的内容，所以在 app target 上关闭；该阶段只读源码、不写文件。
+ENABLE_USER_SCRIPT_SANDBOXING = NO
