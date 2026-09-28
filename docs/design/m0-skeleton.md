@@ -242,3 +242,41 @@ protocol Collector: AnyObject {            // 实例归 SamplingEngine 这个 ac
   - 新增 `engine [--demand 3] [--idle 3]`：经 `SamplingEngine` 采样，注销需求后检查 tick 计数不再增长、定时器已停（验收第 5 条的命令行验证）。
 - **2026-09-28 · §9 `remote-cli` 补充**
   - `REMOTE_HOST` 可在命令行覆盖；ssh 与 rsync 用 `BatchMode=yes`、`ConnectTimeout=10`，密钥登录失败时直接报错；先跑私有 import 检查。
+- **2026-09-29 · §5.3 降频信号的汇总规则与开关范围**
+  - 汇总写成纯函数 `ThrottlePolicy.evaluate`（SysCollectors，有单测）：锁屏或显示器睡眠 → `paused`；低电量、`thermalState ≥ .serious`、UPS/电池供电（去抖 5 s）、诊断页手动开关 → `slowed(2)`；否则 `normal`。
+  - 设置里的「自动降频」关掉后忽略全部自动信号（含锁屏、显示器睡眠的暂停），只保留诊断页的手动开关。理由：D19「由用户主导」，关掉就是完全不自动调节；信号变化仍照常写日志。
+  - `systemPrefersReducedResourceUsage` 只是 SwiftUI 环境值，M0 没有接（本节原文允许），日志里也暂不记录它。
+  - 唤醒（`NSWorkspace.didWakeNotification`）时让引擎重新自检；系统 build 号记在 `.dev` 域的 `diagnostics.lastSystemBuild`，变化时写日志（启动自检已覆盖复检）。
+- **2026-09-29 · §6 设置项的键名与 `--factory-defaults`**
+  - 键名：`general.interval`（1/2/5）、`general.autoThrottle`、`cpu.interval`（0 = 跟随全局）、`menubar.cpu.visible`。可以用 `defaults write zone.lyl.sysinfo.dev <键> …` 修改，重启后生效。
+  - 新增启动参数 `--factory-defaults`：不读写偏好，只用出厂默认值，供开销测量使用。`--open-panel`、`--open-settings` 在 Release 构建里同样可用（§9 的测量要用 Release 构建）。
+- **2026-09-29 · §6 MetricStore 与菜单栏数字**
+  - 环形缓冲写成 SysModel 的 `TimeSeries`（按单调时钟保留 15 分钟，均摊 O(1)，有单测）；诊断页的「1 分钟均值」也从它算。
+  - 菜单栏数字按 K24 做 EMA 平滑（τ = 1.5 s，按实际时间差加权；不可用时清空，间隔超过 10τ 时不混合旧值），面板图表用原始值。本节原文没写，按 D24 采纳的 K24 补上。
+  - 调度状态变化写 info 日志：「采样定时器已排定 / 已停止」「有效需求：…」，用于核对验收第 5 条。
+- **2026-09-29 · §6 菜单栏 item 的绘制**
+  - 固定宽度按「CPU」（10 pt 半粗）+「100%」（13 pt 等宽数字）算出，本机为 64 pt；数字右对齐，位数变化时不左右跳。
+  - session 期间 item 的高亮由系统绘制（27 实测，自绘 `view` 也有），所以不再自绘高亮。
+  - 实测：自绘 `statusItem.view` 与 `expandedInterfaceDelegate` 可以一起用，真实点击会开启 session（探针只验证过 `button` 路径）。
+  - 实测：按住 ⌘ 把 item 拖出菜单栏后，KVO 收到 `isVisible = false`，设置开关随之关闭、需求注销、定时器停止；在设置里重新打开后，item 以 `isVisible = true` 重新创建并显示（系统保存的「不可见」被 app 设置覆盖，K32）。
+- **2026-09-29 · §6 面板的开关细节**
+  - 「再次点击 item」：点击交给系统处理，本进程只能从全局鼠标监视器看到。开启 session 的那次点击也会在 didBegin 之后送到全局监视器，所以用 `NSEvent.timestamp` 与面板显示时刻比较，忽略更早的事件。实测再次点击后系统不会重新开启 session。
+  - 本 app 其他窗口（设置窗口）里的鼠标按下也算「点别处」（本地监视器）。
+  - 面板是可以成为 key 的 non-activating panel：Esc 靠它成为 key window 后由本地键盘监视器处理，不激活 app。
+  - `--open-panel`：启动初期菜单栏窗口还在原点，最多等 2 s，等锚点落到菜单栏上再显示；没有 item 时贴屏幕右上角。
+  - 面板隐藏时拆掉 `NSHostingView`（同一个 `NSPanel`、`NSGlassEffectView` 复用），关闭后 SwiftUI 不再随每个 tick 重算。
+  - 固定为浮窗：`isMovableByWindowBackground` 对 SwiftUI 内容不起作用，另给顶栏加 `WindowDragGesture`（只在固定时启用）。关闭按钮是顶栏左侧的玻璃按钮（xmark），不是标题栏按钮；Esc 同样关闭浮窗；固定期间再点击 item 会回到锚定状态。
+  - 顶栏标题放在左右按钮之间的剩余空间居中（左 1 个按钮、右 3 个按钮，严格居中会与按钮重叠）；按钮用 `.buttonStyle(.glass)` + `.buttonBorderShape(.circle)`。
+- **2026-09-29 · §6 设置窗口**
+  - `NSHostingSceneRepresentation` + `Settings` 场景可用，打开用它的 `environment.openSettings()`，不需要退回 `NSWindow`。窗口通过内容里的 `NSViewRepresentable` 取得，监听 `willClose` 切回 `.accessory`。
+  - 协作式激活：用户在面板里点「设置」或重新打开 app 时 `NSApp.activate()` 会生效；经命令行 `--open-settings` 启动时别的 app 在前台，激活不生效，这时用 `orderFrontRegardless()` 把窗口放到最前，用户点一下即激活。
+  - 窗口关闭后内容换成空视图，不再读 MetricStore。
+  - 诊断页可见期间登记 `diagnostics` 需求（`app.self`，1 s），用于显示本进程开销；所以诊断页开着时调度器不会停。验收第 5 条按「设置窗口关闭」的状态核对。
+  - 主菜单手工构建（应用、编辑、窗口三个菜单），只在 `.regular` 期间显示。
+  - 「关于」页的 git 短哈希来自 Info.plist 的 `SysInfoGitCommit`，由 Makefile 注入（`Config/Info.plist` 与生成的 Info.plist 合并）。
+  - `make strings`：xcodebuild 不会把提取的文案写回 `.xcstrings`，用 `xcstringstool sync` 同步。
+- **2026-09-29 · §9 measure 脚本**
+  - 构建用 Release 配置，但 Bundle ID 改为 `zone.lyl.sysinfo.dev`、显示名 SysInfo Dev，并带 `--factory-defaults` 启动：测的是优化后的代码，又不碰日用版 `zone.lyl.sysinfo` 的 defaults 域（D16、D18）。产物放在 `build/MeasureDerivedData`。
+  - 除 Stats 外，已有 SysInfo 实例在运行时也拒绝执行（会干扰 MenuBarAgent/WindowServer 的对照）；只结束脚本自己启动的进程。
+  - 另测一段不运行 SysInfo 的基线（`BASELINE=0` 可跳过），MenuBarAgent、WindowServer 的增量对照基线看；app 的 footprint 用 `footprint -p` 读。
+  - 面板档：测量期间若有人点了别处或按 Esc，面板会关闭，脚本从日志里发现后把该档标为作废。
