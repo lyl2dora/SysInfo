@@ -1,0 +1,8 @@
+# 调研探针（2026-09-28）
+
+这些是 `docs/research/2026-09-28-capability-sdk-audit.md` 背后的只读探针，在 Mac mini M5 Pro / macOS 27.0 (26A428) 上编译运行过。它们相当于每条数据路径的参考实现：SMC、IOReport、coalition、NVMe SMART、IFMIB、CoreHID UPS、菜单栏运行时等。
+
+- 每个目录对应一个域：`<域>/` 是初测，`<域>-review/` 是 skeptic 复测，`gap-*/` 是补漏，`sdk-*`/`verify-*`/`web-*` 是 SDK 与文档调研。
+- 版本库里只有源码（`.swift/.c/.m/.h/.py/.sh`、探针 app 的 `Info.plist`、`.entitlements`），另有 `sdk-swiftui/` 下两份 `.md` 发布说明副本。其他网页和文档快照（`web-release-notes/`、`verify-web-release-notes/` 等目录下的 `.txt/.json`）只保存在本地。二进制文件、原始日志和大体积 dump 都没有保留。
+- **文本输出（`.txt/.csv/.json`）和数据 dump（ioreg/diskutil 导出的 `.plist`）里含本机标识**，如磁盘序列号、卷 UUID、MAC、IP、设备名。这些文件已在 `.gitignore` 中排除，只保存在本地。
+- 编译示例：`xcrun swiftc -O x.swift -o x`；IOReport 相关的加 `-lIOReport`；C 探针用 `xcrun clang -framework IOKit -framework CoreFoundation`。

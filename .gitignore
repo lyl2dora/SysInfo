@@ -1,0 +1,27 @@
+.DS_Store
+
+# Xcode / SwiftPM build products
+/build/
+DerivedData/
+.build/
+.swiftpm/
+*.xcarchive
+*.xcuserstate
+xcuserdata/
+
+# Credentials (notarization keys etc.)
+.env
+*.p8
+
+# Probe outputs contain machine identifiers (serials, MACs, IPs); keep sources only
+research/probes/**/*.txt
+research/probes/**/*.csv
+research/probes/**/*.json
+# Data dumps (ioreg/diskutil plists) also carry UUIDs; keep probe app Info.plist only
+research/probes/**/*.plist
+!research/probes/**/Info.plist
+*.dSYM/
+
+# Claude Code local state
+.claude/*.lock
+.claude/settings.local.json
