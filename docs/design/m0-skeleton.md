@@ -220,3 +220,25 @@ protocol Collector: AnyObject {            // 实例归 SamplingEngine 这个 ac
 - **2026-09-28 · §9 补充：`make run` 按可执行文件路径结束旧实例**
   - `scripts/stop-dev.sh` 只结束可执行文件路径正好是本仓库 Debug 产物（`build/DerivedData/Build/Products/Debug/SysInfo.app`）的进程，比「按 Bundle ID 结束 SysInfo Dev」更窄：从 Xcode 或其他位置启动的实例也不碰（D18）。先发 SIGTERM，5 秒未退出才发 SIGKILL；app 把 SIGTERM 转成 `NSApp.terminate`，正常走退出流程。
   - 另加 `stop`、`check-private-imports`、`clean`、`help` 目标；`install`、`notarize` 只打印「M0 不实现」并返回失败。
+- **2026-09-28 · §5.1 采集器协议：要求 `Sendable`，并加 `resetBaseline()`**
+  - 协议改为 `Collector: AnyObject, Sendable`，实现用 `Mutex` 保护内部状态。原因：app 在 MainActor 上创建采集器再交给引擎，`sysinfo-cli` 也直接在自己的线程上调用；串行使用时锁没有竞争。
+  - 加 `resetBaseline()`：采集器从「无需求」变为「有需求」（含暂停后恢复）时由引擎调用，避免第一个样本变成整段空闲期的平均值。
+- **2026-09-28 · §5.1 SelfUsageCollector 的单位自检与回退**
+  - 自检用公开的 `getrusage(RUSAGE_SELF)` 交叉校验 `ri_user_time + ri_system_time` 的单位：按 `mach_timebase_info` 换算后吻合即按 mach tick 使用；原始值直接吻合（内核改成真纳秒）则按纳秒使用；都对不上时 CPU 回退到 `getrusage`（状态 degraded），footprint 照常读。这是 D05「先回退到公开路径」的落实，文档原文只写了换算。
+- **2026-09-28 · §5.2 定时器：一次性定时源 + 只在有采集器到期的整秒唤醒**
+  - tick 网格固定为「Unix 整秒 + 50 ms」，tick 序号即 Unix 秒数；间隔为 k 的采集器在序号为 k 的倍数时到期，相同间隔的采集器天然合并在同一次唤醒里。
+  - `DispatchSourceTimer` 用一次性（`repeating: .never`）排定，每个 tick 结束后排到「下一个有采集器到期的 tick」，leeway 100 ms。所有间隔都是 5 s 时，中间 4 个整秒不唤醒，比「每个基础 tick 都唤醒再判断」更省。
+  - 「挂起定时器」实现为取消定时源、有需求时再新建，不用 `suspend()`/`resume()`：取消后的定时源保证不会再投递事件，也不用配平挂起计数。
+  - `SamplingEngine` 的执行器就是它的私有串行队列（`DispatchSerialQueue`），定时器挂在同一队列上，回调用 `assumeIsolated` 直接在 actor 隔离域里同步跑完整个 tick，不经 Task 跳转。
+  - 刚获得需求的采集器在下一个 tick 立即跑一次以建立差分基线（不等整倍数），之后按网格对齐。
+  - 同一个 tick 内所有采集器共用一个 `SampleTime`，方便历史与图表按 tick 对齐。
+- **2026-09-28 · §5.2 交付：`events()` 同时推送状态变化**
+  - 订阅接口是 `events() -> AsyncStream<EngineEvent>`：`.tick(TickResult)` 每个 tick 一次；另有 `.status(EngineStatus)`，在订阅时、需求或降频变化、自检后推送，这样定时器停掉之后诊断页也能看到需求列表和降频状态的变化。每个订阅者只缓存最新 16 个事件。
+  - 降频接口为 `setThrottle(factor: ThrottleFactor, reasons: Set<ThrottleReason>)`，`ThrottleFactor` 取 `.normal`、`.slowed(n)`、`.paused`。
+- **2026-09-28 · K19 运行中复检的落点**
+  - 引擎在某个采集器连续 10 次输出 `unavailable` 后自动重新自检；采集器首次获得需求时如果还没自检过，先自检。启动、唤醒、系统 build 号变化这三个时机由 app 层调用 `runSelfTests()`。
+- **2026-09-28 · §7 命令行补充**
+  - `selftest` 另支持 `--json`；`cpu --json` 输出 JSON Lines（每次一行）；`cpu` 按绝对截止时间休眠，读数陈旧或核数变化的那一次不计入 `--count`。
+  - 新增 `engine [--demand 3] [--idle 3]`：经 `SamplingEngine` 采样，注销需求后检查 tick 计数不再增长、定时器已停（验收第 5 条的命令行验证）。
+- **2026-09-28 · §9 `remote-cli` 补充**
+  - `REMOTE_HOST` 可在命令行覆盖；ssh 与 rsync 用 `BatchMode=yes`、`ConnectTimeout=10`，密钥登录失败时直接报错；先跑私有 import 检查。
