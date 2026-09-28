@@ -44,7 +44,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - 默认不引入第三方依赖，例外只有 Apple 官方的 swift-* 包。文案统一放进 String Catalog（D23）。
 
 ## 硬性规则
-- 私有 API 只能出现在私有 C 层（`CSysPrivate`）及其封装里（D05、D23）。
+- 私有 API 只能出现在私有 C 层（`CSysPrivate`）及其封装里（D05、D23）。编译器拦不住这条，由构建期检查保证（D26）；不要绕过或弱化 `scripts/check-private-imports.sh`。
 - 每个私有数据源、每个随芯片变化的数据源都要实现 `selfTest()`，并按 D05、D20、K19、K17 执行：
   - 复检时机：启动、唤醒、系统 build 号变化、运行中连续越界。
   - 自检失败时，先回退到公开路径；回退不了就显示为不可用。未知芯片同样处理。
@@ -97,5 +97,5 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - `make measure`：测量自身开销，结果追加到 `docs/perf/`。Stats 或其他 SysInfo 实例在运行时，脚本会拒绝执行。
 - `make strings`：把代码里的文案同步进 `App/Localizable.xcstrings`。
 - `install`、`notarize` 目前只是占位：K50 待定，notarize 按 D20 为可选。
-- 私有层隔离：编译器拦不住 app 或 CLI 去 import `CSysPrivate`。现在靠 `scripts/check-private-imports.sh` 在构建期检查，app 的构建阶段和 `make test`、`make cli` 都会执行（见 `docs/design/m0-skeleton.md` 偏离记录）。
+- 私有层隔离：编译器拦不住 app 或 CLI 去 import `CSysPrivate`。现在靠 `scripts/check-private-imports.sh` 在构建期检查，app 的构建阶段和 `make test`、`make cli` 都会执行（D26）。
 - 用合成事件（CGEvent）测 UI 时，修饰键必须成对发送按下和抬起，测完用 `CGEventSource.flagsState(.hidSystemState)` 确认没有残留。不要用 osascript 控制其他 app。

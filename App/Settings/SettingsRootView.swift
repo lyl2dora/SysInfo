@@ -49,6 +49,8 @@ private struct SettingsSplitView: View {
             CPUSettingsView(settings: context.settings)
         case .history:
             HistorySettingsView()
+        case .privacy:
+            PrivacySettingsView()
         case .diagnostics:
             DiagnosticsView(store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests)
                 .onAppear { context.diagnosticsVisibilityChanged(true) }
@@ -137,6 +139,32 @@ private struct HistorySettingsView: View {
         Form {
             Section {
                 Text("历史记录的持久化与导出尚未实现。目前只在内存中保留最近 15 分钟的数据。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// D22：列出所有可能的出站连接与授权申请。目前两者都没有；以后加入联网或需授权的功能时，在这里逐项列出目标与用途（D27）。
+private struct PrivacySettingsView: View {
+    var body: some View {
+        Form {
+            Section("网络连接") {
+                LabeledContent("出站连接", value: String(localized: "无"))
+                Text("SysInfo 目前不连接任何网络服务。以后如果加入需要联网的功能，都要你在这里手动开启，并会列出连接目标和用途。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section("系统授权") {
+                LabeledContent("申请的授权", value: String(localized: "无"))
+                Text("SysInfo 不申请定位、蓝牙、辅助功能、本地网络、通知等授权。以后如果有功能需要授权，只会在你手动开启该功能时才申请。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section("数据存放") {
+                Text("采集到的数据只保存在本机。诊断信息和日志也只写在本机。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

@@ -19,6 +19,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case menuBar
     case cpu
     case history
+    case privacy
     case diagnostics
     case about
 
@@ -30,6 +31,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .menuBar: String(localized: "菜单栏")
         case .cpu: String(localized: "CPU")
         case .history: String(localized: "历史与导出")
+        case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
         case .about: String(localized: "关于")
         }
@@ -41,6 +43,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .menuBar: "menubar.rectangle"
         case .cpu: "cpu"
         case .history: "clock.arrow.circlepath"
+        case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
         case .about: "info.circle"
         }
