@@ -56,9 +56,33 @@ import Testing
                 == [selfUsage: 60])
     }
 
-    @Test func hugeIntervalTimesFactorSaturates() {
+    @Test func hugeIntervalIsCappedAtOneDay() {
         let demand = Demand(collectors: [cpu], interval: .max, source: .panel)
-        #expect(Schedule.effectiveInterval(of: demand, under: .slowed(2)) == .max)
+        #expect(demand.interval == Demand.maxInterval)
+        #expect(Schedule.effectiveInterval(of: demand, under: .normal) == Demand.maxInterval)
+        #expect(Schedule.effectiveInterval(of: demand, under: .slowed(2)) == Demand.maxInterval)
+        #expect(Schedule.effectiveInterval(of: demand, under: .slowed(.max)) == Demand.maxInterval)
+
+        // 绕过 init 直接改属性，引擎算有效间隔时同样按上限处理
+        var mutated = Demand(collectors: [cpu], interval: 1, source: .panel)
+        mutated.interval = .max
+        #expect(Schedule.effectiveInterval(of: mutated, under: .normal) == Demand.maxInterval)
+        mutated.interval = .min
+        #expect(Schedule.effectiveInterval(of: mutated, under: .normal) == 1)
+
+        let halfDay = Demand(collectors: [cpu], interval: Demand.maxInterval / 2 + 1, source: .panel)
+        #expect(Schedule.effectiveInterval(of: halfDay, under: .slowed(2)) == Demand.maxInterval)
+    }
+
+    @Test func nextTickForTheLongestIntervalStaysConvertibleToNanos() {
+        let grid = TickGrid(offsetNanos: 50_000_000)
+        let now: Int64 = 1_790_618_400
+        let next = Schedule.nextTick(after: now, intervals: [cpu: Demand.maxInterval], pendingBaseline: [])
+        #expect(next == Schedule.nextMultiple(of: Int64(Demand.maxInterval), after: now))
+        if let next {
+            #expect(next - now <= Int64(Demand.maxInterval))
+            #expect(grid.unixNanos(of: next) == next * 1_000_000_000 + 50_000_000)
+        }
     }
 
     // MARK: 到期
@@ -121,6 +145,20 @@ import Testing
         #expect(grid.tick(atOrBefore: 100_049_999_999) == 99)
         #expect(grid.tick(atOrBefore: 100_999_000_000) == 100)
         #expect(grid.tick(atOrBefore: 0) == -1)
+    }
+
+    @Test func gridSaturatesInsteadOfOverflowing() {
+        let grid = TickGrid(offsetNanos: 50_000_000)
+        #expect(grid.unixNanos(of: .max) == .max)
+        #expect(grid.unixNanos(of: .min) == .min)
+        // 乘法溢出
+        #expect(grid.unixNanos(of: Int64.max / 1_000_000_000 + 1) == .max)
+        #expect(grid.unixNanos(of: Int64.min / 1_000_000_000 - 1) == .min)
+        // 乘法不溢出、加上偏移后溢出
+        #expect(TickGrid(offsetNanos: 900_000_000).unixNanos(of: Int64.max / 1_000_000_000) == .max)
+        #expect(TickGrid(offsetNanos: -900_000_000).unixNanos(of: Int64.min / 1_000_000_000) == .min)
+        // 边界内照常换算
+        #expect(grid.unixNanos(of: Int64.max / 1_000_000_000) == Int64.max / 1_000_000_000 * 1_000_000_000 + 50_000_000)
     }
 
     @Test func searchStartAvoidsRunningTheSameTickTwice() {

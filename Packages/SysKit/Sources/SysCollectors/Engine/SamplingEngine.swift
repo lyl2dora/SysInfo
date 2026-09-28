@@ -256,7 +256,8 @@ public actor SamplingEngine {
         guard next != scheduledTick else { return }
 
         let timer = self.timer ?? makeTimer()
-        let delay = max(grid.unixNanos(of: next) - nowWall, 0)
+        let (difference, overflow) = grid.unixNanos(of: next).subtractingReportingOverflow(nowWall)
+        let delay = overflow ? Int64.max : max(difference, 0)
         let deadline = DispatchTime.now() + .nanoseconds(Int(delay))
         timer.schedule(deadline: deadline, repeating: .never, leeway: .nanoseconds(configuration.leewayNanos))
         scheduledTick = next

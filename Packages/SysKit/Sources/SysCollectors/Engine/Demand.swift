@@ -38,17 +38,26 @@ public enum DemandTier: String, Hashable, Codable, Sendable, CaseIterable {
 public struct Demand: Hashable, Codable, Sendable {
     /// 需要的采集器。引擎里没有注册的 ID 会被忽略。
     public var collectors: Set<CollectorID>
-    /// 采样间隔，基础 tick（1 s）的整数倍，至少为 1。
+    /// 采样间隔，基础 tick（1 s）的整数倍，取值 1…`Demand.maxInterval`。
+    /// 直接改这个属性不会再钳制，但引擎计算有效间隔时同样按这个范围处理。
     public var interval: Int
     public var source: DemandSource
     public var tier: DemandTier
 
-    /// `interval` 小于 1 时按 1 处理。
+    /// 间隔上限：86 400 个基础 tick（1 天）。再长的间隔没有意义，而且 tick 序号换算成纳秒时会溢出。
+    public static let maxInterval = 86_400
+
+    /// `interval` 小于 1 时按 1 处理，大于 `maxInterval` 时按 `maxInterval` 处理。
     public init(collectors: Set<CollectorID>, interval: Int = 1, source: DemandSource, tier: DemandTier = .foreground) {
         self.collectors = collectors
-        self.interval = max(interval, 1)
+        self.interval = Self.clampInterval(interval)
         self.source = source
         self.tier = tier
+    }
+
+    /// 把间隔限制在 1…`maxInterval`。
+    static func clampInterval(_ interval: Int) -> Int {
+        min(max(interval, 1), maxInterval)
     }
 }
 

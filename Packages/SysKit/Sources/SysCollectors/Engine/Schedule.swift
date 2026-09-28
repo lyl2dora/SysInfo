@@ -12,12 +12,14 @@ enum Schedule {
     // MARK: - 有效间隔
 
     /// 一个需求在给定降频下的有效间隔（基础 tick 数）；在降频下被停掉时返回 nil。
+    /// 结果不超过 `Demand.maxInterval`（乘上降频倍数后也一样），保证 tick 序号换算成纳秒时不会溢出。
     static func effectiveInterval(of demand: Demand, under throttle: ThrottleFactor) -> Int? {
         if throttle == .paused, demand.tier != .background {
             return nil
         }
-        let (product, overflow) = max(demand.interval, 1).multipliedReportingOverflow(by: throttle.multiplier)
-        return overflow ? Int.max : product
+        let base = Demand.clampInterval(demand.interval)
+        let (product, overflow) = base.multipliedReportingOverflow(by: throttle.multiplier)
+        return overflow ? Demand.maxInterval : Demand.clampInterval(product)
     }
 
     /// 每个采集器的有效间隔：所有需要它的需求里最短的那个（每个采集器每个 tick 最多跑一次）。
@@ -87,9 +89,14 @@ struct TickGrid: Hashable, Sendable {
         return remainder < 0 ? quotient - 1 : quotient
     }
 
-    /// 第 `tick` 个 tick 的墙钟时刻，Unix 纳秒。
+    /// 第 `tick` 个 tick 的墙钟时刻，Unix 纳秒。超出 Int64 范围时饱和到 `.max` / `.min`，不会溢出崩溃
+    /// （正常情况下间隔不超过 `Demand.maxInterval`，到不了这里）。
     func unixNanos(of tick: Int64) -> Int64 {
-        tick * Self.baseNanos + offsetNanos
+        let (scaled, overflow) = tick.multipliedReportingOverflow(by: Self.baseNanos)
+        if overflow { return tick < 0 ? .min : .max }
+        let (sum, sumOverflow) = scaled.addingReportingOverflow(offsetNanos)
+        if sumOverflow { return offsetNanos < 0 ? .min : .max }
+        return sum
     }
 
     /// 定时器排下一次唤醒时，从哪个 tick 之后开始找。

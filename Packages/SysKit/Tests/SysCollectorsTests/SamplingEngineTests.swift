@@ -183,6 +183,36 @@ final class FakeCollector: Collector {
         #expect(health?.selfTest?.passed == false)
     }
 
+    /// 回归：间隔为 Int.max 时，建立基线的第一个 tick 之后 rearm 曾因 tick 换算成纳秒溢出而崩溃。
+    @Test func hugeIntervalWithRealTimerDoesNotOverflow() async throws {
+        let fake = FakeCollector("fake.a")
+        let engine = SamplingEngine(collectors: [fake])
+        let events = await engine.events()
+
+        var demand = Demand(collectors: ["fake.a"], interval: 1, source: .panel)
+        demand.interval = .max  // 绕过 init 的钳制，走引擎自己的上限
+        let token = await engine.addDemand(demand)
+        #expect(await engine.status.effectiveIntervals == ["fake.a": Demand.maxInterval])
+
+        // 等建立基线的那个 tick（下一个整秒之后约 50 ms）跑完、rearm 排好下一次
+        var first: TickResult?
+        for await event in events {
+            if case .tick(let result) = event {
+                first = result
+                break
+            }
+        }
+        let status = await engine.status
+        await engine.remove(token)
+
+        let tick = try #require(first).tick
+        #expect(status.tickCount == 1)
+        let next = try #require(status.nextTick)
+        #expect(next > tick)
+        #expect(next - tick <= Int64(Demand.maxInterval))
+        #expect(next % Int64(Demand.maxInterval) == 0)
+    }
+
     @Test func eventsStartWithCurrentStatus() async {
         let engine = SamplingEngine(collectors: [FakeCollector("fake.a")])
         var iterator = await engine.events().makeAsyncIterator()
