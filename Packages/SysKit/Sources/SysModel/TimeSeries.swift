@@ -4,28 +4,29 @@ import Foundation
 
 /// 时间序列中的一个点。
 public struct TimeSeriesPoint: Sendable, Hashable {
-    /// 单调时钟，纳秒（与 `SampleTime.monotonicNanos` 同源），用于保留期和图表的相对时间轴。
-    public var monotonicNanos: UInt64
+    /// 连续时钟，纳秒（与 `SampleTime.continuousNanos` 同源，包含系统睡眠时间），
+    /// 用于保留期、均值窗口和图表的相对时间轴。
+    public var continuousNanos: UInt64
     /// 墙钟时间。
     public var wallClock: Date
     /// 取值；nil 表示这一刻不可用（图表上画成断点，不画成 0）。
     public var value: Double?
 
-    public init(monotonicNanos: UInt64, wallClock: Date, value: Double?) {
-        self.monotonicNanos = monotonicNanos
+    public init(continuousNanos: UInt64, wallClock: Date, value: Double?) {
+        self.continuousNanos = continuousNanos
         self.wallClock = wallClock
         self.value = value
     }
 
     public init(_ sample: Sample) {
-        self.init(monotonicNanos: sample.time.monotonicNanos, wallClock: sample.time.wallClock, value: sample.value)
+        self.init(continuousNanos: sample.time.continuousNanos, wallClock: sample.time.wallClock, value: sample.value)
     }
 }
 
 /// 一个指标的内存环形缓冲。
 ///
 /// - 按「时间戳 + 值」逐条追加，不假设采样间隔固定（间隔会随设置和降频变化）；
-/// - 只保留最近 `retentionNanos` 内的点，按单调时钟计算，不受改系统时间影响；
+/// - 只保留最近 `retentionNanos` 内的点，按连续时钟计算：包含系统睡眠时间，不受改系统时间影响；
 /// - 追加是均摊 O(1)：过期的点先只移动起点，过期部分超过一半时再整体压缩。
 public struct TimeSeries: Sendable {
     public let retentionNanos: UInt64
@@ -55,9 +56,9 @@ public struct TimeSeries: Sendable {
     /// 追加一个点。时间不晚于上一个点的（重复或乱序）会被忽略，返回 false。
     @discardableResult
     public mutating func append(_ point: TimeSeriesPoint) -> Bool {
-        if let last, point.monotonicNanos <= last.monotonicNanos { return false }
+        if let last, point.continuousNanos <= last.continuousNanos { return false }
         storage.append(point)
-        prune(now: point.monotonicNanos)
+        prune(now: point.continuousNanos)
         return true
     }
 
@@ -69,7 +70,7 @@ public struct TimeSeries: Sendable {
     /// 以最新的点为「现在」，最近 `windowNanos` 内（含边界）的点。
     public func points(inLast windowNanos: UInt64) -> ArraySlice<TimeSeriesPoint> {
         guard let last else { return storage[storage.count...] }
-        let cutoff = last.monotonicNanos >= windowNanos ? last.monotonicNanos - windowNanos : 0
+        let cutoff = last.continuousNanos >= windowNanos ? last.continuousNanos - windowNanos : 0
         return storage[firstIndex(atOrAfter: cutoff)...]
     }
 
@@ -83,6 +84,30 @@ public struct TimeSeries: Sendable {
             n += 1
         }
         return n > 0 ? sum / Double(n) : nil
+    }
+
+    /// 把点切成连续的段，供折线图断线用：不可用的点本身不输出，只在它前后断开；
+    /// 相邻两个可用点（中间没有不可用点）的间隔超过 `maxGapNanos` 时也断开（暂停采样、系统睡眠、没有消费者的空档）。
+    /// 返回可用的点、它的值及段号，段号从 0 开始递增。
+    public static func segmented(
+        _ points: some Sequence<TimeSeriesPoint>, maxGapNanos: UInt64
+    ) -> [(point: TimeSeriesPoint, value: Double, segment: Int)] {
+        var result: [(point: TimeSeriesPoint, value: Double, segment: Int)] = []
+        var segment = 0
+        var previous: UInt64?
+        for point in points {
+            guard let value = point.value else {
+                if previous != nil { segment += 1 }
+                previous = nil
+                continue
+            }
+            if let previous, point.continuousNanos - previous > maxGapNanos {
+                segment += 1
+            }
+            result.append((point, value, segment))
+            previous = point.continuousNanos
+        }
+        return result
     }
 
     private mutating func prune(now: UInt64) {
@@ -100,7 +125,7 @@ public struct TimeSeries: Sendable {
         var high = storage.count
         while low < high {
             let mid = (low + high) / 2
-            if storage[mid].monotonicNanos < time {
+            if storage[mid].continuousNanos < time {
                 low = mid + 1
             } else {
                 high = mid

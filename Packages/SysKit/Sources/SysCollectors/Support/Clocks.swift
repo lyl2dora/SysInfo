@@ -3,7 +3,7 @@
 import Darwin
 
 enum Clocks {
-    /// 单调时钟，纳秒（`CLOCK_UPTIME_RAW`，与 `SampleTime.monotonicNanos` 同源）。
+    /// 单调时钟，纳秒（`CLOCK_UPTIME_RAW`，不含睡眠，与 `SampleTime.monotonicNanos` 同源）。
     static func uptimeNanos() -> UInt64 {
         clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
     }

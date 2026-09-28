@@ -3,21 +3,46 @@
 import Darwin
 import Foundation
 
-/// 采样时刻：单调时钟用于差分，UTC 墙钟用于历史。
+/// 采样时刻：两个单调时钟加一个墙钟。
+/// - `monotonicNanos`（不含睡眠）用于差分算速率：系统睡眠期间进程不跑、计数器也不走；
+/// - `continuousNanos`（含睡眠）用于「距今多久」：环形缓冲的保留期、图表的时间轴、均值窗口、
+///   EMA 的「间隔过长就重置」。用不含睡眠的时钟做这些，睡眠前的数据醒来后会被当成「刚才」；
+/// - `wallClock` 用于历史记录和显示时刻。
 public struct SampleTime: Sendable, Hashable, Codable {
     /// 单调时钟，纳秒，来自 `CLOCK_UPTIME_RAW`（不含系统睡眠时间，不受改时间影响）。
     public var monotonicNanos: UInt64
+    /// 连续时钟，纳秒，来自 `CLOCK_MONOTONIC_RAW`（即 `mach_continuous_time`：包含系统睡眠时间，不受改时间影响）。
+    public var continuousNanos: UInt64
     /// 墙钟时间（`Date` 本身就是与时区无关的绝对时刻）。
     public var wallClock: Date
 
-    public init(monotonicNanos: UInt64, wallClock: Date) {
+    /// `continuousNanos` 省略时取 `monotonicNanos`（测试，或明确两者之间没有经过睡眠的场合）。
+    public init(monotonicNanos: UInt64, continuousNanos: UInt64? = nil, wallClock: Date) {
         self.monotonicNanos = monotonicNanos
+        self.continuousNanos = continuousNanos ?? monotonicNanos
         self.wallClock = wallClock
     }
 
     /// 当前时刻。
     public static func now() -> SampleTime {
-        SampleTime(monotonicNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW), wallClock: Date())
+        SampleTime(
+            monotonicNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW),
+            continuousNanos: clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW),
+            wallClock: Date())
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case monotonicNanos, continuousNanos, wallClock
+    }
+
+    /// 没有 `continuousNanos` 字段的旧数据按 `monotonicNanos` 解码。
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let monotonic = try c.decode(UInt64.self, forKey: .monotonicNanos)
+        self.init(
+            monotonicNanos: monotonic,
+            continuousNanos: try c.decodeIfPresent(UInt64.self, forKey: .continuousNanos),
+            wallClock: try c.decode(Date.self, forKey: .wallClock))
     }
 }
 

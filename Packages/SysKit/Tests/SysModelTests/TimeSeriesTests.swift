@@ -9,7 +9,7 @@ import SysModel
 
     private func point(_ seconds: UInt64, _ value: Double?) -> TimeSeriesPoint {
         TimeSeriesPoint(
-            monotonicNanos: seconds * Self.second,
+            continuousNanos: seconds * Self.second,
             wallClock: Date(timeIntervalSince1970: Double(seconds)),
             value: value)
     }
@@ -31,7 +31,7 @@ import SysModel
             series.append(point(t, 1))
         }
         // 最新 15 s，保留期起点 5 s：5、10、15
-        #expect(series.points.map(\.monotonicNanos) == [5, 10, 15].map { $0 * Self.second })
+        #expect(series.points.map(\.continuousNanos) == [5, 10, 15].map { $0 * Self.second })
     }
 
     @Test func rejectsDuplicateAndOutOfOrderPoints() {
@@ -87,6 +87,41 @@ import SysModel
         let missing = TimeSeriesPoint(.unavailable(.cpuUsageTotal, reason: .readFailed(), at: time))
         #expect(available.value == 0.5)
         #expect(missing.value == nil)
-        #expect(missing.monotonicNanos == 42)
+        #expect(missing.continuousNanos == 42)
+    }
+
+    /// 回归：保留期、「距今多久」要按包含睡眠的连续时钟算。不含睡眠的 uptime 在睡眠前后只差几秒，
+    /// 睡了一小时后，睡眠前的点仍会被当成「刚才」留在保留期和窗口里。
+    @Test func retentionAndWindowsCountSystemSleep() {
+        var series = TimeSeries(retentionSeconds: 900)
+        func sample(uptime: UInt64, continuous: UInt64, _ value: Double) -> Sample {
+            Sample(
+                id: .cpuUsageTotal, value: value,
+                time: SampleTime(
+                    monotonicNanos: uptime * Self.second, continuousNanos: continuous * Self.second,
+                    wallClock: Date(timeIntervalSince1970: Double(continuous))))
+        }
+        series.append(sample(uptime: 100, continuous: 100, 0.9))
+        series.append(sample(uptime: 101, continuous: 101, 0.9))
+        // 睡了一小时：uptime 只多了 1 s，连续时钟多了 3600 s
+        series.append(sample(uptime: 102, continuous: 3702, 0.1))
+        #expect(series.count == 1, "睡眠前的点已超过 15 分钟保留期")
+        #expect(series.mean(inLast: 60 * Self.second) == 0.1)
+    }
+
+    @Test func segmentsBreakAtUnavailablePointsAndLongGaps() {
+        let points = [
+            point(1, 0.1), point(2, 0.2),
+            point(3, nil),  // 不可用：断开
+            point(4, 0.4), point(5, 0.5),
+            point(20, 0.6),  // 间隔 15 s > 3 s：断开
+            point(22, 0.7),  // 间隔 2 s：连续
+        ]
+        let segmented = TimeSeries.segmented(points, maxGapNanos: 3 * Self.second)
+        #expect(segmented.map(\.value) == [0.1, 0.2, 0.4, 0.5, 0.6, 0.7])
+        #expect(segmented.map(\.segment) == [0, 0, 1, 1, 2, 2])
+        // 开头的不可用点不产生空段
+        let leading = TimeSeries.segmented([point(1, nil), point(2, 0.2)], maxGapNanos: Self.second)
+        #expect(leading.map(\.segment) == [0])
     }
 }

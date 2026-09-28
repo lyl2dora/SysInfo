@@ -4,6 +4,7 @@
 // - 内存环形缓冲：按「时间戳 + 值」逐条存，不假设采样间隔固定，每个指标保留 15 分钟（K39 的倾向值，CPU 模块再定）；
 // - 采集器健康信息与调度状态（诊断页，K19）；
 // - 菜单栏显示用的 CPU 总占用：EMA 平滑，τ = 1.5 s（K24）；面板图表用原始值。
+// 「距今多久」（保留期、图表时间轴、均值窗口、EMA 的间隔判断）一律按包含睡眠的连续时钟（SampleTime.continuousNanos）。
 
 import Foundation
 import Observation
@@ -63,6 +64,16 @@ final class MetricStore {
         history[id]?.mean(inLast: UInt64(max(seconds, 0) * 1e9))
     }
 
+    /// 图表上相邻两点允许的最大间隔，纳秒：超过就断开折线（暂停、系统睡眠、没有消费者的空档）。
+    /// 取当前所有生效需求里该采集器的最长有效间隔的 2 倍，再加 1 s 容差（定时器 leeway、偶发的陈旧读数）。
+    func maxContinuousGapNanos(for collector: CollectorID) -> UInt64 {
+        let longest = engineStatus?.demands
+            .filter { $0.demand.collectors.contains(collector) }
+            .compactMap(\.effectiveInterval)
+            .max() ?? 1
+        return UInt64(2 * max(longest, 1) + 1) * 1_000_000_000
+    }
+
     // MARK: - 私有
 
     private func ingest(_ result: TickResult) {
@@ -94,7 +105,8 @@ final class MetricStore {
     }
 
     private func updateMenuBar(with sample: Sample) {
-        let smoothed = smoother.update(sample.value, atMonotonicNanos: sample.time.monotonicNanos)
+        // 连续时钟包含睡眠：睡醒后的第一个值与睡前的旧值相隔超过 10τ，直接采用，不混合。
+        let smoothed = smoother.update(sample.value, atNanos: sample.time.continuousNanos)
         let reading: MenuBarReading
         if let smoothed {
             reading = .value(smoothed, estimated: sample.quality == .estimated)

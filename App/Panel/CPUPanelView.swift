@@ -2,6 +2,7 @@
 
 import Charts
 import SwiftUI
+import SysCollectors
 import SysModel
 
 struct CPUPanelView: View {
@@ -64,7 +65,8 @@ struct CPUPanelView: View {
 
     // MARK: - 折线图
 
-    /// 图表上的一个点：x 为相对最新样本的秒数（−120…0），`segment` 在不可用处断开折线。
+    /// 图表上的一个点：x 为相对最新样本的秒数（−120…0），`segment` 在不可用处和长间隔处断开折线。
+    /// 时间用包含睡眠的连续时钟：系统睡眠前的点不会被标成「几秒前」，也不会和醒来后的点连成一条线。
     private struct ChartPoint: Identifiable {
         var id: UInt64
         var x: Double
@@ -74,19 +76,15 @@ struct CPUPanelView: View {
 
     private var chartPoints: [ChartPoint] {
         let points = store.recentPoints(.cpuUsageTotal, seconds: Self.chartSpan)
-        guard let newest = points.last?.monotonicNanos else { return [] }
-        var result: [ChartPoint] = []
-        result.reserveCapacity(points.count)
-        var segment = 0
-        for point in points {
-            guard let value = point.value else {
-                segment += 1
-                continue
-            }
-            let x = -Double(newest - point.monotonicNanos) / 1e9
-            result.append(ChartPoint(id: point.monotonicNanos, x: x, y: value, segment: segment))
+        guard let newest = points.last?.continuousNanos else { return [] }
+        let maxGap = store.maxContinuousGapNanos(for: CPULoadCollector.collectorID)
+        return TimeSeries.segmented(points, maxGapNanos: maxGap).map { point, value, segment in
+            ChartPoint(
+                id: point.continuousNanos,
+                x: -Double(newest - point.continuousNanos) / 1e9,
+                y: value,
+                segment: segment)
         }
-        return result
     }
 
     private var chart: some View {

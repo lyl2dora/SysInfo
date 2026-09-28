@@ -30,6 +30,17 @@ import SysModel
         #expect(try JSONDecoder().decode(DataQuality.self, from: data) == quality)
     }
 
+    @Test func sampleTimeDefaultsContinuousToMonotonic() throws {
+        #expect(time.continuousNanos == time.monotonicNanos)
+        let now = SampleTime.now()
+        #expect(now.continuousNanos >= now.monotonicNanos, "连续时钟包含睡眠时间，不会小于 uptime")
+
+        // 没有 continuousNanos 字段的旧数据按 monotonicNanos 解码
+        let json = #"{"monotonicNanos":5,"wallClock":0}"#
+        let decoded = try JSONDecoder().decode(SampleTime.self, from: Data(json.utf8))
+        #expect(decoded.continuousNanos == 5)
+    }
+
     @Test func sampleRoundTripsThroughCodable() throws {
         let samples = [
             Sample(id: .cpuUsageCore(3), value: 0.5, quality: .estimated, time: time),

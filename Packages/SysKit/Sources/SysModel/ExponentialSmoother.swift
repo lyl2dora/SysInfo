@@ -25,8 +25,10 @@ public struct ExponentialSmoother: Sendable, Hashable {
     }
 
     /// 输入一个新值，返回平滑后的值。
+    /// - Parameter time: 这个值的时刻，纳秒。要用包含系统睡眠时间的单调时钟（`SampleTime.continuousNanos`），
+    ///   这样睡眠之后的第一个值会因为「间隔过长」直接采用，不和睡眠前的旧值混合。
     @discardableResult
-    public mutating func update(_ input: Double?, atMonotonicNanos time: UInt64) -> Double? {
+    public mutating func update(_ input: Double?, atNanos time: UInt64) -> Double? {
         guard let input, input.isFinite else {
             reset()
             return nil
