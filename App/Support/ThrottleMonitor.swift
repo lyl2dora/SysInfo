@@ -10,6 +10,9 @@
 // 汇总规则见 `ThrottlePolicy`；结果交给引擎的 `setThrottle(factor:reasons:)`。每次信号变化都写日志。
 //
 // 另外：系统唤醒时回调 `onWake`，由 app 让引擎重新自检（K19）。
+//
+// 通知只报告变化，所以 start() 时主动读一次各信号的当前值，包括锁屏和显示器睡眠（见 SessionState）：
+// 在锁屏或显示器已睡眠时启动，也能立即暂停。
 
 import AppKit
 import IOKit.ps
@@ -65,6 +68,16 @@ final class ThrottleMonitor {
         signals.lowPowerMode = processInfo.isLowPowerModeEnabled
         signals.thermalPressure = Self.isUnderThermalPressure(processInfo.thermalState)
         signals.onBatteryPower = Self.isOnBatteryPower() ?? false
+        if let locked = SessionState.isScreenLocked() {
+            signals.screenLocked = locked
+        } else {
+            Log.throttle.notice("读不到当前会话的锁屏状态（没有 GUI 会话字典），按未锁屏处理")
+        }
+        if let asleep = SessionState.areDisplaysAsleep() {
+            signals.displayAsleep = asleep
+        } else {
+            Log.throttle.notice("读不到显示器睡眠状态（没有在线显示器），按未睡眠处理")
+        }
 
         let main = NotificationCenter.default
         observe(main, .NSProcessInfoPowerStateDidChange) { monitor in

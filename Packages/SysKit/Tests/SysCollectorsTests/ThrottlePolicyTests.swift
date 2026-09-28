@@ -45,3 +45,14 @@ import Testing
         #expect(result.reasons == [.manual])
     }
 }
+
+@Suite struct SessionStateTests {
+    @Test func screenLockedKeyIsReadDefensively() {
+        #expect(SessionState.screenLocked(inSessionDictionary: [SessionState.screenIsLockedKey: 1]))
+        #expect(SessionState.screenLocked(inSessionDictionary: [SessionState.screenIsLockedKey: true]))
+        #expect(!SessionState.screenLocked(inSessionDictionary: [SessionState.screenIsLockedKey: 0]))
+        // 未锁屏时这个键不存在
+        #expect(!SessionState.screenLocked(inSessionDictionary: ["kCGSessionOnConsoleKey": 1]))
+        #expect(!SessionState.screenLocked(inSessionDictionary: [SessionState.screenIsLockedKey: "yes"]))
+    }
+}
