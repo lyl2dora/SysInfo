@@ -280,3 +280,22 @@ protocol Collector: AnyObject {            // 实例归 SamplingEngine 这个 ac
   - 除 Stats 外，已有 SysInfo 实例在运行时也拒绝执行（会干扰 MenuBarAgent/WindowServer 的对照）；只结束脚本自己启动的进程。
   - 另测一段不运行 SysInfo 的基线（`BASELINE=0` 可跳过），MenuBarAgent、WindowServer 的增量对照基线看；app 的 footprint 用 `footprint -p` 读。
   - 面板档：测量期间若有人点了别处或按 Esc，面板会关闭，脚本从日志里发现后把该档标为作废。
+- **2026-09-29 · 验证后修复（三位独立验证者的问题）带来的偏离与补充**
+  - §4 `SampleTime` 增加第三个时钟 `continuousNanos`（`CLOCK_MONOTONIC_RAW`，包含系统睡眠时间）。原因：原文只有「单调时钟用于差分、墙钟用于历史」，而 `CLOCK_UPTIME_RAW` 在睡眠期间不走，拿它算「距今多久」会把睡眠前的数据当成「刚才」。现在：差分（CPU、本进程开销）仍用 uptime；环形缓冲的保留期、面板折线的时间轴、诊断页的 1 分钟均值、菜单栏 EMA 的「间隔超过 10τ 不混合」都用连续时钟。不用墙钟，是因为墙钟会被用户或 NTP 调整。旧 JSON 没有这个字段时按 `monotonicNanos` 解码。
+  - §6 面板折线除了在不可用处断开，相邻两点间隔超过「当前生效需求里 `cpu.load` 的最长有效间隔 × 2 + 1 s」时也断开（暂停、系统睡眠、没有消费者的空档）。纯函数 `TimeSeries.segmented` 有单测；实测把菜单栏 item 关掉 15 s 再打开，图上出现断口。
+  - §5.1、K19 自检项分「必需 / 提示」两级（`SelfTestCheck.severity`），落实 D24 对 K19 的修订「按通道逐项判定，某个通道缺失时不停用整组数据源」：
+    - `cpu.load`：只有「读取 + 布局」是必需项，不通过时整个数据源不可用；核数对照、计数器非零、两次读数单调不减改为提示项，不通过时照常出数、状态降为 degraded，有问题的核由差分逐个标为不可用，总占用标为估算。
+    - `app.self`：只有「读取 proc_pid_rusage」是必需项；时基、footprint、单位校验本来就有回退或逐通道处理，改为提示项。
+    - `SelfTestResult.passed` 仍表示「全部通过」，新增 `isUsable`（必需项都通过）和 `warnings`。诊断页的提示项失败显示橙色三角；`sysinfo-cli selftest` 分「通过 / 降级 / 失败」，退出码仍是「全部通过才为 0」。
+  - §5.1、§8 核数对照改用 `hw.logicalcpu_max`：`host_processor_info` 返回全部已注册的处理器，而 `hw.logicalcpu` 按 `man 3 sysctl` 是「当前电源管理模式下可用」的核数，可能更少。硬件测试同步改。
+  - §5.1 `CPULoadCollector` 把 `mach_host_self()` 缓存为 `static let`：每次调用都给 host 端口的 send right 加一个 uref，从不释放会涨到 65535 才被内核钉住。硬件测试核对 2000 次读取后 urefs 基本不变（改回旧写法时该测试失败：2 → 2002）。读取函数可注入，自检分级逻辑用假读数单测。
+  - §5.2 `Demand.interval` 上限 86 400 个 tick（1 天），降频相乘后的有效间隔同样封顶；`TickGrid.unixNanos(of:)` 和定时器延迟改为饱和运算。原因：间隔接近 `Int.max` 时，建基线的第一个 tick 之后 rearm 会在 tick 换算纳秒时溢出崩溃。有「超大间隔 + 真实定时器」的回归测试。
+  - §5.3 启动时主动读取锁屏和显示器睡眠的当前状态（通知只报告变化）：
+    - 显示器睡眠：公开的 `CGGetOnlineDisplayList` + `CGDisplayIsAsleep`，所有在线显示器都睡眠才算；
+    - 锁屏：没有公开 API。读公开函数 `CGSessionCopyCurrentDictionary` 返回字典里未公开的键 `CGSSessionScreenIsLocked`（锁屏时为 1，未锁屏时不存在，本机实测未锁屏时确实没有这个键）。它不是私有符号，但属于 D05 意义上的未公开路径，所以放在 SysCollectors 的 `SessionState` 里，读不到时按未锁屏处理并写日志。「锁屏状态下启动」这条路径没有实测（需要锁用户的屏幕），只有纯函数单测。
+  - §6 打开设置窗口统一走 `AppDelegate.openSettings`（⌘,、「关于」菜单、重新打开 app、面板顶栏的设置按钮）：先关掉锚在 item 下方的面板（它在 popUpMenu 层级，会盖住设置窗口），固定的浮窗保留。原先只有顶栏按钮会先关面板，而且连浮窗也关；现在顶栏按钮与其他入口一致，浮窗不关。实测：⌘,（经 HID 投递）和重新打开 app 后窗口列表里只剩设置窗口；浮窗状态下按 ⌘, 浮窗保留。
+  - §6 `--open-panel`（无 session）时点击 item 按「关闭」处理：全局监视器先看到点击时记下时刻，随后系统为同一次点击开启的 session 在 didBegin 里取消；若 didBegin 先到，直接关闭面板并取消 session。实测：点击后面板关闭、item 无高亮，再点一次正常打开（有 session），第三次关闭。
+  - §6 文案：设置页不再出现里程碑代号和决策编号（「M0 还没有…」「在 CPU 模块中实现（D08）」），历史页改为「持久化与导出尚未实现」（D15：历史存储并入哪个模块由用户届时确定）。
+  - §7、§9 远端只写 `/tmp`：`remote-cli` 原先让 SwiftPM 在 Mac Studio 家目录建了 `~/Library/Caches/org.swift.swiftpm`、`~/Library/org.swift.swiftpm/{configuration,security}` 和 `~/.swiftpm` 下的链接。现在远端命令带 `--cache-path/--config-path/--security-path … --manifest-cache local`，并设 `CFFIXED_USER_HOME`、`HOME`、`TMPDIR` 到 `/tmp/sysinfo-remote` 下（只给路径参数时 SwiftPM 仍会重建 `~/.swiftpm/security`；它按 NSHomeDirectory 取家目录，只改 `HOME` 无效）。实测 `make remote-cli`、`make remote-test` 之后真实家目录里没有新改动。之前已写进家目录的这几个目录没有删除，由用户决定是否清理。
+  - §9 新增 `remote-sync`、`remote-test`（远端跑单元测试，含硬件测试）和 `test-scripts`（私有 import 检查的回归样例，`make test`、`make test-hw` 先跑它）。
+  - D05、D23 的构建期检查（`scripts/check-private-imports.sh`）改为：先去掉注释（Swift 块注释可嵌套），Swift 源码另外去掉字符串字面量，剩下的代码里只要出现标识符 `CSysPrivate` 就算违规。原先的正则要求 import 从行首开始，`import Foundation; import CSysPrivate` 和 `/* x */ import CSysPrivate` 都能绕过。`Package.swift`、`CSysPrivate.h`、`PrivateLayer.swift` 里「app 在编译期 import 不到 CSysPrivate」的注释已改正。编译器层面拦不住这一点与 D23 原文的冲突，仍待用户确认后追加新的 D 条目。
