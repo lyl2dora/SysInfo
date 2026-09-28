@@ -1,0 +1,89 @@
+# SysInfo 构建入口（K30，M0 设计 §9）。
+# 用法：make build | run | test | test-hw | cli | remote-cli | release | measure
+
+.DEFAULT_GOAL := help
+
+PROJECT        := SysInfo.xcodeproj
+SCHEME         := SysInfo
+DERIVED_DATA   := build/DerivedData
+PACKAGE_PATH   := Packages/SysKit
+BUILD_NUMBER   := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+
+DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
+RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
+DEV_BUNDLE_ID  := zone.lyl.sysinfo.dev
+
+# Mac Studio（M2 Max，D25）；远端只在 /tmp 下写文件（D18）。
+REMOTE_HOST    := user@remote-host
+REMOTE_DIR     := /tmp/sysinfo-remote
+
+# 传给 app（run）或 sysinfo-cli（cli、remote-cli）的参数，例如 make cli ARGS="cpu --count 5"
+ARGS ?=
+
+XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=macOS,arch=arm64' \
+	-derivedDataPath $(DERIVED_DATA) \
+	CURRENT_PROJECT_VERSION=$(BUILD_NUMBER)
+
+# 私有 C 层隔离检查的范围（D05、D23）：能经依赖闭包看到 CSysPrivate、但不允许 import 它的源码目录。
+# app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
+PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli
+
+.PHONY: help build run stop test test-hw cli remote-cli release measure install notarize clean check-private-imports
+
+help:
+	@echo "SysInfo Makefile 目标："
+	@echo "  build       构建 Debug 版 SysInfo Dev（$(DEV_BUNDLE_ID)）"
+	@echo "  run         构建并启动 Debug 版；先结束已在运行的 SysInfo Dev（只结束它）。ARGS 传给 app"
+	@echo "  stop        结束正在运行的 SysInfo Dev"
+	@echo "  test        运行 SysKit 单元测试（跳过 .hardware 标签）"
+	@echo "  test-hw     运行 SysKit 单元测试，包括硬件测试"
+	@echo "  cli         构建并运行 sysinfo-cli，ARGS 为子命令与选项"
+	@echo "  remote-cli  在 Mac Studio（$(REMOTE_HOST)）上构建并运行 sysinfo-cli"
+	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
+	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销"
+	@echo "  check-private-imports  检查 app 与 sysinfo-cli 没有 import CSysPrivate（test、cli 会先跑它）"
+	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
+
+build:
+	$(XCODEBUILD) -configuration Debug build
+
+release:
+	$(XCODEBUILD) -configuration Release build
+
+# 只结束可执行文件路径是本仓库 Debug 产物的 SysInfo Dev（D18：不碰 Release 版、Stats 或其他程序）。
+stop:
+	@scripts/stop-dev.sh "$(abspath $(DEBUG_APP))"
+
+run: build stop
+	open "$(DEBUG_APP)" $(if $(ARGS),--args $(ARGS))
+
+check-private-imports:
+	@scripts/check-private-imports.sh $(PRIVATE_IMPORT_GUARDED)
+
+test: check-private-imports
+	swift test --package-path $(PACKAGE_PATH)
+
+test-hw: check-private-imports
+	SYSINFO_HW_TESTS=1 swift test --package-path $(PACKAGE_PATH)
+
+cli: check-private-imports
+	swift run --package-path $(PACKAGE_PATH) sysinfo-cli $(ARGS)
+
+remote-cli:
+	ssh $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)'
+	rsync -a --delete --exclude .build --exclude .swiftpm $(PACKAGE_PATH)/ $(REMOTE_HOST):$(REMOTE_DIR)/SysKit/
+	ssh $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && swift run -c release sysinfo-cli $(ARGS)'
+
+measure:
+	@if [ ! -x scripts/measure-overhead.sh ]; then \
+		echo "scripts/measure-overhead.sh 尚未实现：开销测量脚本在 M0 后续阶段加入（M0 设计 §9、K26）。" >&2; \
+		exit 1; \
+	fi
+	scripts/measure-overhead.sh
+
+install notarize:
+	@echo "make $@ 在 M0 不实现（install 待 K50 定；notarize 按 D20 为可选）。" >&2
+	@exit 1
+
+clean:
+	rm -rf build $(PACKAGE_PATH)/.build
