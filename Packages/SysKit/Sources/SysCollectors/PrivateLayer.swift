@@ -5,7 +5,7 @@
 internal import CSysPrivate
 
 /// 私有 C 层的元信息，供诊断页和 sysinfo-cli 显示。
-public enum PrivateLayer {
+public enum PrivateLayer: Sendable {
     /// 链接到的私有 C 层接口版本号；M0 为 0，表示只有占位、没有任何私有符号。
     public static var version: UInt32 {
         csp_layer_version()
