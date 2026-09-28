@@ -203,3 +203,20 @@ protocol Collector: AnyObject {            // 实例归 SamplingEngine 这个 ac
 ## 10. 偏离记录
 
 （实现过程中偏离本文档的地方记在这里：日期、内容、原因。）
+
+- **2026-09-28 · §2「CSysPrivate 不做成 product，app 在编译期就 import 不到它」不成立，改为构建期检查**
+  - 实测：Xcode 27 会把依赖闭包里所有 C target 的 module map 传给下游编译（app 的 swiftc 带 `-fmodule-map-file=…/GeneratedModuleMaps/CSysPrivate.modulemap` 和 `-I …/CSysPrivate/include`），所以 app 里 `import CSysPrivate` 能编译通过。SwiftPM 同样如此：`sysinfo-cli` 经 `SysCollectors` 也能 import 到它；`SysModel` 不在闭包里，编译器会拒绝。
+  - 试过用 clang module map 的 `requires` 自定义特性（只给 `SysCollectors` 传 `-fmodule-feature`）从编译器层面拦截，但 `SysCollectors` 不开 library evolution，它的 `internal import` 仍要求下游加载 `CSysPrivate`，结果 `sysinfo-cli` 的依赖扫描直接失败，放弃。
+  - 现做法：
+    - `SysCollectors` 用 `internal import CSysPrivate`，不在公开接口里暴露它；
+    - `scripts/check-private-imports.sh` 检查给定目录下的 Swift/C/ObjC 源码有没有 import 或 include `CSysPrivate`，读取失败按失败处理；
+    - app target 的第一个构建阶段「Check private imports」对 `App/` 运行该脚本，命中即构建失败（Xcode 与 `make build` 都生效）；
+    - `make test`、`make test-hw`、`make cli` 先对 `App/` 和 `Sources/sysinfo-cli` 运行该脚本。
+  - 连带：app target 设 `ENABLE_USER_SCRIPT_SANDBOXING = NO`。用户脚本沙盒不允许读取「目录输入」下的文件，而源码列表随同步文件夹变化，没法逐个声明；该阶段只读源码、不写文件。
+- **2026-09-28 · §3 补充：Release 不注入 get-task-allow**
+  - `xcodebuild build` 默认把 Release 也当开发构建注入 `com.apple.security.get-task-allow`，而公证会拒绝带它的产物（D20）。`Release.xcconfig` 设 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO`；Debug 仍保留。
+- **2026-09-28 · §8、§9 补充：硬件测试用「标签 + 环境变量」跳过**
+  - `swift test` 只能按测试名的正则过滤，不能按 Swift Testing 标签跳过。硬件测试同时带 `.tags(.hardware)` 和 `.enabled(if: SYSINFO_HW_TESTS == "1")`，直接执行 `swift test` 时也默认跳过；`make test-hw` 设置该变量。
+- **2026-09-28 · §9 补充：`make run` 按可执行文件路径结束旧实例**
+  - `scripts/stop-dev.sh` 只结束可执行文件路径正好是本仓库 Debug 产物（`build/DerivedData/Build/Products/Debug/SysInfo.app`）的进程，比「按 Bundle ID 结束 SysInfo Dev」更窄：从 Xcode 或其他位置启动的实例也不碰（D18）。先发 SIGTERM，5 秒未退出才发 SIGKILL；app 把 SIGTERM 转成 `NSApp.terminate`，正常走退出流程。
+  - 另加 `stop`、`check-private-imports`、`clean`、`help` 目标；`install`、`notarize` 只打印「M0 不实现」并返回失败。
