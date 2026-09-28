@@ -188,3 +188,16 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 - 设置窗口（K44）：侧栏式，依次为通用、菜单栏、每个模块一页、历史与导出、诊断、关于。
 - 采集频率（K45）：采用「全局默认 + 逐模块覆盖」。各间隔都取基础 tick 的整数倍，保持单个合并 tick。
 - 自动降频（K20，D19 的待确认项）：默认开启，用户可以在设置里关闭。
+
+## 2026-09-29（M0 验收）
+
+### D26 私有层隔离改为构建期检查 · 已定（取代 D23 中「业务代码 import 不到 `CSysPrivate`」一句）
+- M0 实测：Xcode 27 和 SwiftPM 都会把依赖闭包里 C target 的 module map 传给下游，所以就算 `CSysPrivate` 不做成 product，编译器也拦不住 app 或 CLI 去 import 它。
+- 隔离改为两层保证：
+  - `SysCollectors` 对 `CSysPrivate` 使用 `internal import`；
+  - `scripts/check-private-imports.sh` 做构建期检查：先去掉注释和字符串，只要 app 或 CLI 的代码里出现 `CSysPrivate` 就判失败。它由 app target 的第一个构建阶段，以及 `make test`、`make cli`、`make remote-*` 触发，并由 `scripts/test-check-private-imports.sh` 的回归样例（make test 会先跑）保证检查本身有效。
+- D05 的其余要求不变：私有调用集中在隔离层，并做自检和回退。
+
+### D27 设置窗口加入「隐私」页 · 已定（落实 D22，修订 D25 的侧栏）
+- 侧栏改为：通用、菜单栏、各模块页、历史与导出、**隐私**、诊断、关于。
+- 隐私页列出出站连接、申请的系统授权和数据存放位置。目前出站连接和授权都是「无」。以后加入任何联网或需要授权的功能，都要在这一页逐项列出目标与用途（D22）。

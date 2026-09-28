@@ -44,7 +44,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - 默认不引入第三方依赖，例外只有 Apple 官方的 swift-* 包。文案统一放进 String Catalog（D23）。
 
 ## 硬性规则
-- 私有 API 只能出现在私有 C 层（`CSysPrivate`）及其封装里（D05、D23）。
+- 私有 API 只能出现在私有 C 层（`CSysPrivate`）及其封装里（D05、D23）。编译器拦不住这条，由构建期检查保证（D26）；不要绕过或弱化 `scripts/check-private-imports.sh`。
 - 每个私有数据源、每个随芯片变化的数据源都要实现 `selfTest()`，并按 D05、D20、K19、K17 执行：
   - 复检时机：启动、唤醒、系统 build 号变化、运行中连续越界。
   - 自检失败时，先回退到公开路径；回退不了就显示为不可用。未知芯片同样处理。
@@ -81,4 +81,21 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - 设备唯一标识（序列号、硬件或卷 UUID、MAC、公网 IP）不进版本库；日志里用 `.private` 输出。
 
 ## 构建与测试
-工程建好后在这里补上 Makefile 目标：build / test / cli / install / measure / notarize（可选）。
+入口一律用 Makefile（`make help` 可列出所有目标）：
+- 构建与运行：
+  - `make build`：构建 Debug 版 SysInfo Dev。
+  - `make run`、`make stop`：启动 Debug 版，或结束正在运行的 Debug 实例；只会结束 Debug 实例。`ARGS` 传给 app，例如 `--open-panel`、`--open-settings`、`--factory-defaults`。
+  - `make release`：构建 Release 版（`zone.lyl.sysinfo`）。
+- 测试：
+  - `make test`：跑单元测试，默认跳过硬件测试。
+  - `make test-hw`：连硬件测试一起跑（设置 `SYSINFO_HW_TESTS=1`）。
+  - 这两个目标都会先跑 `test-scripts` 和 `check-private-imports`。
+- 命令行：`make cli ARGS="selftest"`、`make cli ARGS="cpu --count 5"`。
+- Mac Studio 跨机对照：
+  - `make remote-cli ARGS=…`、`make remote-test`。远端只写 `/tmp/sysinfo-remote`。
+  - 地址可以用 `REMOTE_HOST=user@host` 覆盖。
+- `make measure`：测量自身开销，结果追加到 `docs/perf/`。Stats 或其他 SysInfo 实例在运行时，脚本会拒绝执行。
+- `make strings`：把代码里的文案同步进 `App/Localizable.xcstrings`。
+- `install`、`notarize` 目前只是占位：K50 待定，notarize 按 D20 为可选。
+- 私有层隔离：编译器拦不住 app 或 CLI 去 import `CSysPrivate`。现在靠 `scripts/check-private-imports.sh` 在构建期检查，app 的构建阶段和 `make test`、`make cli` 都会执行（D26）。
+- 用合成事件（CGEvent）测 UI 时，修饰键必须成对发送按下和抬起，测完用 `CGEventSource.flagsState(.hidSystemState)` 确认没有残留。不要用 osascript 控制其他 app。
