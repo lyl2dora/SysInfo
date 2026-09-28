@@ -4,9 +4,15 @@ import Darwin
 
 /// 硬件与系统信息，全部在运行时读取，不写死任何机型的值（D20）。
 public enum SystemInfo: Sendable {
-    /// 逻辑核数（`hw.logicalcpu`）；读取失败时为 nil。
+    /// 当前电源管理模式下可用的逻辑核数（`hw.logicalcpu`）；读取失败时为 nil。
     public static var logicalCPUCount: Int? {
         sysctlInt32("hw.logicalcpu").map(Int.init)
+    }
+
+    /// 本次开机最多可能可用的逻辑核数（`hw.logicalcpu_max`）；读取失败时为 nil。
+    /// `host_processor_info` 返回的是全部已注册的处理器，核数对照要用它，而不是 `hw.logicalcpu`。
+    public static var maxLogicalCPUCount: Int? {
+        sysctlInt32("hw.logicalcpu_max").map(Int.init)
     }
 
     /// 机型标识，例如 `Mac17,16`（`hw.model`）。它标识机型而不是某台设备，可以写进对照记录。

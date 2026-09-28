@@ -106,17 +106,22 @@ struct SysInfoCLI {
 
         struct Entry: Encodable {
             var id: String
+            /// 全部检查都通过（包括提示项）。
             var passed: Bool
+            /// 必需项都通过：数据源可以使用（提示项不通过时状态为 degraded）。
+            var usable: Bool
             var dataPath: String
             var checks: [SelfTestCheck]
         }
     }
 
+    /// 退出码：全部通过为 0；有任何一项（含提示项）没通过为 1。
     static func runSelfTest(json: Bool) -> Int32 {
         let entries = StandardCollectors.make().map { collector in
             let result = collector.selfTest()
             return SelfTestReport.Entry(
-                id: collector.id.rawValue, passed: result.passed, dataPath: result.dataPath, checks: result.checks)
+                id: collector.id.rawValue, passed: result.passed, usable: result.isUsable, dataPath: result.dataPath,
+                checks: result.checks)
         }
         let passed = entries.allSatisfy(\.passed)
 
@@ -126,12 +131,14 @@ struct SysInfoCLI {
         } else {
             print(machineLine())
             for entry in entries {
-                print("\(entry.passed ? "通过" : "失败")  \(entry.id)  [\(entry.dataPath)]")
+                let verdict = entry.passed ? "通过" : (entry.usable ? "降级" : "失败")
+                print("\(verdict)  \(entry.id)  [\(entry.dataPath)]")
                 for check in entry.checks {
-                    print("    \(check.passed ? "✓" : "✗") \(check.name)：\(check.detail)")
+                    let mark = check.passed ? "✓" : (check.severity == .advisory ? "!" : "✗")
+                    print("    \(mark) \(check.name)：\(check.detail)")
                 }
             }
-            print(passed ? "自检全部通过" : "自检未全部通过")
+            print(passed ? "自检全部通过" : "自检未全部通过（! 为提示项：数据源照常使用，状态降级；✗ 为必需项）")
         }
         return passed ? 0 : 1
     }
@@ -152,11 +159,13 @@ struct SysInfoCLI {
     static func runCPU(interval: Double, count: Int, json: Bool) -> Int32 {
         let collector = CPULoadCollector()
         let selfTest = collector.selfTest()
-        if !selfTest.passed {
-            printError("警告：cpu.load 自检未通过，样本将标为不可用：")
-            for check in selfTest.checks where !check.passed {
-                printError("    \(check.name)：\(check.detail)")
-            }
+        if !selfTest.isUsable {
+            printError("警告：cpu.load 自检的必需项未通过，样本将标为不可用：")
+        } else if !selfTest.passed {
+            printError("警告：cpu.load 自检有提示项未通过，照常采样，状态为降级：")
+        }
+        for check in selfTest.checks where !check.passed {
+            printError("    \(check.name)：\(check.detail)")
         }
         if !json {
             print("\(machineLine()) · 间隔 \(interval) s · \(count) 次")

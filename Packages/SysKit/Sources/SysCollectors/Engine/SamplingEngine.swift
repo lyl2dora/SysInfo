@@ -155,10 +155,12 @@ public actor SamplingEngine {
         guard let collector = collectors[id] else { return nil }
         let result = collector.selfTest()
         health[id]?.applySelfTest(result)
+        let failed = result.checks.filter { !$0.passed }.map { "\($0.name): \($0.detail)" }
         if result.passed {
             logger.info("自检通过：\(id.rawValue, privacy: .public)")
+        } else if result.isUsable {
+            logger.notice("自检有提示项未通过（数据源照常使用，状态降级）：\(id.rawValue, privacy: .public) \(failed, privacy: .public)")
         } else {
-            let failed = result.checks.filter { !$0.passed }.map { "\($0.name): \($0.detail)" }
             logger.error("自检未通过：\(id.rawValue, privacy: .public) \(failed, privacy: .public)")
         }
         return result

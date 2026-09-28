@@ -3,6 +3,11 @@
 // 数据源：`host_processor_info(PROCESSOR_CPU_LOAD_INFO)`，读每核 tick 并差分；总占用取所有核之和。
 // 不用 `HOST_CPU_LOAD_INFO`：它受全系统节流，其他监控 app 在跑时会拿到无标记的缓存值（调研报告 §0-7）。
 // M0 只输出总占用和每核占用，不做 perflevel 或簇的映射（那是 CPU 模块的能力边界）。
+//
+// 自检（K19，D24 修订：按通道逐项判定）：
+// - 必需：能读到、返回的布局是「核数 × CPU_STATE_MAX」。不通过时整个数据源不可用；
+// - 提示：核数与 `hw.logicalcpu_max` 一致、每个核的计数器非零、两次读数单调不减。不通过时照常出数，
+//   状态降为 degraded；有问题的核在采样时由差分逐个标为不可用（回退或没有前进），总占用标为估算。
 
 import Darwin
 import Synchronization
@@ -21,44 +26,66 @@ public final class CPULoadCollector: Collector {
         var baseline: [CoreTicks]?
         var staleCount: UInt64 = 0
         var consecutiveStale = 0
-        /// nil 表示还没自检过；此时照常采样。
-        var selfTestPassed: Bool?
+        /// 必需的自检项是否全部通过；nil 表示还没自检过，此时照常采样。
+        var selfTestUsable: Bool?
+        /// 有提示项没通过：照常出数，但状态至少为 degraded。
+        var selfTestWarnings = false
         /// 按核数缓存的每核 MetricID，避免每个 tick 重新拼字符串。
         var coreMetricIDs: [MetricID] = []
     }
 
     private let state = Mutex(State())
 
-    public init() {}
+    /// 读每核 tick 的函数；测试时可以换成假数据。
+    typealias TickReader = @Sendable () -> Result<[CoreTicks], ReadError>
+
+    private let readTicks: TickReader
+    private let maxLogicalCPUCount: @Sendable () -> Int?
+
+    public convenience init() {
+        self.init(readTicks: { CPULoadCollector.readTicks() }, maxLogicalCPUCount: { SystemInfo.maxLogicalCPUCount })
+    }
+
+    init(readTicks: @escaping TickReader, maxLogicalCPUCount: @escaping @Sendable () -> Int?) {
+        self.readTicks = readTicks
+        self.maxLogicalCPUCount = maxLogicalCPUCount
+    }
 
     // MARK: - Collector
 
     public func selfTest() -> SelfTestResult {
         var checks: [SelfTestCheck] = []
-        let first = Self.readTicks()
+        let first = readTicks()
         switch first {
         case .failure(let error):
             checks.append(SelfTestCheck(name: "cpu.load.read", passed: false, detail: error.description))
         case .success(let ticks):
             checks.append(SelfTestCheck(name: "cpu.load.read", passed: true, detail: "\(ticks.count) CPU"))
 
-            let logical = SystemInfo.logicalCPUCount
+            // host_processor_info 返回全部已注册的处理器，对照值用 hw.logicalcpu_max
+            // （hw.logicalcpu 是「当前电源管理模式下可用」的核数，可能更少）。
+            let logicalMax = maxLogicalCPUCount()
             checks.append(
                 SelfTestCheck(
                     name: "cpu.load.coreCount",
-                    passed: logical == ticks.count,
-                    detail: "host_processor_info=\(ticks.count), hw.logicalcpu=\(logical.map(String.init) ?? "?")"))
+                    passed: logicalMax == ticks.count,
+                    detail:
+                        "host_processor_info=\(ticks.count), hw.logicalcpu_max=\(logicalMax.map(String.init) ?? "?")",
+                    severity: .advisory))
 
             let zeroCores = ticks.indices.filter { ticks[$0].total == 0 }
             checks.append(
                 SelfTestCheck(
                     name: "cpu.load.nonzero",
                     passed: zeroCores.isEmpty,
-                    detail: zeroCores.isEmpty ? "all cores > 0" : "zero ticks: cpu\(zeroCores)"))
+                    detail: zeroCores.isEmpty ? "all cores > 0" : "zero ticks: cpu\(zeroCores)",
+                    severity: .advisory))
 
-            switch Self.readTicks() {
+            switch readTicks() {
             case .failure(let error):
-                checks.append(SelfTestCheck(name: "cpu.load.monotonic", passed: false, detail: error.description))
+                checks.append(
+                    SelfTestCheck(
+                        name: "cpu.load.monotonic", passed: false, detail: error.description, severity: .advisory))
             case .success(let again):
                 let regressed = zip(ticks, again).enumerated().filter { !$0.element.1.isMonotonic(since: $0.element.0) }
                 let passed = again.count == ticks.count && regressed.isEmpty
@@ -68,24 +95,26 @@ public final class CPULoadCollector: Collector {
                         passed: passed,
                         detail: passed
                             ? "2 reads non-decreasing"
-                            : "count \(ticks.count)->\(again.count), regressed cpu\(regressed.map(\.offset))"))
+                            : "count \(ticks.count)->\(again.count), regressed cpu\(regressed.map(\.offset))",
+                        severity: .advisory))
             }
         }
 
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
         state.withLock {
-            // 从失败恢复：失败期间没有更新基线，旧基线不可用
-            if $0.selfTestPassed == false, result.passed {
+            // 从不可用恢复：不可用期间没有更新基线，旧基线不可用
+            if $0.selfTestUsable == false, result.isUsable {
                 $0.baseline = nil
                 $0.consecutiveStale = 0
             }
-            $0.selfTestPassed = result.passed
+            $0.selfTestUsable = result.isUsable
+            $0.selfTestWarnings = !result.warnings.isEmpty
         }
         return result
     }
 
     public func sample(at time: SampleTime) -> CollectorOutput {
-        let reading = Self.readTicks()
+        let reading = readTicks()
         return state.withLock { state in
             switch reading {
             case .failure(let error):
@@ -94,7 +123,7 @@ public final class CPULoadCollector: Collector {
                     .unavailable, state)
 
             case .success(let ticks):
-                if state.selfTestPassed == false {
+                if state.selfTestUsable == false {
                     return output(
                         Self.unavailableSamples(.selfTestFailed(), state: &state, count: ticks.count, at: time),
                         .unavailable, state)
@@ -140,12 +169,16 @@ public final class CPULoadCollector: Collector {
         var description: String
     }
 
+    /// 本进程的 host 端口，只取一次。`mach_host_self()` 每调用一次都会给这个端口名的 send right 加一个
+    /// 用户引用（urefs），从不释放的话会一直涨到上限 65535 才被内核钉住；缓存起来就只占一个引用。
+    static let host: host_t = mach_host_self()
+
     /// 读一次每核 tick。返回的数组由内核分配，读完立即 `vm_deallocate`。
     static func readTicks() -> Result<[CoreTicks], ReadError> {
         var cpuCount: natural_t = 0
         var info: processor_info_array_t?
         var infoCount: mach_msg_type_number_t = 0
-        let kr = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &cpuCount, &info, &infoCount)
+        let kr = host_processor_info(Self.host, PROCESSOR_CPU_LOAD_INFO, &cpuCount, &info, &infoCount)
         guard kr == KERN_SUCCESS, let info else {
             return .failure(ReadError(description: "host_processor_info kr=\(kr)"))
         }
@@ -177,8 +210,10 @@ public final class CPULoadCollector: Collector {
 
     // MARK: - 组装样本
 
+    /// 自检有提示项没通过时，`ok` 降为 `degraded`。
     private func output(_ samples: [Sample], _ status: CollectorStatus, _ state: State) -> CollectorOutput {
-        CollectorOutput(samples: samples, status: status, dataPath: Self.dataPath, staleCount: state.staleCount)
+        let status = status == .ok && state.selfTestWarnings ? .degraded : status
+        return CollectorOutput(samples: samples, status: status, dataPath: Self.dataPath, staleCount: state.staleCount)
     }
 
     private static func coreIDs(count: Int, state: inout State) -> [MetricID] {

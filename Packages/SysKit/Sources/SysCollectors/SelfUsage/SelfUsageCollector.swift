@@ -9,6 +9,7 @@
 // - 换算后与 getrusage 吻合：按 mach tick 使用（正常路径）；
 // - 原始值直接与 getrusage 吻合：说明内核已改成真正的纳秒，按纳秒使用（仍然正常）；
 // - 都对不上：CPU 回退到 getrusage（状态 degraded），footprint 照常读取。
+// 自检项里只有「读取 proc_pid_rusage」是必需的；时基、footprint、单位校验都有回退或逐通道处理，是提示项（D24 修订）。
 
 import Darwin
 import Synchronization
@@ -57,7 +58,8 @@ public final class SelfUsageCollector: Collector {
             SelfTestCheck(
                 name: "app.self.timebase",
                 passed: timebase != nil,
-                detail: timebase.map { "numer/denom=\($0.numer)/\($0.denom)" } ?? "mach_timebase_info failed"))
+                detail: timebase.map { "numer/denom=\($0.numer)/\($0.denom)" } ?? "mach_timebase_info failed",
+                severity: .advisory))
 
         var cpuSource: CPUTimeSource = .getrusage
         var footprintOK = false
@@ -73,7 +75,7 @@ public final class SelfUsageCollector: Collector {
             checks.append(
                 SelfTestCheck(
                     name: "app.self.footprint", passed: footprintOK,
-                    detail: "ri_phys_footprint=\(usage.footprint)"))
+                    detail: "ri_phys_footprint=\(usage.footprint)", severity: .advisory))
 
             let detected = reference.flatMap {
                 Self.classifyCPUUnits(rawTicks: usage.cpuTicks, referenceNanos: $0, timebase: timebase)
@@ -84,7 +86,8 @@ public final class SelfUsageCollector: Collector {
                     name: "app.self.cpuUnits",
                     passed: detected != nil,
                     detail: "raw=\(usage.cpuTicks), getrusage=\(reference.map { "\($0 / 1000)us" } ?? "failed"), "
-                        + "use=\(Self.describe(cpuSource))"))
+                        + "use=\(Self.describe(cpuSource))",
+                    severity: .advisory))
         }
 
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)

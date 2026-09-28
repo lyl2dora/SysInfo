@@ -37,16 +37,39 @@ public enum CollectorStatus: String, Sendable, Hashable, Codable, CaseIterable {
 
 /// 自检中的一项检查。
 public struct SelfTestCheck: Sendable, Hashable, Codable {
+    /// 检查项的分量。D24 对 K19 的修订：按数据源或通道逐项判定，某个通道缺失时不停用整组数据源。
+    public enum Severity: String, Sendable, Hashable, Codable {
+        /// 必需：不通过时整个数据源不可用（例如读取失败、返回的布局不对）。
+        case required
+        /// 提示：不通过时数据源照常出数，状态降为 degraded；有问题的通道在采样时逐个标为不可用或估算。
+        case advisory
+    }
+
     /// 稳定的检查代码，例如 `cpu.load.coreCount`，由 app 映射成本地化名称。
     public var name: String
     public var passed: Bool
     /// 技术细节（读数、期望值），不做本地化，不含设备唯一标识。
     public var detail: String
+    public var severity: Severity
 
-    public init(name: String, passed: Bool, detail: String) {
+    public init(name: String, passed: Bool, detail: String, severity: Severity = .required) {
         self.name = name
         self.passed = passed
         self.detail = detail
+        self.severity = severity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, passed, detail, severity
+    }
+
+    /// 没有 `severity` 字段的旧数据按「必需」解码。
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        passed = try c.decode(Bool.self, forKey: .passed)
+        detail = try c.decode(String.self, forKey: .detail)
+        severity = try c.decodeIfPresent(Severity.self, forKey: .severity) ?? .required
     }
 }
 
@@ -61,9 +84,19 @@ public struct SelfTestResult: Sendable, Hashable, Codable {
         self.dataPath = dataPath
     }
 
-    /// 至少有一项检查，并且全部通过。
+    /// 至少有一项检查，并且全部通过（包括提示项）。
     public var passed: Bool {
         !checks.isEmpty && checks.allSatisfy(\.passed)
+    }
+
+    /// 至少有一项检查，并且所有必需项都通过：数据源可以使用。提示项不通过时状态为 degraded。
+    public var isUsable: Bool {
+        !checks.isEmpty && checks.allSatisfy { $0.passed || $0.severity == .advisory }
+    }
+
+    /// 没通过的提示项。
+    public var warnings: [SelfTestCheck] {
+        checks.filter { !$0.passed && $0.severity == .advisory }
     }
 }
 
