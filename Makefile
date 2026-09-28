@@ -13,9 +13,11 @@ DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
 RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
 DEV_BUNDLE_ID  := zone.lyl.sysinfo.dev
 
-# Mac Studio（M2 Max，D25）；远端只在 /tmp 下写文件（D18）。
-REMOTE_HOST    := user@remote-host
+# Mac Studio（M2 Max，D25）；远端只在 /tmp 下写文件（D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
+REMOTE_HOST    ?= user@remote-host
 REMOTE_DIR     := /tmp/sysinfo-remote
+# 非交互：密钥登录失败时直接报错，不卡在密码提示上。
+SSH            := ssh -o BatchMode=yes -o ConnectTimeout=10
 
 # 传给 app（run）或 sysinfo-cli（cli、remote-cli）的参数，例如 make cli ARGS="cpu --count 5"
 ARGS ?=
@@ -69,10 +71,12 @@ test-hw: check-private-imports
 cli: check-private-imports
 	swift run --package-path $(PACKAGE_PATH) sysinfo-cli $(ARGS)
 
-remote-cli:
-	ssh $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)'
-	rsync -a --delete --exclude .build --exclude .swiftpm $(PACKAGE_PATH)/ $(REMOTE_HOST):$(REMOTE_DIR)/SysKit/
-	ssh $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && swift run -c release sysinfo-cli $(ARGS)'
+# 把 Packages/SysKit 同步到远端 /tmp/sysinfo-remote/SysKit（保留远端 .build 以便增量构建），
+# 再在远端 swift run -c release sysinfo-cli，ARGS 原样透传，例如 make remote-cli ARGS="cpu --count 5 --json"
+remote-cli: check-private-imports
+	$(SSH) $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)'
+	rsync -a --delete --exclude .build --exclude .swiftpm -e "$(SSH)" $(PACKAGE_PATH)/ $(REMOTE_HOST):$(REMOTE_DIR)/SysKit/
+	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && swift run -c release sysinfo-cli $(ARGS)'
 
 measure:
 	@if [ ! -x scripts/measure-overhead.sh ]; then \
