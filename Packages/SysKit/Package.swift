@@ -1,6 +1,8 @@
 // swift-tools-version: 6.4
 // SysKit：SysInfo 的代码分层（D23、M0 设计 §2）。
-// - 私有 C 层 CSysPrivate 不做成 product，app 在编译期 import 不到它；
+// - 私有 C 层 CSysPrivate 不做成 product，但 Xcode 和 SwiftPM 仍会把它的 module map 传给下游，
+//   app 和 sysinfo-cli 在编译器层面是能 import 到它的。隔离靠两处：SysCollectors 用 `internal import`
+//   不在公开接口里暴露它；scripts/check-private-imports.sh 在构建期检查 app 与 CLI 源码（见 M0 设计偏离记录）；
 // - 对 app 只暴露 SysModel、SysCollectors 两个 library product；
 // - Package 内默认 nonisolated（不设 defaultIsolation），Swift 6 语言模式。
 //   不开 NonisolatedNonsendingByDefault：否则 nonisolated async 函数会继承调用方（MainActor）的隔离，

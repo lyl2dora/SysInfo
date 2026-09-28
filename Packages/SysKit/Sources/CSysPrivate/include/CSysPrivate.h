@@ -2,7 +2,8 @@
 //
 // 规则：
 // - 所有私有符号（IOReport、SMC、私有 IOHID、coalition、私有 IOPS …）只能在这一份头文件里声明，并用弱链接；
-// - 这个 target 不做成 library product，app target 在编译期 import 不到它，只有 SysCollectors 可以依赖它；
+// - 只有 SysCollectors 可以依赖它。这个 target 不做成 library product，但下游（app、CLI）仍能看到它的
+//   module map，编译器拦不住；隔离靠 scripts/check-private-imports.sh 的构建期检查（见 M0 设计偏离记录）；
 // - 上层按数据源封装成带 selfTest() 的协议，业务代码不直接接触这里的符号。
 //
 // M0 阶段：只有占位，不声明任何私有符号。私有调用从 CPU 模块开始建立（D15）。

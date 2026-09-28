@@ -32,7 +32,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli
 
-.PHONY: help build run stop test test-hw cli remote-cli release measure strings install notarize clean check-private-imports
+.PHONY: help build run stop test test-hw cli remote-cli remote-test release measure strings install notarize clean check-private-imports test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -46,7 +46,8 @@ help:
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
-	@echo "  check-private-imports  检查 app 与 sysinfo-cli 没有 import CSysPrivate（test、cli 会先跑它）"
+	@echo "  check-private-imports  检查 app 与 sysinfo-cli 没有引用 CSysPrivate（test、cli 会先跑它）"
+	@echo "  test-scripts  运行 check-private-imports 的回归样例（test、test-hw 会先跑它）"
 	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
 
 build:
@@ -65,10 +66,14 @@ run: build stop
 check-private-imports:
 	@scripts/check-private-imports.sh $(PRIVATE_IMPORT_GUARDED)
 
-test: check-private-imports
+# 私有层隔离检查是 D23 的唯一防线，它自己的回归样例随单元测试一起跑。
+test-scripts:
+	@scripts/test-check-private-imports.sh
+
+test: test-scripts check-private-imports
 	swift test --package-path $(PACKAGE_PATH)
 
-test-hw: check-private-imports
+test-hw: test-scripts check-private-imports
 	SYSINFO_HW_TESTS=1 swift test --package-path $(PACKAGE_PATH)
 
 cli: check-private-imports

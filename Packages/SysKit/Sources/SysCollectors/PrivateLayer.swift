@@ -1,7 +1,8 @@
 // 私有 C 层的唯一入口（D05、D23）。
 //
-// CSysPrivate 只能在 SysCollectors 内部 import，并且用 `internal import`，
-// 这样它不会出现在 SysCollectors 的公开接口里，上层（app、CLI）也拿不到它的符号。
+// CSysPrivate 只能在 SysCollectors 内部 import，并且用 `internal import`，这样它不会出现在 SysCollectors 的公开接口里。
+// 注意：这并不能让上层（app、CLI）拿不到它的符号——它们直接 `import CSysPrivate` 也能编译通过
+// （module map 会传给下游）。拦截靠 scripts/check-private-imports.sh 的构建期检查（见 M0 设计偏离记录）。
 internal import CSysPrivate
 
 /// 私有 C 层的元信息，供诊断页和 sysinfo-cli 显示。
