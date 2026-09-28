@@ -85,6 +85,11 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     /// 面板显示的时刻（与 `NSEvent.timestamp` 同一时钟：开机以来的秒数）。
     /// 早于它的鼠标事件就是打开面板的那次点击，全局监视器要忽略它。
     private var shownAt: TimeInterval = 0
+    /// 无 session 的锚定面板（`--open-panel`）被点击 item 关掉的时刻（同上的时钟）。
+    /// 同一次点击随后还会让系统开启新 session，要把它取消，这次点击才等价于「关闭」。
+    private var sessionlessClosedByItemClickAt: TimeInterval?
+    /// 上面两件事之间允许的最大间隔，秒（实测约 20 ms）。
+    static let itemClickSessionWindow: TimeInterval = 0.5
 
     init(store: MetricStore, engine: SamplingEngine) {
         self.store = store
@@ -94,6 +99,24 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     // MARK: - NSStatusItemExpandedInterfaceDelegate
 
     func statusItem(_ statusItem: NSStatusItem, didBegin session: NSStatusItemExpandedInterfaceSession) {
+        // `--open-panel` 显示的面板没有 session。这时点击 item，全局监视器和系统新开的 session 都会看到这次点击，
+        // 先后顺序不定；两种顺序下都按「关闭」处理，与有 session 时「再次点击 item 关闭」一致。
+        let clickClosedSessionlessPanel = sessionlessClosedByItemClickAt.map {
+            ProcessInfo.processInfo.systemUptime - $0 < Self.itemClickSessionWindow
+        } ?? false
+        sessionlessClosedByItemClickAt = nil
+        if presentation == .anchored, sessionItem == nil {
+            Log.panel.info("无 session 的面板开着时点击 item：关闭面板，取消系统新开的 session")
+            hide()
+            session.cancel()
+            return
+        }
+        if clickClosedSessionlessPanel {
+            Log.panel.info("这次点击已经关闭了无 session 的面板：取消系统新开的 session")
+            session.cancel()
+            return
+        }
+
         Log.panel.info("expanded interface session 开始")
         sessionItem = statusItem
         showAnchored()
@@ -124,6 +147,13 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         Log.panel.info("--open-panel：不经 session 显示面板")
         sessionItem = nil
         showAnchored()
+    }
+
+    /// 只关闭锚在 item 下方的面板（打开设置窗口前调用）；固定的浮窗保留。
+    func dismissAnchored() {
+        guard presentation == .anchored else { return }
+        Log.panel.info("打开设置窗口，先关闭锚定面板")
+        close()
     }
 
     /// 关闭面板：有 session 时取消 session（系统随后回调 didEnd），否则直接隐藏。
@@ -213,10 +243,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             openActivityMonitor: { [weak self] in self?.openActivityMonitor() },
             pin: { [weak self] in self?.pin() },
             close: { [weak self] in self?.close() },
-            openSettings: { [weak self] in
-                self?.close()
-                self?.onOpenSettings?()
-            },
+            // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。
+            openSettings: { [weak self] in self?.onOpenSettings?() },
             quit: { NSApp.terminate(nil) })
         let hosting = NSHostingView(rootView: PanelRootView(store: store, state: state, actions: actions))
         let fitting = hosting.fittingSize
@@ -279,6 +307,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         let location = NSEvent.mouseLocation
         if let anchor = statusItems?.anchorWindow?.frame, anchor.contains(location) {
             Log.panel.info("再次点击 item，关闭面板")
+            if sessionItem == nil {
+                // 无 session 的面板：系统随后会为这次点击开启新 session，didBegin 里把它取消。
+                sessionlessClosedByItemClickAt = ProcessInfo.processInfo.systemUptime
+            }
         } else {
             Log.panel.info("点击面板以外的位置，关闭面板")
         }

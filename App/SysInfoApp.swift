@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let settingsWindow = SettingsController(settings: settings, store: store, throttle: throttle, engine: engine)
         settingsWindow.install()
-        panel.onOpenSettings = { [weak settingsWindow] in settingsWindow?.open() }
+        panel.onOpenSettings = { [weak self] in self?.openSettings() }
         self.settingsWindow = settingsWindow
 
         settings.onChange = { [weak self] in self?.applySettings() }
@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         Log.app.info("重新打开 app，打开设置窗口")
-        settingsWindow.open()
+        openSettings()
         return false
     }
 
@@ -112,14 +112,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 菜单动作
 
     @objc func showSettings(_ sender: Any?) {
-        settingsWindow.open()
+        openSettings()
     }
 
     @objc func showAbout(_ sender: Any?) {
-        settingsWindow.open(page: .about)
+        openSettings(page: .about)
     }
 
     // MARK: - 私有
+
+    /// 打开设置窗口的公共入口：⌘,、「关于」菜单、重新打开 app、面板顶栏的设置按钮都走这里。
+    /// 锚在 item 下方的面板在 popUpMenu 层级，会盖住设置窗口，item 的 session 高亮也还在，所以先关掉它；
+    /// 固定的浮窗是用户主动留下的，保留。
+    private func openSettings(page: SettingsPage? = nil) {
+        panel.dismissAnchored()
+        settingsWindow.open(page: page)
+    }
 
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
