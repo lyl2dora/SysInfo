@@ -73,7 +73,14 @@ public final class CPULoadCollector: Collector {
         }
 
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
-        state.withLock { $0.selfTestPassed = result.passed }
+        state.withLock {
+            // 从失败恢复：失败期间没有更新基线，旧基线不可用
+            if $0.selfTestPassed == false, result.passed {
+                $0.baseline = nil
+                $0.consecutiveStale = 0
+            }
+            $0.selfTestPassed = result.passed
+        }
         return result
     }
 

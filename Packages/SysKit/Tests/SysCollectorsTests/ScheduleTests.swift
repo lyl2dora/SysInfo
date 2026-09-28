@@ -133,3 +133,60 @@ import Testing
         #expect(TickGrid.searchStart(current: 10, lastRun: 3600) == 10)
     }
 }
+
+@Suite struct HealthRecordTests {
+    let cost = SampleCost(wallNanos: 300, cpuNanos: 200)
+
+    func output(_ status: CollectorStatus, stale: UInt64 = 0) -> CollectorOutput {
+        CollectorOutput(samples: [], status: status, dataPath: "fake", staleCount: stale)
+    }
+
+    @Test func tracksCostsAndCounts() {
+        var record = HealthRecord(id: "fake")
+        _ = record.apply(output(.ok), cost: SampleCost(wallNanos: 100, cpuNanos: 50), recheckThreshold: 10)
+        _ = record.apply(output(.degraded, stale: 3), cost: SampleCost(wallNanos: 300, cpuNanos: 150), recheckThreshold: 10)
+        #expect(record.health.sampleCount == 2)
+        #expect(record.health.status == .degraded)
+        #expect(record.health.staleCount == 3)
+        #expect(record.health.lastCost == SampleCost(wallNanos: 300, cpuNanos: 150))
+        #expect(record.health.averageCost == SampleCost(wallNanos: 200, cpuNanos: 100))
+    }
+
+    @Test func recheckThresholdBacksOffAndResets() {
+        var record = HealthRecord(id: "fake")
+        func rechecksOver(_ samples: Int) -> [Int] {
+            (1...samples).filter { _ in record.apply(output(.unavailable), cost: cost, recheckThreshold: 2) }
+        }
+        // 门槛 2 → 4 → 8：第 2、6、14 次连续不可用时复检
+        let all = (1...14).filter { _ in record.apply(output(.unavailable), cost: cost, recheckThreshold: 2) }
+        #expect(all == [2, 6, 14])
+        // 恢复一次后门槛回到初始值
+        _ = record.apply(output(.ok), cost: cost, recheckThreshold: 2)
+        #expect(rechecksOver(2) == [2])
+    }
+
+    @Test func recheckThresholdIsCapped() {
+        var record = HealthRecord(id: "fake")
+        var gaps: [Int] = []
+        var since = 0
+        for _ in 0..<2000 {
+            since += 1
+            if record.apply(output(.unavailable), cost: cost, recheckThreshold: 1) {
+                gaps.append(since)
+                since = 0
+            }
+        }
+        #expect(gaps.prefix(8) == [1, 2, 4, 8, 16, 32, 64, 64])
+        #expect(gaps.max() == HealthRecord.maxBackoffMultiplier)
+    }
+
+    @Test func selfTestSetsDataPathOnlyBeforeFirstSample() {
+        var record = HealthRecord(id: "fake")
+        record.applySelfTest(SelfTestResult(checks: [], dataPath: "from-selftest"))
+        #expect(record.health.dataPath == "from-selftest")
+        _ = record.apply(output(.ok), cost: cost, recheckThreshold: 10)
+        record.applySelfTest(SelfTestResult(checks: [], dataPath: "other"))
+        #expect(record.health.dataPath == "fake")
+        #expect(record.health.selfTest?.dataPath == "other")
+    }
+}

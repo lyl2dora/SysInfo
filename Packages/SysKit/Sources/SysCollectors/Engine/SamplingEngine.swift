@@ -19,6 +19,7 @@ public actor SamplingEngine {
         /// 定时器 leeway，纳秒。
         public var leewayNanos: Int
         /// 采集器连续这么多次输出 `unavailable` 后重新自检（K19「运行中连续越界」）。
+        /// 复检后仍不可用时，下一次复检的门槛翻倍（最多 64 倍），避免长期故障时反复自检、刷日志。
         public var recheckAfterConsecutiveUnavailable: Int
         /// 每个订阅者最多缓存的事件数；订阅者跟不上时丢弃最旧的。
         public var eventBufferSize: Int
@@ -65,6 +66,8 @@ public actor SamplingEngine {
 
     private var timer: (any DispatchSourceTimer)?
     private var scheduledTick: Int64?
+    /// 已排定唤醒的截止时刻（与定时器同一时钟）。用来识别改排之前就已进入队列的旧事件。
+    private var scheduledDeadline: DispatchTime?
     private var lastRunTick: Int64?
     private var tickCount: UInt64 = 0
 
@@ -247,16 +250,17 @@ public actor SamplingEngine {
             timer?.cancel()
             timer = nil
             scheduledTick = nil
+            scheduledDeadline = nil
             return
         }
         guard next != scheduledTick else { return }
 
         let timer = self.timer ?? makeTimer()
         let delay = max(grid.unixNanos(of: next) - nowWall, 0)
-        timer.schedule(
-            deadline: .now() + .nanoseconds(Int(delay)), repeating: .never,
-            leeway: .nanoseconds(configuration.leewayNanos))
+        let deadline = DispatchTime.now() + .nanoseconds(Int(delay))
+        timer.schedule(deadline: deadline, repeating: .never, leeway: .nanoseconds(configuration.leewayNanos))
         scheduledTick = next
+        scheduledDeadline = deadline
     }
 
     private func makeTimer() -> any DispatchSourceTimer {
@@ -271,8 +275,13 @@ public actor SamplingEngine {
     }
 
     private func timerFired() {
-        guard let tick = scheduledTick else { return }  // 已被取消或改排的旧事件
+        // 定时器不会早于截止时刻触发。还没到截止时刻，说明这是改排之前就已进入队列的旧事件：
+        // 忽略它，定时器仍按新的截止时刻排着。
+        guard let tick = scheduledTick, let deadline = scheduledDeadline,
+            DispatchTime.now().uptimeNanoseconds + 1_000_000 >= deadline.uptimeNanoseconds
+        else { return }
         scheduledTick = nil
+        scheduledDeadline = nil
         let result = runTick(tick)
         rearm()
         if var result {
@@ -333,6 +342,11 @@ struct HealthRecord: Sendable {
     var totalWallNanos: UInt64 = 0
     var totalCPUNanos: UInt64 = 0
     var consecutiveUnavailable = 0
+    /// 当前的复检门槛；nil 表示用配置的初始值。
+    var recheckThreshold: Int?
+
+    /// 复检门槛最多翻到初始值的这么多倍。
+    static let maxBackoffMultiplier = 64
 
     init(id: CollectorID) {
         health = CollectorHealth(id: id, status: .ok, dataPath: "")
@@ -345,8 +359,9 @@ struct HealthRecord: Sendable {
         }
     }
 
-    /// 记下一次采样；返回 true 表示连续不可用次数到了阈值，应当重新自检（计数随之清零）。
-    mutating func apply(_ output: CollectorOutput, cost: SampleCost, recheckThreshold: Int) -> Bool {
+    /// 记下一次采样；返回 true 表示连续不可用次数到了门槛，应当重新自检（计数清零，门槛翻倍）。
+    /// 一旦输出不再是 `unavailable`，门槛恢复为初始值。
+    mutating func apply(_ output: CollectorOutput, cost: SampleCost, recheckThreshold base: Int) -> Bool {
         health.status = output.status
         health.dataPath = output.dataPath
         health.staleCount = output.staleCount
@@ -358,13 +373,18 @@ struct HealthRecord: Sendable {
             wallNanos: totalWallNanos / health.sampleCount,
             cpuNanos: totalCPUNanos / health.sampleCount)
 
+        let base = max(base, 1)
         guard output.status == .unavailable else {
             consecutiveUnavailable = 0
+            recheckThreshold = nil
             return false
         }
         consecutiveUnavailable += 1
-        guard consecutiveUnavailable >= max(recheckThreshold, 1) else { return false }
+        let threshold = recheckThreshold ?? base
+        guard consecutiveUnavailable >= threshold else { return false }
         consecutiveUnavailable = 0
+        let cap = base > Int.max / Self.maxBackoffMultiplier ? Int.max : base * Self.maxBackoffMultiplier
+        recheckThreshold = threshold > cap / 2 ? cap : threshold * 2
         return true
     }
 }
