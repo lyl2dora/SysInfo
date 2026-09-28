@@ -25,7 +25,7 @@ enum DisplayNames {
     static func selfTestCheck(_ name: String) -> String {
         switch name {
         case "cpu.load.read": String(localized: "读取每核 tick")
-        case "cpu.load.coreCount": String(localized: "核数与 hw.logicalcpu 一致")
+        case "cpu.load.coreCount": String(localized: "核数与 hw.logicalcpu_max 一致")
         case "cpu.load.nonzero": String(localized: "计数器非零")
         case "cpu.load.monotonic": String(localized: "两次读数单调不减")
         case "app.self.timebase": String(localized: "mach 时基")

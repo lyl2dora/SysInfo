@@ -140,8 +140,7 @@ private struct CollectorHealthRow: View {
             if let selfTest = health.selfTest {
                 ForEach(selfTest.checks, id: \.name) { check in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: check.passed ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                            .foregroundStyle(check.passed ? Color.green : Color.red)
+                        checkIcon(check)
                         Text(DisplayNames.selfTestCheck(check.name))
                         Spacer()
                         Text(check.detail)
@@ -174,6 +173,23 @@ private struct CollectorHealthRow: View {
             Text("尚未采样")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 通过：绿色对勾；提示项没通过（照常出数，状态降级）：橙色三角；必需项没通过（数据源不可用）：红色。
+    @ViewBuilder
+    private func checkIcon(_ check: SelfTestCheck) -> some View {
+        if check.passed {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.green)
+        } else if check.severity == .advisory {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.orange)
+                .help(String(localized: "提示项未通过：数据源照常使用，状态降级"))
+        } else {
+            Image(systemName: "xmark.octagon.fill")
+                .foregroundStyle(Color.red)
+                .help(String(localized: "必需项未通过：数据源不可用"))
         }
     }
 

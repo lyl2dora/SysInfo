@@ -123,7 +123,7 @@ private struct CPUSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section("高开销选项") {
-                Text("M0 还没有高开销选项。之后加入的选项会在这里标注大致开销。")
+                Text("暂无高开销选项。之后加入的选项会在这里标注大致开销。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -136,7 +136,7 @@ private struct HistorySettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("历史记录的持久化与导出在 CPU 模块中实现（D08）。目前只在内存中保留最近 15 分钟的数据。")
+                Text("历史记录的持久化与导出尚未实现。目前只在内存中保留最近 15 分钟的数据。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
