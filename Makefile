@@ -15,9 +15,17 @@ DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
 RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
 DEV_BUNDLE_ID  := zone.lyl.sysinfo.dev
 
-# Mac Studio（M2 Max，D25）；远端只在 /tmp 下写文件（D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
+# Mac Studio（M2 Max，D25）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
 REMOTE_HOST    ?= user@remote-host
 REMOTE_DIR     := /tmp/sysinfo-remote
+# SwiftPM 默认往家目录写 manifest 缓存、配置和安全目录（~/Library/Caches/org.swift.swiftpm、
+# ~/Library/org.swift.swiftpm、~/.swiftpm 下的链接）。显式指定 --cache-path 等之后它仍会重建
+# ~/.swiftpm/security 链接，改 HOME 也没用（它按 NSHomeDirectory 取家目录），所以另设 CFFIXED_USER_HOME
+# 把家目录整个换到 REMOTE_DIR/home（2026-09-29 在 Mac Studio 上实测：真实家目录下不再有任何改动）。
+# 构建目录本来就在 REMOTE_DIR/SysKit/.build；TMPDIR 也指过去，xcrun 等工具按它写临时缓存。
+REMOTE_SWIFTPM := --cache-path $(REMOTE_DIR)/swiftpm/cache --config-path $(REMOTE_DIR)/swiftpm/config \
+	--security-path $(REMOTE_DIR)/swiftpm/security --manifest-cache local
+REMOTE_ENV     := CFFIXED_USER_HOME=$(REMOTE_DIR)/home HOME=$(REMOTE_DIR)/home TMPDIR=$(REMOTE_DIR)/tmp
 # 非交互：密钥登录失败时直接报错，不卡在密码提示上。
 SSH            := ssh -o BatchMode=yes -o ConnectTimeout=10
 
@@ -32,7 +40,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli
 
-.PHONY: help build run stop test test-hw cli remote-cli remote-test release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test release measure strings install notarize clean check-private-imports test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -42,7 +50,8 @@ help:
 	@echo "  test        运行 SysKit 单元测试（跳过 .hardware 标签）"
 	@echo "  test-hw     运行 SysKit 单元测试，包括硬件测试"
 	@echo "  cli         构建并运行 sysinfo-cli，ARGS 为子命令与选项"
-	@echo "  remote-cli  在 Mac Studio（$(REMOTE_HOST)）上构建并运行 sysinfo-cli"
+	@echo "  remote-cli  在 Mac Studio（$(REMOTE_HOST)）上构建并运行 sysinfo-cli（只写远端 $(REMOTE_DIR)）"
+	@echo "  remote-test 在 Mac Studio 上运行 SysKit 单元测试，包括硬件测试（只写远端 $(REMOTE_DIR)）"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
@@ -79,12 +88,18 @@ test-hw: test-scripts check-private-imports
 cli: check-private-imports
 	swift run --package-path $(PACKAGE_PATH) sysinfo-cli $(ARGS)
 
-# 把 Packages/SysKit 同步到远端 /tmp/sysinfo-remote/SysKit（保留远端 .build 以便增量构建），
-# 再在远端 swift run -c release sysinfo-cli，ARGS 原样透传，例如 make remote-cli ARGS="cpu --count 5 --json"
-remote-cli: check-private-imports
-	$(SSH) $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)'
+# 把 Packages/SysKit 同步到远端 /tmp/sysinfo-remote/SysKit（保留远端 .build 以便增量构建）。
+remote-sync: check-private-imports
+	$(SSH) $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)/tmp $(REMOTE_DIR)/home'
 	rsync -a --delete --exclude .build --exclude .swiftpm -e "$(SSH)" $(PACKAGE_PATH)/ $(REMOTE_HOST):$(REMOTE_DIR)/SysKit/
-	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && swift run -c release sysinfo-cli $(ARGS)'
+
+# 在远端 swift run -c release sysinfo-cli，ARGS 原样透传，例如 make remote-cli ARGS="cpu --count 5 --json"
+remote-cli: remote-sync
+	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && $(REMOTE_ENV) swift run -c release $(REMOTE_SWIFTPM) sysinfo-cli $(ARGS)'
+
+# 在远端跑单元测试，包括硬件测试（D25：每个模块验收要附两台机器的结果）。
+remote-test: test-scripts remote-sync
+	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && $(REMOTE_ENV) SYSINFO_HW_TESTS=1 swift test $(REMOTE_SWIFTPM)'
 
 measure:
 	@if [ ! -x scripts/measure-overhead.sh ]; then \
