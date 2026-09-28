@@ -8,6 +8,8 @@ SCHEME         := SysInfo
 DERIVED_DATA   := build/DerivedData
 PACKAGE_PATH   := Packages/SysKit
 BUILD_NUMBER   := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+# git 短哈希，工作区有未提交改动时加 -dirty；Debug 版「关于」页显示（K30）。
+GIT_COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
 
 DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
 RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
@@ -24,13 +26,13 @@ ARGS ?=
 
 XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=macOS,arch=arm64' \
 	-derivedDataPath $(DERIVED_DATA) \
-	CURRENT_PROJECT_VERSION=$(BUILD_NUMBER)
+	CURRENT_PROJECT_VERSION=$(BUILD_NUMBER) SYSINFO_GIT_COMMIT=$(GIT_COMMIT)
 
 # 私有 C 层隔离检查的范围（D05、D23）：能经依赖闭包看到 CSysPrivate、但不允许 import 它的源码目录。
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli
 
-.PHONY: help build run stop test test-hw cli remote-cli release measure install notarize clean check-private-imports
+.PHONY: help build run stop test test-hw cli remote-cli release measure strings install notarize clean check-private-imports
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -42,7 +44,8 @@ help:
 	@echo "  cli         构建并运行 sysinfo-cli，ARGS 为子命令与选项"
 	@echo "  remote-cli  在 Mac Studio（$(REMOTE_HOST)）上构建并运行 sysinfo-cli"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
-	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销"
+	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
+	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
 	@echo "  check-private-imports  检查 app 与 sysinfo-cli 没有 import CSysPrivate（test、cli 会先跑它）"
 	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
 
@@ -84,6 +87,14 @@ measure:
 		exit 1; \
 	fi
 	scripts/measure-overhead.sh
+
+# 把编译器从代码里提取的文案（.stringsdata）同步进 String Catalog（D23）。xcodebuild 不会自动回写 .xcstrings。
+strings: build
+	@files=$$(find $(DERIVED_DATA)/Build/Intermediates.noindex/SysInfo.build/Debug -name '*.stringsdata' 2>/dev/null); \
+	if [ -z "$$files" ]; then echo "没有找到 .stringsdata，请先 make build" >&2; exit 1; fi; \
+	args=""; for f in $$files; do args="$$args --stringsdata $$f"; done; \
+	xcrun xcstringstool sync App/Localizable.xcstrings $$args
+	@echo "已同步 App/Localizable.xcstrings"
 
 install notarize:
 	@echo "make $@ 在 M0 不实现（install 待 K50 定；notarize 按 D20 为可选）。" >&2

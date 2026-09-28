@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 与 GENERATE_INFOPLIST_FILE 生成的键合并。git 短哈希由 Makefile 经 SYSINFO_GIT_COMMIT 注入（K30），「关于」页在 Debug 版显示。 -->
+	<key>SysInfoGitCommit</key>
+	<string>$(SYSINFO_GIT_COMMIT)</string>
+</dict>
+</plist>

@@ -29,11 +29,15 @@ GENERATE_INFOPLIST_FILE = YES
 INFOPLIST_KEY_LSUIElement = YES
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.utilities
 INFOPLIST_KEY_NSPrincipalClass = NSApplication
+// 自定义键（git 短哈希）放在 Config/Info.plist，与生成的键合并；不放进 App/，免得被同步文件夹当成资源复制。
+INFOPLIST_FILE = Config/Info.plist
 
 // 标识与版本（K30）：CURRENT_PROJECT_VERSION 由 Makefile 用 `git rev-list --count HEAD` 覆盖。
 PRODUCT_NAME = SysInfo
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
+// git 短哈希，由 Makefile 用 `git rev-parse --short HEAD`（有未提交改动时加 -dirty）覆盖；从 Xcode 直接构建时为 unknown。
+SYSINFO_GIT_COMMIT = unknown
 
 // 本地化：开发语言 zh-Hans（工程的 developmentRegion），文案统一放进 String Catalog（D23）。
 LOCALIZATION_PREFERS_STRING_CATALOGS = YES
