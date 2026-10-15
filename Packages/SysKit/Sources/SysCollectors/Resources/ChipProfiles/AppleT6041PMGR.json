@@ -25,7 +25,43 @@
   },
   "schema": 1,
   "socID": "AppleT6041PMGR",
-  "source": "research/probes/cpu-module 2026-10-15 skeptic-thermal-power (M4 Pro) + sysinfo-cli calibrate 2026-10-15; the two P clusters share one key set: the P0/P1 split in docs/design/cpu-module-boundary.md §9.3 was a lag artifact (see docs/design/cpu-module.md deviation log)",
+  "source": "research/probes/cpu-module 2026-10-15 skeptic-thermal-power (M4 Pro) + sysinfo-cli calibrate 2026-10-15; the two P clusters share one key set: the P0/P1 split in docs/design/cpu-module-boundary.md §9.3 was a lag artifact (see docs/design/cpu-module.md deviation log); system section: research/probes/power-thermal 2026-10-15 (docs/design/power-thermal-boundary.md)",
+  "system": {
+    "catalogGroups": {
+      "ane": "Ta",
+      "gpu": "Tg"
+    },
+    "dramPowerKey": "PZD1",
+    "hotspotKey": "TCMz",
+    "hotspotNote": "TCMz holds its last value while the CPU region is power-gated (about +2.8 degC vs TCMb), power-thermal-boundary §2.5",
+    "placeholders": [
+      -4.0,
+      0.0,
+      1.5,
+      2.2,
+      2.3,
+      2.4,
+      8.2,
+      40.0
+    ],
+    "pmgrComponents": {
+      "afr": "AFR",
+      "amcc": "AMCC",
+      "ane": "ANE",
+      "ave": "AVE",
+      "cpu": "CPU Energy",
+      "dcs": "DCS",
+      "display": "DISP",
+      "displayExt": "DISPEXT",
+      "dram": "DRAM",
+      "gpu": "GPU",
+      "isp": "ISP",
+      "msr": "MSR"
+    },
+    "socInputPowerKey": "PHPC",
+    "socPowerKey": "PZC0",
+    "systemPowerKey": "PDTR"
+  },
   "temperature": {
     "aliasGroups": [
       [

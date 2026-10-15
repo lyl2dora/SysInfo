@@ -21,10 +21,13 @@ public struct ChipProfile: Codable, Hashable, Sendable {
     public var topology: TopologyExpectation
     public var temperature: TemperatureProfile
     public var power: PowerProfile
+    /// 整机与 SoC 级的键（功耗与散热模块，D44）。可选：旧档案、本机校准结果没有这一段时视为没有。
+    public var system: SystemProfile?
 
     public init(
         schema: Int = ChipProfile.currentSchema, socID: String, description: String, verifiedBuilds: [String],
-        source: String, topology: TopologyExpectation, temperature: TemperatureProfile, power: PowerProfile
+        source: String, topology: TopologyExpectation, temperature: TemperatureProfile, power: PowerProfile,
+        system: SystemProfile? = nil
     ) {
         self.schema = schema
         self.socID = socID
@@ -34,6 +37,7 @@ public struct ChipProfile: Codable, Hashable, Sendable {
         self.topology = topology
         self.temperature = temperature
         self.power = power
+        self.system = system
     }
 }
 
@@ -110,5 +114,43 @@ public struct PowerProfile: Codable, Hashable, Sendable {
         self.clusterRails = clusterRails
         self.gpuRails = gpuRails
         self.sharedRails = sharedRails
+    }
+}
+
+/// 整机与 SoC 级的键（功耗与散热模块设计 §3.2，D44）。取值全部来自实测（边界稿 §2）。
+public struct SystemProfile: Codable, Hashable, Sendable {
+    /// 整机直流功率键（两台目标机都是 `PDTR`）。
+    public var systemPowerKey: String
+    /// SoC 功率（模型口径）键：`PZC0`。
+    public var socPowerKey: String?
+    /// SoC 实测输入功率键：`PHPC`，只进诊断页（D44）。
+    public var socInputPowerKey: String?
+    /// DRAM 功率键：`PZD1`（与 PMGR DRAM 完全相等）。
+    public var dramPowerKey: String?
+    /// SoC 最热点的聚合键：M5 `TCMb`、M4 `TCMz`（与有效温度键逐秒最大值的吻合度实测得出，D44 PT7）。
+    public var hotspotKey: String?
+    /// 热点键的已知问题，给诊断页看（例如 M4 的 `TCMz` 在 CPU 区断电时会停在旧值）。不做本地化。
+    public var hotspotNote: String?
+    /// PMGR 通道：归一化名 → 本芯片的通道名，例如 `"gpu": "GPU0"`（M5）或 `"GPU"`（M4）。
+    public var pmgrComponents: [String: String]
+    /// 经负载验证的传感器分组 → 键前缀，例如 `"gpu": "Tg"`、`"ane": "Ta"`（D44 PT6）。
+    public var catalogGroups: [String: String]
+    /// 传感器目录的占位值：断电或刚上电时的固定读数（M4 有 −4、0、1.5、2.2、2.3、2.4、8.2、40 等）。
+    public var placeholders: [Double]
+
+    public init(
+        systemPowerKey: String, socPowerKey: String?, socInputPowerKey: String?, dramPowerKey: String?,
+        hotspotKey: String?, hotspotNote: String?, pmgrComponents: [String: String], catalogGroups: [String: String],
+        placeholders: [Double]
+    ) {
+        self.systemPowerKey = systemPowerKey
+        self.socPowerKey = socPowerKey
+        self.socInputPowerKey = socInputPowerKey
+        self.dramPowerKey = dramPowerKey
+        self.hotspotKey = hotspotKey
+        self.hotspotNote = hotspotNote
+        self.pmgrComponents = pmgrComponents
+        self.catalogGroups = catalogGroups
+        self.placeholders = placeholders
     }
 }

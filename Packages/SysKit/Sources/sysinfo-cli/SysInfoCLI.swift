@@ -4,6 +4,7 @@
 // - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用、用户/系统、每档、每簇和每核占用；
 // - topo：打印拓扑发现的结果和三种档次依据（CPU 模块设计 §8）；
 // - freq、verify freq：每簇频率，以及按档与内核计数对照（Freq.swift）；
+// - power、pmgr：功耗与散热（Power.swift）；
 // - history：历史库的统计、导出与实录（History.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
@@ -92,6 +93,21 @@ struct SysInfoCLI {
                         interval: try options.double("--interval", default: 5, range: 1...60),
                         count: try options.int("--count", default: 2, range: 1...100),
                         rows: try options.int("--rows", default: 10, range: 1...100)))
+            case "power":
+                let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count"])
+                exit(
+                    runPower(
+                        interval: try options.double("--interval", default: 1, range: 0.5...3600),
+                        count: try options.int("--count", default: 5, range: 1...1_000_000), json: options.flag("--json")))
+            case "pmgr":
+                let options = try Options(arguments, flags: ["--watch"], values: ["--timeout"])
+                exit(runPMGR(watch: options.flag("--watch"), timeout: try options.double("--timeout", default: 1900, range: 60...7200)))
+            case "catalog":
+                let options = try Options(arguments, flags: ["--json", "--all"], values: ["--samples"])
+                exit(
+                    runCatalog(
+                        samples: try options.int("--samples", default: 4, range: 1...60), json: options.flag("--json"),
+                        all: options.flag("--all")))
             case "history":
                 exit(try await runHistory(arguments))
             case "engine":
@@ -139,10 +155,16 @@ struct SysInfoCLI {
               cores [--interval 2] [--count 3]       逐核频率（诊断用），以及每核 tick 忙碌与逐核通道活跃的相关系数（要求 ≥0.99）
               irq [--interval 5] [--count 2] [--rows 10]
                                                       中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
+              power [--interval 1] [--count 5] [--json]
+                                                      整机 / SoC / GPU / DRAM 功率、墙插估算、SoC 最热点、风扇、低功耗模式，
+                                                      以及遥测与 PDTR 积分的逐段对账
+              pmgr [--watch] [--timeout 1900]         PMGR 订阅的部件；--watch 等到下一个 30 分钟批次，打印分部件明细与交叉核对
+              catalog [--samples 4] [--all] [--json]  传感器目录：全部 T/V/I/P/F 数值键的质量（有效 / 占位 / 恒定 / 非温度）与已验证分组
               history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）
               history export --out PATH [--format csv|jsonl] [--granularity minute|hour] [--hours 24]
                              [--metrics cpu.usage.,cpu.temp.] [--no-apps] [--db PATH]
                                                       导出历史：csv 为文件夹（system.csv、apps.csv、metadata.json）
+              history energy [--db PATH]              能耗：今天、昨天、近 7 天的 kWh（积分与系统累计补数分开列出）
               history record --db PATH [--seconds 180] [--menubar] [--no-apps]
                                                       经调度器记录若干秒并打印写入结果；--menubar 加一个 1 s 的占用需求
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，

@@ -20,7 +20,36 @@
   },
   "schema": 1,
   "socID": "AppleT6050PMGR",
-  "source": "research/probes/cpu-module 2026-09-29 thermal-power + skeptic-thermal-power (M5 Pro); docs/design/cpu-module-boundary.md §2.3, §2.4; recall verified by sysinfo-cli calibrate 2026-10-15",
+  "source": "research/probes/cpu-module 2026-09-29 thermal-power + skeptic-thermal-power (M5 Pro); docs/design/cpu-module-boundary.md §2.3, §2.4; recall verified by sysinfo-cli calibrate 2026-10-15; system section: research/probes/power-thermal 2026-10-15 (docs/design/power-thermal-boundary.md)",
+  "system": {
+    "catalogGroups": {
+      "ane": "Ta",
+      "gpu": "Tg"
+    },
+    "dramPowerKey": "PZD1",
+    "hotspotKey": "TCMb",
+    "placeholders": [
+      0.0
+    ],
+    "pmgrComponents": {
+      "afr": "AFR0",
+      "amcc": "AMCC0",
+      "ane": "ANE0",
+      "ave": "AVE0",
+      "cpu": "CPU Energy",
+      "dcs": "DCS0",
+      "display": "DISP0",
+      "displayExt": "DISPEXT0",
+      "dram": "DRAM0",
+      "fabric": "FAB0",
+      "gpu": "GPU0",
+      "isp": "ISP0",
+      "msr": "MSR0"
+    },
+    "socInputPowerKey": "PHPC",
+    "socPowerKey": "PZC0",
+    "systemPowerKey": "PDTR"
+  },
   "temperature": {
     "aliasGroups": [
       [
