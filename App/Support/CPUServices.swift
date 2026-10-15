@@ -161,6 +161,7 @@ final class CPUServices {
     let collectors: CPUCollectors
     let topN: TopNModel
     let history: HistoryRecorder?
+    let diagnostics = CPUDiagnosticsModel()
 
     init(collectors: CPUCollectors, history: HistoryRecorder?) {
         self.collectors = collectors
@@ -170,7 +171,8 @@ final class CPUServices {
 
     /// 引擎事件（在 MainActor 上，由 AppDelegate 的事件泵转来）。
     func handle(_ event: EngineEvent) {
-        guard case .tick(let result) = event, result.collectors.contains(AppSampler.collectorID) else { return }
-        topN.coalitionTick()
+        guard case .tick(let result) = event else { return }
+        diagnostics.ingest(result)
+        if result.collectors.contains(AppSampler.collectorID) { topN.coalitionTick() }
     }
 }

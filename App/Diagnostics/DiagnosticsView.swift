@@ -1,4 +1,5 @@
-// 诊断页（K19，M0 设计 §6）：Release 版也保留。
+// 诊断页（K19，M0 设计 §6，CPU 模块设计 §7.4）：Release 版也保留。
+// - CPU 部分放在最前（数据源路径、拓扑与档案、被动核对、校准、诊断读数），见 CPUDiagnosticsSection；
 // - 采集器表：状态、数据路径、自检结果、最近一次和平均耗时（墙钟与线程 CPU）；
 // - 调度器：tick 数、定时器、有效需求、降频因子与原因；手动降频开关（K20，测试用）；
 // - 本进程：CPU 占用（按单核的比例，1 分钟均值）和内存 footprint。
@@ -11,9 +12,11 @@ struct DiagnosticsView: View {
     let store: MetricStore
     @Bindable var throttle: ThrottleMonitor
     let runSelfTests: () -> Void
+    let services: CPUServices
 
     var body: some View {
         Form {
+            CPUDiagnosticsSection(store: store, services: services, model: services.diagnostics)
             collectorsSection
             schedulerSection
             selfUsageSection
@@ -165,7 +168,7 @@ private struct CollectorHealthRow: View {
     private var costLine: some View {
         if let last = health.lastCost, let average = health.averageCost {
             Text(
-                "最近 \(Formatting.milliseconds(last.wallNanos))（CPU \(Formatting.milliseconds(last.cpuNanos))）· 平均 \(Formatting.milliseconds(average.wallNanos))（CPU \(Formatting.milliseconds(average.cpuNanos))）· 采样 \(health.sampleCount) 次 · 陈旧 \(health.staleCount) 次"
+                "最近 \(Formatting.milliseconds(last.wallNanos))（CPU \(Formatting.milliseconds(last.cpuNanos))）· 平均 \(Formatting.milliseconds(average.wallNanos))（CPU \(Formatting.milliseconds(average.cpuNanos))）· 采样 \(health.sampleCount) 次 · 陈旧 \(health.staleCount) 次\(health.skippedBusyCount > 0 ? " · 忙碌跳过 \(health.skippedBusyCount) 次" : "")"
             )
             .font(.caption)
             .foregroundStyle(.secondary)

@@ -4,11 +4,16 @@ import Foundation
 import SwiftUI
 import SysCollectors
 import SysModel
+import SysStore
 
 enum DisplayNames {
     static func collector(_ id: CollectorID) -> String {
         switch id.rawValue {
         case "cpu.load": String(localized: "CPU 负载")
+        case "cpu.freq": String(localized: "CPU 频率")
+        case "cpu.misc": String(localized: "负载均值与中断")
+        case "cpu.sensors": String(localized: "温度与功耗")
+        case "app.coalition": String(localized: "应用活动")
         case "app.self": String(localized: "本进程开销")
         default: id.rawValue
         }
@@ -43,6 +48,7 @@ enum DisplayNames {
         case .panel: String(localized: "面板")
         case .diagnostics: String(localized: "诊断页")
         case .cli: String(localized: "命令行")
+        case .history: String(localized: "历史记录")
         default: source.rawValue
         }
     }

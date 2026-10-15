@@ -53,7 +53,9 @@ private struct SettingsSplitView: View {
         case .privacy:
             PrivacySettingsView()
         case .diagnostics:
-            DiagnosticsView(store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests)
+            DiagnosticsView(
+                store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests,
+                services: context.services)
                 .onAppear { context.diagnosticsVisibilityChanged(true) }
                 .onDisappear { context.diagnosticsVisibilityChanged(false) }
         case .about:

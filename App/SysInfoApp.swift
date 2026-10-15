@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.history = history
         let services = CPUServices(collectors: CPUCollectors(collectors), history: history)
         self.services = services
+        services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
         eventPump = Task {
             for await event in await engine.events() {
                 store.apply(event)
