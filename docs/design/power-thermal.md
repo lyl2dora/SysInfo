@@ -247,3 +247,5 @@ struct SystemProfile: Codable {
   - 模块页「菜单栏」节的 widget 行抽成 `WidgetSettingsRow`（`Settings/WidgetSettings.swift`），CPU 页与功耗与散热页共用。
   - 诊断页可见时另登记 `power.rail`、`power.sensors`、`power.gpu` 每秒一次（遥测对账要整机功率每秒采样）。
   - 新增启动参数 `--panel-tab=<cpu|power>`（截图与开销测量用）；`scripts/measure-overhead.sh` 增加 `power` 档。
+- **2026-10-15 · §4.6 GPU 交叉核对要求最低负载**
+  - M5 空闲时 PMGR GPU 窗口均值只有 0.033 W，AGX ÷ PMGR = 1.074，已贴近 1.1 的上限；满载时是 1.002。连续两次误判会停用 GPU 功率，所以窗口均值低于 0.3 W 时这一批记为「不下结论」。DRAM 不受影响（空闲时 0.997）。
