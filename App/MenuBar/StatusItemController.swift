@@ -145,7 +145,7 @@ extension CPUStatusItemConfiguration {
         let topology = CPUTopologyService.shared.current
         self.init(
             widget: widget, style: settings.renderStyle(for: widget), showsLabel: settings.menuBarShowsLabel,
-            coloring: settings.menuBarCPUColoring, levelCount: max(topology?.perfLevels.count ?? 2, 1),
+            color: settings.color(for: widget), levelCount: max(topology?.perfLevels.count ?? 2, 1),
             coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8)
     }
 }

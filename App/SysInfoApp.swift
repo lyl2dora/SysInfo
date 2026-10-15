@@ -160,7 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
-        store.colorThresholds = settings.cpuColorThresholds
         statusItems.update(
             settings.visibleCPUWidgets.map { CPUStatusItemConfiguration(widget: $0, settings: settings) },
             interval: settings.cpuInterval)

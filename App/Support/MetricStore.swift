@@ -8,7 +8,7 @@
 //
 // 发布节流（CPU 模块偏离记录 2026-10-15，开销实测后加）：最新样本、环形缓冲、每核、调度状态的写入不直接触发观察，
 // 而是攒到 `publishDelay` 之后统一把 `revision` 加一，读这些数据的视图只失效一次。同一个 tick 的主结果和阻塞结果
-// （SMC、coalition 晚到 10–70 ms）因此合并成一次重绘。菜单栏的平滑占用和着色级别不经节流，照常立即更新。
+// （SMC、coalition 晚到 10–70 ms）因此合并成一次重绘。菜单栏的平滑占用不经节流，照常立即更新。
 
 import Foundation
 import Observation
@@ -59,8 +59,6 @@ final class MetricStore {
     }
     /// 菜单栏显示用的 CPU 总占用。
     private(set) var menuBarCPU: MenuBarReading = .noData
-    /// 菜单栏的着色级别（D32：对平滑后的总占用做持续判定）。
-    private(set) var menuBarLevel: UsageLevel = .normal
     /// 调度器状态（tick 数、需求、降频、各采集器健康信息）。
     var engineStatus: EngineStatus? {
         _ = revision
@@ -71,13 +69,6 @@ final class MetricStore {
 
     @ObservationIgnored private var smoother = ExponentialSmoother(timeConstant: MetricStore.menuBarTimeConstant)
     @ObservationIgnored private var ticksSinceLog = 0
-    @ObservationIgnored private var levelTracker = SustainedLevelTracker(thresholds: .cpuDefault)
-
-    /// 着色阈值（来自设置）。
-    var colorThresholds: ColorThresholds {
-        get { levelTracker.thresholds }
-        set { levelTracker.thresholds = newValue }
-    }
 
     func apply(_ event: EngineEvent) {
         switch event {
@@ -155,10 +146,6 @@ final class MetricStore {
         }
         if reading != menuBarCPU {
             menuBarCPU = reading
-        }
-        let level = levelTracker.update(smoothed, at: Double(sample.time.continuousNanos) / 1e9)
-        if level != menuBarLevel {
-            menuBarLevel = level
         }
     }
 

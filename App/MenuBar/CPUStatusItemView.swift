@@ -3,7 +3,7 @@
 // - 宽度按样式的最坏情况算好，运行中不改（改宽会让 MenuBarAgent 多占 4–5% 的核）。只有用户改样式、
 //   标签开关，或拓扑决定的柱数变化时才重新定宽；
 // - 数字用 monospacedDigitSystemFont，文字用语义色（菜单栏在 27 上是透明的，颜色不能按深浅色写死）；
-// - 着色（D32）：平时 labelColor；持续高占用时数值（或柱、折线）变 systemOrange / systemRed；
+// - 颜色（D43）：数值和图形用该 widget 设置的颜色，默认 labelColor；小标签始终 labelColor。不按数值着色；
 // - 在 draw(_:) 里直接读 MetricStore，AppKit 会自动跟踪 @Observable 并在数值变化时重绘。
 
 import AppKit
@@ -16,7 +16,8 @@ struct CPUStatusItemConfiguration: Equatable {
     /// 占用 widget 的样式；其余 widget 只用上下或左右布局（图形样式按上下布局画）。
     var style: MenuBarCPUStyle = .stacked
     var showsLabel = true
-    var coloring = true
+    /// 数值与图形的颜色（D43）。
+    var color: WidgetColor = .system
     /// 每档柱的个数（拓扑的档数）。
     var levelCount = 2
     /// 每核柱的个数（逻辑核数）。
@@ -114,16 +115,6 @@ final class CPUStatusItemView: NSView {
 
     override var isFlipped: Bool { false }
 
-    /// 数值与图形的颜色：着色关闭或正常时用 labelColor（D32）。
-    private func accentColor(_ level: UsageLevel) -> NSColor {
-        guard configuration.coloring else { return .labelColor }
-        switch level {
-        case .normal: return .labelColor
-        case .warning: return .systemOrange
-        case .critical: return .systemRed
-        }
-    }
-
     /// 非占用 widget 的数值文字；没有数据时为 nil。
     private func valueText(_ widget: CPUMenuWidget) -> String? {
         switch widget {
@@ -144,8 +135,7 @@ final class CPUStatusItemView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let widget = configuration.widget
         let label = Self.label(widget)
-        // 只有占用 widget 参与着色（D32、D38）。
-        let color = widget == .usage ? accentColor(store.menuBarLevel) : NSColor.labelColor
+        let color = configuration.color.nsColor
         let text = valueText(widget)  // 自动跟踪：数值变化时 AppKit 重绘
         let valueText = text ?? PercentFormat.placeholder
         let valueColor = text != nil ? color : NSColor.secondaryLabelColor
@@ -158,7 +148,7 @@ final class CPUStatusItemView: NSView {
             let value = NSAttributedString(
                 string: valueText, attributes: [.font: Self.stackedValueFont, .foregroundColor: valueColor])
             let size = value.size()
-            value.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: contentRect.minY + Self.stackedValueFont.descender))
+            value.draw(at: NSPoint(x: pixelAligned((bounds.width - size.width) / 2), y: contentRect.minY + Self.stackedValueFont.descender))
         case .sparkline:
             drawSparkline(in: drawStackedLabel(label, graphic: true), color: color)
         case .barsTotal:
@@ -173,6 +163,13 @@ final class CPUStatusItemView: NSView {
         }
 
         setAccessibilityLabel("\(label) \(valueText)")
+    }
+
+    /// 文字起点的横坐标对齐到设备像素。居中算出的起点带小数（如 5.54 pt），在 1x 屏上字形会被抗锯齿摊到相邻像素，
+    /// 低对比的颜色（systemRed）看起来尤其发虚（2026-10-15 验收发现）。纵向的基线已经取整，不用再处理。
+    private func pixelAligned(_ x: CGFloat) -> CGFloat {
+        let scale = window?.backingScaleFactor ?? 2
+        return (x * scale).rounded() / scale
     }
 
     /// 上下布局里两行之间的间距（按大写高度算）。
@@ -190,7 +187,7 @@ final class CPUStatusItemView: NSView {
             let label = NSAttributedString(
                 string: text, attributes: [.font: Self.stackedLabelFont, .foregroundColor: NSColor.labelColor])
             let labelBaseline = valueBaseline + valueCap + Self.stackedGap
-            label.draw(at: NSPoint(x: (bounds.width - label.size().width) / 2, y: labelBaseline + Self.stackedLabelFont.descender))
+            label.draw(at: NSPoint(x: pixelAligned((bounds.width - label.size().width) / 2), y: labelBaseline + Self.stackedLabelFont.descender))
         }
         if graphic {
             let bottom: CGFloat = 3
@@ -211,7 +208,7 @@ final class CPUStatusItemView: NSView {
         let value = NSAttributedString(
             string: valueText, attributes: [.font: Self.inlineValueFont, .foregroundColor: valueColor])
         let valueWidth = value.size().width
-        value.draw(at: NSPoint(x: bounds.width - Self.padding - valueWidth, y: baseline + Self.inlineValueFont.descender))
+        value.draw(at: NSPoint(x: pixelAligned(bounds.width - Self.padding - valueWidth), y: baseline + Self.inlineValueFont.descender))
     }
 
     private func drawSparkline(in rect: NSRect, color: NSColor) {
