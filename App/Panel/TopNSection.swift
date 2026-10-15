@@ -4,7 +4,8 @@
 // - 同 uid 的进程才有「结束」按钮，先确认，按住 ⌥ 时默认强制；组行、root、其他用户、SysInfo 自身没有按钮；
 // - 鼠标悬停在列表上时冻结排序；
 // - coalition 不可用时只列同 uid 进程，并提供手动「刷新全部」（setuid ps，只在点击时运行；内存没有，D49）；
-// - 内存面板（D49）复用同一套行：数值列换成 footprint，副标题、成员、外部成员合计都按 footprint。
+// - 内存面板（D49）复用同一套行：数值列换成 footprint，副标题、成员、外部成员合计都按 footprint；
+// - 存储面板（存储模块设计 §4.5）同样复用：数值列是「读 / 写」速率（B/s，按 1000 换算）。
 
 import AppKit
 import SwiftUI
@@ -67,6 +68,8 @@ extension TopNSection {
         case (.cpu, .byProcess): String(localized: "占用最高的进程")
         case (.memory, .byApp): String(localized: "内存最多的应用")
         case (.memory, .byProcess): String(localized: "内存最多的进程")
+        case (.disk, .byApp): String(localized: "读写最多的应用")
+        case (.disk, .byProcess): String(localized: "读写最多的进程")
         }
     }
 
@@ -158,19 +161,26 @@ private struct TopNRowView: View {
                 if row.members.count > Self.memberLimit {
                     let rest = row.members.dropFirst(Self.memberLimit)
                     let total =
-                        metric == .memory
-                        ? Formatting.memory(Double(rest.reduce(UInt64(0)) { $0 + ($1.footprint ?? 0) }))
-                        : PercentFormat.string(fromRatio: rest.reduce(0.0) { $0 + ($1.cpu ?? 0) })
+                        switch metric {
+                        case .memory: Formatting.memory(Double(rest.reduce(UInt64(0)) { $0 + ($1.footprint ?? 0) }))
+                        case .disk:
+                            Formatting.diskRatePair(
+                                rest.reduce(0.0) { $0 + ($1.diskRead ?? 0) }, rest.reduce(0.0) { $0 + ($1.diskWrite ?? 0) })
+                        case .cpu: PercentFormat.string(fromRatio: rest.reduce(0.0) { $0 + ($1.cpu ?? 0) })
+                        }
                     Text("另有 \(rest.count) 个你的进程 · \(total)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 22)
                 }
                 if row.residualCount > 0 {
-                    let residual =
-                        metric == .memory
-                        ? row.residualFootprint.map { Formatting.memory(Double($0)) }
-                        : row.residualCPU.map { PercentFormat.string(fromRatio: $0) }
+                    let residual: String? =
+                        switch metric {
+                        case .memory: row.residualFootprint.map { Formatting.memory(Double($0)) }
+                        case .disk:
+                            row.residualDiskRead.flatMap { r in row.residualDiskWrite.map { Formatting.diskRatePair(r, $0) } }
+                        case .cpu: row.residualCPU.map { PercentFormat.string(fromRatio: $0) }
+                        }
                     Text("另有 \(row.residualCount) 个其他用户或 root 的进程\(residual.map { " · " + $0 } ?? "")")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -180,13 +190,20 @@ private struct TopNRowView: View {
         }
     }
 
-    /// 数值列宽：百分比 44 pt；内存（「12.34 GB」）要宽一些。
-    private var valueWidth: CGFloat { metric == .memory ? 62 : 44 }
+    /// 数值列宽：百分比 44 pt；内存（「12.34 GB」）要宽一些；磁盘是「读 / 写」两个速率。
+    private var valueWidth: CGFloat {
+        switch metric {
+        case .cpu: 44
+        case .memory: 62
+        case .disk: 112
+        }
+    }
 
     private var rowValue: String {
         switch metric {
         case .cpu: PercentFormat.string(fromRatio: row.cpu)
         case .memory: row.footprint.map { Formatting.memory(Double($0)) } ?? "—"
+        case .disk: Formatting.diskRatePair(row.diskRead ?? 0, row.diskWrite ?? 0)
         }
     }
 
@@ -194,6 +211,7 @@ private struct TopNRowView: View {
         switch metric {
         case .cpu: member.cpu.map { PercentFormat.string(fromRatio: $0) }
         case .memory: member.footprint.map { Formatting.memory(Double($0)) }
+        case .disk: member.diskRead.flatMap { r in member.diskWrite.map { Formatting.diskRatePair(r, $0) } }
         }
     }
 

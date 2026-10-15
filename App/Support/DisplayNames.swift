@@ -24,6 +24,9 @@ enum DisplayNames {
         case "sensors.catalog": String(localized: "传感器目录")
         case "memory.vm": String(localized: "内存")
         case "memory.bandwidth": String(localized: "DRAM 带宽")
+        case "storage.io": String(localized: "磁盘读写")
+        case "storage.smart": String(localized: "NVMe SMART")
+        case "storage.capacity": String(localized: "容量与 RAID")
         default: id.rawValue
         }
     }
@@ -53,6 +56,12 @@ enum DisplayNames {
         case "memory.vm.pressure": String(localized: "读取内存压力")
         case "memory.bandwidth.ioreport": String(localized: "IOReport 可用")
         case "memory.bandwidth.channels": String(localized: "找到 DCS BW 通道")
+        case "storage.io.disks": String(localized: "找到物理盘并读到驱动统计")
+        case "storage.io.statistics": String(localized: "每块盘都有驱动统计")
+        case "storage.smart.read": String(localized: "读取 NVMe SMART")
+        case "storage.smart.plausible": String(localized: "SMART 读数合理")
+        case "storage.capacity.mounts": String(localized: "读取本地挂载点")
+        case "storage.capacity.groups": String(localized: "找到容量组")
         default: name
         }
     }
@@ -71,6 +80,8 @@ enum DisplayNames {
                 String(localized: "菜单栏 CPU")
             } else if source.rawValue.hasPrefix("menubar.memory.") {
                 String(localized: "菜单栏内存")
+            } else if source.rawValue.hasPrefix("menubar.storage.") {
+                String(localized: "菜单栏存储")
             } else {
                 source.rawValue
             }
@@ -192,6 +203,52 @@ enum Formatting {
     /// 每秒次数：「1.2k/s」。
     static func rate(_ perSecond: Double) -> String {
         perSecond >= 1000 ? String(format: "%.1fk/s", perSecond / 1000) : String(format: "%.0f/s", perSecond)
+    }
+
+    /// 磁盘容量与速率按 1000 换算（K24，与访达一致）：「853.3 GB」「35 TB」。
+    static func diskBytes(_ bytes: Double) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(max(bytes, 0)), countStyle: .decimal)
+    }
+
+    /// 容量的短格式（3 位有效数字，面板容量条用）：「7.15 GB」「141 GB」「41.9 TB」。
+    static func diskBytesShort(_ bytes: Double) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+        var v = max(bytes, 0)
+        var unit = 0
+        while v >= 999.5, unit < units.count - 1 {
+            v /= 1000
+            unit += 1
+        }
+        let format = unit == 0 || v >= 99.5 ? "%.0f %@" : v >= 9.95 ? "%.1f %@" : "%.2f %@"
+        return String(format: format, v, units[unit])
+    }
+
+    /// 速率：「1.2 MB/s」。
+    static func diskRate(_ bytesPerSecond: Double) -> String {
+        let units = ["B", "KB", "MB", "GB"]
+        var v = max(bytesPerSecond, 0)
+        var unit = 0
+        while v >= 999.5, unit < units.count - 1 {
+            v /= 1000
+            unit += 1
+        }
+        return String(format: unit == 0 || v >= 9.95 ? "%.0f %@/s" : "%.1f %@/s", v, units[unit])
+    }
+
+    /// 读 / 写两个速率（Top N 的数值列）。
+    static func diskRatePair(_ read: Double, _ write: Double) -> String {
+        "\(diskRate(read)) / \(diskRate(write))"
+    }
+
+    /// 平均延迟：「0.06 ms」「12 ms」。
+    static func latency(_ seconds: Double) -> String {
+        let ms = seconds * 1000
+        return ms < 10 ? String(format: "%.2f ms", ms) : String(format: "%.0f ms", ms)
+    }
+
+    /// 大计数：千分位。
+    static func count(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
     }
 
     static func duration(_ seconds: TimeInterval) -> String {

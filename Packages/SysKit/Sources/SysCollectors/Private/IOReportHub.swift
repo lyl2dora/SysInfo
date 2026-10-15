@@ -51,6 +51,8 @@ public struct IOReportChannelDelta: Hashable, Sendable {
     public var stateNames: [String]
     /// 计数类通道的增量；状态类通道为 0。
     public var integerValue: Int64
+    /// 提供该通道的驱动（例如 `IONVMeBlockStorageDevice <id 0x100000ece>`）；同名通道按驱动区分时用。
+    public var driverName: String? = nil
 }
 
 /// 全 app 共享的 IOReport 入口。
@@ -246,11 +248,11 @@ public final class IOReportSubscription {
                     key: IOReportHub.key(of: channel),
                     stateResidencies: (0..<count).map { csp_ior_state_residency(channel, $0) },
                     stateNames: IOReportHub.stateNames(of: channel),
-                    integerValue: 0)
+                    integerValue: 0, driverName: csp_ior_channel_driver_name(channel) as String?)
             }
             return IOReportChannelDelta(
                 key: IOReportHub.key(of: channel), stateResidencies: [], stateNames: [],
-                integerValue: csp_ior_simple_integer(channel))
+                integerValue: csp_ior_simple_integer(channel), driverName: csp_ior_channel_driver_name(channel) as String?)
         }
     }
 }

@@ -31,6 +31,9 @@ struct WidgetSettingsRow: View {
                         }
                     }
                 }
+                if widget == .diskTemperature || widget == .diskThroughput || widget == .diskFree {
+                    StorageTargetPicker(settings: settings, widget: widget)
+                }
                 if widget == .memoryUsage {
                     Picker("显示", selection: $settings.memoryUsagePresentation) {
                         Text("占用率（%）").tag(MemoryUsagePresentation.percent)
@@ -82,6 +85,9 @@ enum WidgetInfo {
         case .memoryUsage: String(localized: "内存占用")
         case .memoryPressure: String(localized: "内存压力")
         case .swapUsed: String(localized: "Swap 用量")
+        case .diskTemperature: String(localized: "盘温")
+        case .diskThroughput: String(localized: "读写速率")
+        case .diskFree: String(localized: "可用空间")
         }
     }
 
@@ -91,6 +97,7 @@ enum WidgetInfo {
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
+        case .storage: String(localized: "存储")
         }
     }
 
@@ -122,7 +129,62 @@ enum WidgetInfo {
             return String(localized: "系统内存压力百分比（100 − 可用水位），与 memory_pressure 同源。\(CostLabel.text(collector: MemoryCollector.collectorID, interval: interval, store: store))")
         case .swapUsed:
             return String(localized: "已写入 swap 文件的数据量。\(CostLabel.text(collector: MemoryCollector.collectorID, interval: interval, store: store))")
+        case .diskTemperature:
+            return String(localized: "NVMe SMART 综合温度；只读绑定的那块盘（选「所有盘最高温」时读全部盘）。\(CostLabel.text(collector: SMARTCollector.collectorID, interval: interval, store: store))")
+        case .diskThroughput:
+            return String(localized: "一块物理盘的读写速率，上下两行（R 读、W 写），按 1000 换算。\(CostLabel.text(collector: StorageIOCollector.collectorID, interval: interval, store: store))")
+        case .diskFree:
+            return String(localized: "一个容量组（APFS 容器或分区）的可用空间，与访达的「可用」一致（不含可清除空间），每分钟更新。")
         }
+    }
+}
+
+/// 存储 widget 绑定的盘或容量组（D54）。选项按当前的盘与组列出；选中的盘拔掉后仍保留，显示「已断开」。
+struct StorageTargetPicker: View {
+    @Bindable var settings: AppSettings
+    let widget: MenuWidget
+
+    private var selection: Binding<StorageTarget> {
+        switch widget {
+        case .diskThroughput: $settings.diskThroughputTarget
+        case .diskFree: $settings.diskFreeTarget
+        default: $settings.diskTemperatureTarget
+        }
+    }
+
+    var body: some View {
+        let model = StorageModel.shared
+        let inventory = model.inventory
+        Picker(widget == .diskFree ? "容量组" : "盘", selection: selection) {
+            if widget == .diskFree {
+                Text("启动卷所在的组").tag(StorageTarget.primary)
+                ForEach(model.groups.filter { !$0.isAuxiliary }) { group in
+                    Text("\(group.name)（\(Formatting.diskBytes(Double(group.totalBytes)))）").tag(StorageTarget.group(group.key))
+                }
+            } else {
+                Text("内置盘").tag(StorageTarget.primary)
+                if widget == .diskTemperature {
+                    Text("所有盘最高温").tag(StorageTarget.hottest)
+                }
+                ForEach(inventory.disks) { disk in
+                    Text(Self.diskLabel(disk, inventory: inventory)).tag(StorageTarget.disk(disk.key))
+                }
+            }
+            if case .disk(let key) = selection.wrappedValue, inventory.disk(key) == nil {
+                Text("已断开的盘").tag(selection.wrappedValue)
+            }
+            if case .group(let key) = selection.wrappedValue, !model.groups.contains(where: { $0.key == key }) {
+                Text("已断开的容量组").tag(selection.wrappedValue)
+            }
+        }
+    }
+
+    static func diskLabel(_ disk: PhysicalDisk, inventory: StorageInventory) -> String {
+        let name = StorageText.diskName(disk, inventory: inventory)
+        if let raid = disk.raid, let set = inventory.raidSet(raid.setKey) {
+            return "\(name)（RAID「\(set.name)」，\(disk.bsdName ?? "?")）"
+        }
+        return "\(name)（\(StorageText.location(disk.location))，\(disk.bsdName ?? "?")）"
     }
 }
 
@@ -138,6 +200,9 @@ enum CostLabel {
         GPUPowerCollector.collectorID: 1.8,
         // 内存模块设计 §2.4：sysctl 与 host_statistics64 一次约 0.3 ms
         MemoryCollector.collectorID: 0.3,
+        // 存储模块设计 §1.1：常驻连接时一块盘约 0.17 ms（盘温 widget 只读绑定的盘）；6 块盘的驱动统计约 0.8 ms
+        SMARTCollector.collectorID: 0.2,
+        StorageIOCollector.collectorID: 0.8,
     ]
 
     static func text(collector: CollectorID, interval: Int, store: MetricStore) -> String {

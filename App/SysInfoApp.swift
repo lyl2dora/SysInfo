@@ -65,6 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             target: self, about: #selector(showAbout(_:)), settings: #selector(showSettings(_:)))
 
         let settings = AppSettings(defaults: options.factoryDefaults ? nil : .standard)
+        // 盘的键（D54）：盐存在本 app 的 defaults 里，历史里同一块盘的键跨重启不变；
+        // `--factory-defaults` 不读写偏好，用进程内随机盐（采集层的默认）。必须在创建采集器之前。
+        if !options.factoryDefaults {
+            DiskIdentity.configure(salt: DiskIdentity.loadOrCreateSalt(in: .standard))
+        }
         let store = MetricStore()
         let collectors = StandardCollectors.make()
         let engine = SamplingEngine(collectors: collectors)
@@ -85,13 +90,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let temporaryName = options.factoryDefaults ? "factory" : instance.role == .secondary ? "secondary" : nil
         temporaryHistoryDirectory = temporaryName.map(Self.temporaryHistoryDirectory)
+        let storage = StorageCollectors(collectors)
         let history = Self.makeHistory(
-            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first, power: power,
+            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first, power: power, storage: storage,
             temporaryDirectory: temporaryHistoryDirectory, settings: settings)
         self.history = history
         let services = AppServices(
-            collectors: CPUCollectors(collectors), power: power, memory: MemoryCollectors(collectors), history: history,
-            engine: engine)
+            collectors: CPUCollectors(collectors), power: power, memory: MemoryCollectors(collectors), storage: storage,
+            history: history, engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
         eventPump = Task {
@@ -127,6 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         instance.startListening()
 
         settings.onChange = { [weak self] in self?.applySettings() }
+        // 盘插拔、容量组变化：widget 的绑定（内置盘、启动组）要重新解析。
+        services.storageModel.onStructureChange = { [weak self] in self?.applySettings() }
         applySettings()
         throttle.start()
 
@@ -138,6 +146,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let tab = options.panelTab.flatMap(PanelTab.init(rawValue:)) { panel.state.selectedTab = tab }
         if options.openPanel {
             panel.showWithoutSession()
+        }
+        if let index = options.storageDetailIndex {
+            openStorageDetail(index: index, attempt: 0)
         }
         if options.openSettings || settings.visibleWidgets.isEmpty {
             settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
@@ -169,6 +180,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    /// `--storage-detail=<n>`：等物理盘清单出来（启动自检之后），打开第 n 块盘的详情页。
+    private func openStorageDetail(index: Int, attempt: Int) {
+        let disks = services.storageModel.inventory.disks
+        guard index < disks.count else {
+            if attempt < 50 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.openStorageDetail(index: index, attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        panel.state.storageDetail = disks[index].key
+    }
+
     // MARK: - 菜单动作
 
     @objc func showSettings(_ sender: Any?) {
@@ -194,9 +219,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings: AppSettings = self.settings
         // 没有风扇的机型不出现风扇 widget（风扇在自检时发现；启动自检结束后会再调一次这里）。
         let hasFans = services?.power.hasFans ?? false
+        let widgets = settings.visibleWidgets.filter { $0 != .fan || hasFans }
         statusItems.update(
-            settings.visibleWidgets.filter { $0 != .fan || hasFans }.map { StatusItemConfiguration(widget: $0, settings: settings) },
+            widgets.map { StatusItemConfiguration(widget: $0, settings: settings) },
             intervals: { settings.interval(for: $0) })
+        // SMART 焦点盘（D55）：只每次读盘温 widget 绑定的盘；「所有盘最高温」时读全部。
+        if let storageModel = services?.storageModel {
+            if widgets.contains(.diskTemperature) {
+                storageModel.widgetFocus =
+                    settings.diskTemperatureTarget == .hottest
+                    ? nil : Set([storageModel.resolveDisk(settings.diskTemperatureTarget)].compactMap { $0 })
+            } else {
+                storageModel.widgetFocus = []
+            }
+        }
         throttle.automatic = settings.autoThrottle
         let configuration = Self.historyConfiguration(settings)
         Task { [history] in await history?.setConfiguration(configuration) }
@@ -207,14 +243,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HistoryRecorder.Configuration(
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
             highPrecision: settings.historyHighPrecision, recordPower: settings.historyPowerEnabled,
-            recordEnergy: settings.historyEnergyEnabled, recordMemory: settings.historyMemoryEnabled)
+            recordEnergy: settings.historyEnergyEnabled, recordMemory: settings.historyMemoryEnabled,
+            recordStorage: settings.historyStorageEnabled)
     }
 
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）；
     /// Debug 版的从实例同样用临时目录（`SysInfo-secondary-<pid>`），不与主实例同写一个库（D48）。退出时删除临时目录。
     private static func makeHistory(
-        engine: SamplingEngine, appSampler: AppSampler?, power: PowerCollectors, temporaryDirectory: URL?,
-        settings: AppSettings
+        engine: SamplingEngine, appSampler: AppSampler?, power: PowerCollectors, storage: StorageCollectors,
+        temporaryDirectory: URL?, settings: AppSettings
     ) -> HistoryRecorder? {
         let url: URL?
         if let temporaryDirectory {
@@ -227,7 +264,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let store = try HistoryStore(url: url)
             let recorder = HistoryRecorder(
                 store: store, engine: engine, appSampler: appSampler,
-                power: .init(ledger: power.ledger, pmgr: power.pmgr), configuration: historyConfiguration(settings))
+                power: .init(ledger: power.ledger, pmgr: power.pmgr), storageCapacity: storage.capacity,
+                configuration: historyConfiguration(settings))
             Task { await recorder.start() }
             return recorder
         } catch {

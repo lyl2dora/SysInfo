@@ -343,15 +343,26 @@ final class ChartDrawView: LiveDrawView {
         return candidates.first { $0 >= value * 1.05 } ?? (value * 1.1).rounded(.up)
     }
 
+    /// 速率纵轴的上限：向上取到 1、2、5 × 10ⁿ，最低 100 KB/s（空闲时不至于把几 KB 的抖动画成满格）。
+    static func niceRateCeiling(_ value: Double) -> Double {
+        let target = max(value * 1.05, 100_000)
+        let magnitude = pow(10, floor(log10(target)))
+        return [1.0, 2, 5, 10].map { $0 * magnitude }.first { $0 >= target } ?? target
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
         let span = spanSeconds
         let size = bounds.size
         let all = points(series.metric, stored: stored)
         let overlay = series.overlay.map { points($0, stored: storedOverlay) } ?? []
+        let dataMax = (all.map { $0.peak ?? $0.y } + overlay.map(\.y)).max() ?? 0
         let top: Double =
-            series.scale == .unit
-            ? 1 : Self.niceCeiling((all.map { $0.peak ?? $0.y } + overlay.map(\.y)).max() ?? 0)
+            switch series.scale {
+            case .unit: 1
+            case .watts: Self.niceCeiling(dataMax)
+            case .bytesPerSecond: Self.niceRateCeiling(dataMax)
+            }
         func x(_ v: Double) -> CGFloat { CGFloat((v + span) / span) * size.width }
         func y(_ v: Double) -> CGFloat { size.height * (1 - CGFloat(min(max(v / top, 0), 1))) }
         // 网格
@@ -414,7 +425,13 @@ final class ChartDrawView: LiveDrawView {
             line.stroke()
         }
         let latest = all.max { $0.x < $1.x }
-        if series.scale == .watts {
+        if series.scale == .bytesPerSecond {
+            for level in [1.0, 0.5] {
+                let text = Self.text(Formatting.diskRate(top * level), Self.caption2, .secondaryLabelColor)
+                Self.draw(text, x: 2, y: y(top * level) + 1)
+            }
+            setAccessibilityLabel(String(localized: "读写速率图，最近读 \(latest.map { Formatting.diskRate($0.y) } ?? "—")"))
+        } else if series.scale == .watts {
             // 功率刻度画在绘制区里（随数据变化，SwiftUI 那边不读数据）。
             for level in [1.0, 0.5] {
                 let text = Self.text(Formatting.wattsShort(top * level), Self.caption2, .secondaryLabelColor)

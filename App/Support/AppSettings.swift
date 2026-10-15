@@ -17,6 +17,11 @@
 // - menubar.memory.usage.presentation   内存占用 widget 显示百分比（percent）或已用 GB（bytes）
 // - memory.interval / memory.panel.topNInterval / .topNRows / .grouping / .chartSpan / .overlayPressure   内存的常驻间隔覆盖与面板设置
 // - history.memory.enabled   是否记录内存历史（D49）
+// - menubar.storage.<widget>.visible / .color   存储 widget（diskTemperature / diskThroughput / diskFree，D54：只有 diskTemperature 默认开）
+// - storage.widget.temperature.target / .throughput.target / .free.target   widget 绑定的盘或组：primary、hottest、disk:<键>、group:<键>
+// - storage.interval / storage.panel.smartInterval / .topNInterval / .topNRows / .grouping / .chartSpan / .collapsedRAIDs
+//   存储的常驻间隔覆盖与面板设置（D55：面板 SMART 默认 2 s）
+// - history.storage.enabled   是否记录存储历史
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
@@ -72,6 +77,17 @@ final class AppSettings {
         static let memoryChartSpan = "memory.panel.chartSpan"
         static let memoryChartOverlayPressure = "memory.panel.overlayPressure"
         static let historyMemory = "history.memory.enabled"
+        static let storageInterval = "storage.interval"
+        static let diskTemperatureTarget = "storage.widget.temperature.target"
+        static let diskThroughputTarget = "storage.widget.throughput.target"
+        static let diskFreeTarget = "storage.widget.free.target"
+        static let storageSMARTInterval = "storage.panel.smartInterval"
+        static let storageTopNInterval = "storage.panel.topNInterval"
+        static let storageTopNRows = "storage.panel.topNRows"
+        static let storageGrouping = "storage.panel.grouping"
+        static let storageChartSpan = "storage.panel.chartSpan"
+        static let storageCollapsedRAIDs = "storage.panel.collapsedRAIDs"
+        static let historyStorage = "history.storage.enabled"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -316,12 +332,73 @@ final class AppSettings {
         didSet { persist(historyMemoryEnabled, Key.historyMemory) }
     }
 
+    // MARK: 存储（D54、D55）
+
+    /// 存储模块的常驻间隔覆盖；nil 表示跟随全局默认（D25）。
+    var storageIntervalOverride: SamplingInterval? {
+        didSet { persist(storageIntervalOverride?.rawValue ?? 0, Key.storageInterval) }
+    }
+
+    /// 存储模块实际使用的常驻间隔。
+    var storageInterval: SamplingInterval { storageIntervalOverride ?? globalInterval }
+
+    /// 盘温 widget 绑定的盘（默认内置盘，可选任意一块盘或所有盘最高温）。
+    var diskTemperatureTarget: StorageTarget {
+        didSet { persist(diskTemperatureTarget.storageValue, Key.diskTemperatureTarget) }
+    }
+
+    /// 读写 widget 绑定的盘（默认内置盘）。
+    var diskThroughputTarget: StorageTarget {
+        didSet { persist(diskThroughputTarget.storageValue, Key.diskThroughputTarget) }
+    }
+
+    /// 可用空间 widget 绑定的容量组（默认启动卷所在的组）。
+    var diskFreeTarget: StorageTarget {
+        didSet { persist(diskFreeTarget.storageValue, Key.diskFreeTarget) }
+    }
+
+    /// 面板存储 tab 的 SMART 间隔（D55：默认 2 s）。
+    var storageSMARTInterval: Int {
+        didSet { persist(storageSMARTInterval, Key.storageSMARTInterval) }
+    }
+
+    /// 面板磁盘 Top N 的间隔（默认 2 s）。
+    var storageTopNInterval: Int {
+        didSet { persist(storageTopNInterval, Key.storageTopNInterval) }
+    }
+
+    /// 磁盘 Top N 行数（0/3/5/8/10，默认 5）。
+    var storageTopNRows: Int {
+        didSet { persist(storageTopNRows, Key.storageTopNRows) }
+    }
+
+    /// 磁盘 Top N 分组方式（默认按应用，D31）。
+    var storageGrouping: TopNGrouping {
+        didSet { persist(storageGrouping.rawValue, Key.storageGrouping) }
+    }
+
+    /// 单盘详情页读写图的默认跨度。
+    var storageChartSpan: ChartSpan {
+        didSet { persist(storageChartSpan.rawValue, Key.storageChartSpan) }
+    }
+
+    /// 面板里折叠起来的 RAID 组（D54：默认展开，状态记住）。
+    var storageCollapsedRAIDs: Set<String> {
+        didSet { persist(Array(storageCollapsedRAIDs).sorted(), Key.storageCollapsedRAIDs) }
+    }
+
+    /// 是否记录存储历史（默认开）。
+    var historyStorageEnabled: Bool {
+        didSet { persist(historyStorageEnabled, Key.historyStorage) }
+    }
+
     /// 某个模块实际使用的常驻间隔。
     func interval(for module: MenuModule) -> SamplingInterval {
         switch module {
         case .cpu: cpuInterval
         case .power: powerInterval
         case .memory: memoryInterval
+        case .storage: storageInterval
         }
     }
 
@@ -384,6 +461,19 @@ final class AppSettings {
         memoryChartSpan = defaults?.string(forKey: Key.memoryChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
         memoryChartOverlayPressure = defaults?.object(forKey: Key.memoryChartOverlayPressure) as? Bool ?? true
         historyMemoryEnabled = defaults?.object(forKey: Key.historyMemory) as? Bool ?? true
+        storageIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.storageInterval)) }
+        diskTemperatureTarget =
+            defaults?.string(forKey: Key.diskTemperatureTarget).flatMap(StorageTarget.init(storageValue:)) ?? .primary
+        diskThroughputTarget =
+            defaults?.string(forKey: Key.diskThroughputTarget).flatMap(StorageTarget.init(storageValue:)) ?? .primary
+        diskFreeTarget = defaults?.string(forKey: Key.diskFreeTarget).flatMap(StorageTarget.init(storageValue:)) ?? .primary
+        storageSMARTInterval = Self.int(defaults, Key.storageSMARTInterval, choices: Self.panelIntervals) ?? 2
+        storageTopNInterval = Self.int(defaults, Key.storageTopNInterval, choices: Self.panelIntervals) ?? 2
+        storageTopNRows = Self.int(defaults, Key.storageTopNRows, choices: Self.topNRowChoices) ?? 5
+        storageGrouping = defaults?.string(forKey: Key.storageGrouping).flatMap(TopNGrouping.init(rawValue:)) ?? .byApp
+        storageChartSpan = defaults?.string(forKey: Key.storageChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
+        storageCollapsedRAIDs = Set(defaults?.stringArray(forKey: Key.storageCollapsedRAIDs) ?? [])
+        historyStorageEnabled = defaults?.object(forKey: Key.historyStorage) as? Bool ?? true
     }
 
     private static func int(_ defaults: UserDefaults?, _ key: String, in range: ClosedRange<Int>) -> Int? {
@@ -399,6 +489,42 @@ final class AppSettings {
     private func persist(_ value: Any, _ key: String) {
         defaults?.set(value, forKey: key)
         onChange?()
+    }
+}
+
+/// 存储 widget 绑定的对象（存储模块设计 §6.1）。键是本地加盐哈希（D54），不含序列号。
+enum StorageTarget: Hashable {
+    /// 内置盘（盘温、读写）或启动卷所在的容量组（可用空间）。
+    case primary
+    /// 所有盘的最高温（只给盘温）。
+    case hottest
+    /// 一块物理盘。
+    case disk(DiskKey)
+    /// 一个容量组（只给可用空间）。
+    case group(DiskKey)
+
+    var storageValue: String {
+        switch self {
+        case .primary: "primary"
+        case .hottest: "hottest"
+        case .disk(let key): "disk:\(key.rawValue)"
+        case .group(let key): "group:\(key.rawValue)"
+        }
+    }
+
+    init?(storageValue: String) {
+        switch storageValue {
+        case "primary": self = .primary
+        case "hottest": self = .hottest
+        default:
+            let parts = storageValue.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2, let key = DiskKey(validating: parts[1]) else { return nil }
+            switch parts[0] {
+            case "disk": self = .disk(key)
+            case "group": self = .group(key)
+            default: return nil
+            }
+        }
     }
 }
 
@@ -507,6 +633,10 @@ enum MenuWidget: String, CaseIterable, Identifiable {
     case memoryUsage
     case memoryPressure
     case swapUsed
+    // 存储（D54）
+    case diskTemperature
+    case diskThroughput
+    case diskFree
 
     var id: String { rawValue }
 
@@ -515,13 +645,14 @@ enum MenuWidget: String, CaseIterable, Identifiable {
         case .usage, .frequency, .temperature, .power: .cpu
         case .systemPower, .socHotspot, .socPower, .gpuPower, .fan: .power
         case .memoryUsage, .memoryPressure, .swapUsed: .memory
+        case .diskTemperature, .diskThroughput, .diskFree: .storage
         }
     }
 
     static func widgets(of module: MenuModule) -> [MenuWidget] { allCases.filter { $0.module == module } }
 
-    /// 出厂默认是否显示（D51：CPU 占用、整机功率、内存占用）。
-    var visibleByDefault: Bool { self == .usage || self == .systemPower || self == .memoryUsage }
+    /// 出厂默认是否显示（D51：CPU 占用、整机功率、内存占用；D54 加盘温）。
+    var visibleByDefault: Bool { self == .usage || self == .systemPower || self == .memoryUsage || self == .diskTemperature }
 }
 
 /// widget 所属的模块：决定常驻采集间隔、点击后预选的面板 tab、设置页的位置。
@@ -529,6 +660,7 @@ enum MenuModule: String, CaseIterable, Identifiable {
     case cpu
     case power
     case memory
+    case storage
 
     var id: String { rawValue }
 }

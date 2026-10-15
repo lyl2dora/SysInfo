@@ -53,6 +53,11 @@ public final class DiskInventory: Sendable {
     /// 最近一次枚举出的清单（不触发枚举）。
     public var inventory: StorageInventory { state.withLock { $0.snapshot?.inventory ?? .empty } }
 
+    /// registry entry ID → 盘键（IOReport 通道的驱动名里带 registry ID，诊断页据此对应到盘）。
+    public func diskKey(registryID: UInt64) -> DiskKey? {
+        state.withLock { $0.snapshot?.keysByRegistryID[registryID] }
+    }
+
     /// 让下一次取快照时重新枚举（自检、唤醒）。
     public func invalidate() {
         state.withLock { $0.dirty = true }
