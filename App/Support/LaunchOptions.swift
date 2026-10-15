@@ -16,6 +16,8 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
     var panelTab: String?
     /// `--factory-defaults`：不读写持久化的设置，只用出厂默认值（开销测量用，不改动用户的偏好）。
     var factoryDefaults = false
+    /// `--single-instance`：在 Debug 版上也按日用版的单实例规则执行（D48），截图自查与测试用。
+    var singleInstance = false
 
     init(arguments: [String]) {
         openPanel = arguments.contains("--open-panel")
@@ -23,6 +25,7 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
         openSettings = settingsArgument != nil
         settingsPage = settingsArgument?.split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init)
         factoryDefaults = arguments.contains("--factory-defaults")
+        singleInstance = arguments.contains("--single-instance")
         pinPanel = arguments.contains("--pin-panel")
         expandDetails = arguments.contains("--expand-details")
         panelTab = arguments.first { $0.hasPrefix("--panel-tab=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)

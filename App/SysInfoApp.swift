@@ -5,7 +5,8 @@
 // - 引擎事件在 MainActor 上写入 MetricStore（采样本身在引擎的私有串行队列上，D03、D23）；
 // - 设置变化 → 菜单栏 item 显示与否、采样间隔、自动降频开关；
 // - 重新打开 app（applicationShouldHandleReopen）、启动时没有任何启用的 item → 打开设置窗口；
-// - 启动、唤醒时让引擎重新自检（K19）。
+// - 启动、唤醒时让引擎重新自检（K19）；
+// - 单实例（D48）：日用版的第二个实例通知主实例打开设置窗口后退出；Debug 版的从实例不写共享历史库。
 
 import AppKit
 import SysCollectors
@@ -16,6 +17,7 @@ import OSLog
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options = LaunchOptions.current
+    private let instance: SingleInstance
 
     private var settings: AppSettings!
     private var store: MetricStore!
@@ -27,14 +29,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventPump: Task<Void, Never>?
     /// 历史记录器（D30）；打开历史库失败时为 nil，app 照常运行。
     private var history: HistoryRecorder?
+    /// 临时历史库所在目录（`--factory-defaults`、Debug 从实例）；退出时删除。
+    private var temporaryHistoryDirectory: URL?
     private var services: AppServices!
 
     /// 把 SIGTERM（`make stop`、登出、`kill`）转成正常的 `NSApp.terminate`，让 applicationWillTerminate 有机会收尾。
     private var terminateSignalSource: DispatchSourceSignal?
 
+    override init() {
+        let options = LaunchOptions.current
+        instance = SingleInstance(
+            bundleIdentifier: BuildInfo.bundleIdentifier,
+            enforce: BuildInfo.bundleIdentifier == SingleInstance.releaseBundleIdentifier || options.singleInstance)
+        super.init()
+    }
+
     static func main() {
-        let app = NSApplication.shared
         let delegate = AppDelegate()
+        // D48：在创建 NSApplication 之前判定，第二个日用版实例不出现任何菜单栏 item 或窗口。
+        if delegate.instance.shouldExit {
+            Log.app.info("已有实例在运行，请它打开设置窗口后退出")
+            delegate.instance.notifyPrimary()
+            exit(0)
+        }
+        let app = NSApplication.shared
         app.delegate = delegate  // delegate 是弱引用，由下面的 withExtendedLifetime 保活
         withExtendedLifetime(delegate) {
             app.run()
@@ -62,9 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let throttle = ThrottleMonitor(engine: engine, automatic: settings.autoThrottle)
         let power = PowerCollectors(collectors)
+        if instance.role == .secondary {
+            Log.app.info("另一个实例持有单实例锁：本实例作为从实例运行，历史库改用临时目录（D48）")
+        }
+        let temporaryName = options.factoryDefaults ? "factory" : instance.role == .secondary ? "secondary" : nil
+        temporaryHistoryDirectory = temporaryName.map(Self.temporaryHistoryDirectory)
         let history = Self.makeHistory(
             engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first, power: power,
-            factoryDefaults: options.factoryDefaults, settings: settings)
+            temporaryDirectory: temporaryHistoryDirectory, settings: settings)
         self.history = history
         let services = AppServices(collectors: CPUCollectors(collectors), power: power, history: history, engine: engine)
         self.services = services
@@ -97,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.install()
         panel.onOpenSettings = { [weak self] in self?.openSettings() }
         self.settingsWindow = settingsWindow
+
+        instance.onReopenRequest = { [weak self] in self?.openSettings() }
+        instance.startListening()
 
         settings.onChange = { [weak self] in self?.applySettings() }
         applySettings()
@@ -133,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             _ = done.wait(timeout: .now() + 2)
         }
+        if let temporaryHistoryDirectory { try? FileManager.default.removeItem(at: temporaryHistoryDirectory) }
         Log.app.info("即将退出")
     }
 
@@ -181,15 +208,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordEnergy: settings.historyEnergyEnabled)
     }
 
-    /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）。
+    /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）；
+    /// Debug 版的从实例同样用临时目录（`SysInfo-secondary-<pid>`），不与主实例同写一个库（D48）。退出时删除临时目录。
     private static func makeHistory(
-        engine: SamplingEngine, appSampler: AppSampler?, power: PowerCollectors, factoryDefaults: Bool, settings: AppSettings
+        engine: SamplingEngine, appSampler: AppSampler?, power: PowerCollectors, temporaryDirectory: URL?,
+        settings: AppSettings
     ) -> HistoryRecorder? {
         let url: URL?
-        if factoryDefaults {
-            url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("SysInfo-factory-\(getpid())", isDirectory: true)
-                .appendingPathComponent("History.sqlite")
+        if let temporaryDirectory {
+            url = temporaryDirectory.appendingPathComponent("History.sqlite")
         } else {
             url = HistoryStore.defaultURL(bundleIdentifier: BuildInfo.bundleIdentifier)
         }
@@ -205,6 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.app.error("打开历史库失败，本次不记录历史：\(String(describing: error), privacy: .public)")
             return nil
         }
+    }
+
+    private static func temporaryHistoryDirectory(_ name: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("SysInfo-\(name)-\(getpid())", isDirectory: true)
     }
 
     /// K19：记录系统 build 号；与上次运行不同时写日志（启动自检已覆盖复检）。

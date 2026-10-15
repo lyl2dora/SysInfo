@@ -465,3 +465,13 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
   - 模块面板里依赖切换的入口（功耗面板的「按簇查看 CPU 功耗」）去掉，按簇功耗在 CPU 面板里看。
 - 「合并为单个 item」（D06）上线后，合并模式再恢复多模块切换。届时要一并解决各模块高度不一致造成的闪烁（例如取各模块的最大高度、固定高度内滚动，或改高时加过渡），不影响各模块自己的布局；方案到时再定。
 - 启动参数 `--panel-tab=<cpu|power>` 保留，含义改为「面板显示哪个模块」。
+
+## 2026-10-16（内存模块开工前）
+
+### D48 日用版全局单实例 · 已定（2026-10-16 用户按推荐确认 S1 = A、S2 = A；补充 D16）
+- 起因：此前没有任何单实例保护。LaunchServices 只按路径去重，`/Applications` 与 `build/` 下的两份副本、`open -n`、直接执行二进制都能跑出第二个实例；两个实例会同写一个历史库（`sample_minute` 主键冲突、能耗积分重复），菜单栏也会出现两套 widget。
+- 判定：`~/Library/Application Support/<bundle id>/instance.lock` 上的 `flock(LOCK_EX | LOCK_NB)`。跨副本、跨启动方式都有效，进程退出或崩溃时由内核释放；不用 `NSRunningApplication`（同时启动时有竞态）。打不开锁文件时按主实例继续并记日志。
+- 日用版（`zone.lyl.sysinfo`）：第二个实例在创建 `NSApplication` 之前判定，发分布式通知 `<bundle id>.reopen` 请主实例打开设置窗口（等同「重新打开 app」），然后退出，不出现任何菜单栏 item。升级替换旧版本的流程留给 K50 的 `make install`。
+- 其余（`.dev`，含 measure 脚本用的 Release 配置 .dev 构建）：可以多开。拿到锁的是主实例；其余是从实例，照常运行，但历史库改用 `$TMPDIR/SysInfo-secondary-<pid>`，不与主实例同写。主实例退出后从实例不升级。临时历史目录（含 `--factory-defaults` 的）在退出时删除。
+- `--single-instance` 启动参数让 Debug 版按日用版规则执行，用于自查与测试，不必动日用版（D16、D18）。
+- D16「Debug 与 Release 可以同时运行」不变：两者的锁文件在各自的数据目录里。
