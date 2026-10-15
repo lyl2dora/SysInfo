@@ -174,12 +174,13 @@ measure() {
                 my ($a, $b, $sec) = @ARGV;
                 my %x; my %y;
                 %x = $a =~ /"(\w+)":(\d+)/g; %y = $b =~ /"(\w+)":(\d+)/g;
-                my %d = map { $_ => $y{$_} - $x{$_} } keys %y;
+                my %d = map { $_ => $y{$_} - $x{$_} } grep { $_ ne "p0_top_hz" } keys %y;
                 my $el = $sec * 1e9;
                 my ($cpu, $p0, $i, $ip, $c, $cp) = @d{qw(cpu_ns p0_ns instructions p0_instructions cycles p0_cycles)};
                 my $eq = "—"; my $cy = "—";
+                my $top = $y{p0_top_hz} || 0;
                 if ($p0 >= 20e6 && $ip > 0) { $eq = sprintf "%.3f", ($p0 + ($i - $ip) * $p0 / $ip) / $el * 100 }
-                elsif ($cp > 0 && $p0 > 0) { $eq = sprintf "%.3f*", ($p0 + ($c - $cp) * $p0 / $cp) / $el * 100 }
+                elsif ($top > 0) { $eq = sprintf "%.3f*", ($p0 + ($c - $cp) / $top * 1e9) / $el * 100 }
                 if ($cp > 0 && $p0 > 0) { $cy = sprintf "%.3f", ($p0 + ($c - $cp) * $p0 / $cp) / $el * 100 }
                 my $share = $cpu > 0 ? sprintf("%.0f", $p0 / $cpu * 100) : "—";
                 printf "%s %s %s %.1f\n", $eq, $cy, $share, $d{energy_nj} / $sec / 1e6;
@@ -259,6 +260,8 @@ fi
         esac
         echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
     done
+    echo ""
+    echo "考核值按 D40 折算成最快档等效时间；带 * 的是最快档时间太少（< 20 ms），按「周期数 ÷ 最快档顶档频率」折算，偏保守。"
 } >>"${OUTPUT}"
 
 echo "==> 结果已追加到 ${OUTPUT}"

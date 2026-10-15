@@ -364,10 +364,15 @@ struct SysInfoCLI {
         var tb = mach_timebase_info_data_t()
         mach_timebase_info(&tb)
         func ns(_ ticks: UInt64) -> UInt64 { ticks * UInt64(tb.numer) / UInt64(max(tb.denom, 1)) }
+        // 最快档的顶档频率（DVFS 表顶，运行时发现，D20）：最快档时间太少时按周期数折算用（D40）。
+        let topology = CPUTopologyService.shared.refresh()
+        let tops = FrequencyPlan.discover(clusters: topology.clusters, logicalCPUCount: topology.logicalCPUCount).tableTops
+        let fastest = topology.perfLevels.first.map { level in level.clusters.compactMap { tops[$0] }.max() ?? 0 } ?? 0
         print(
             "{\"cpu_ns\":\(ns(r.ri_user_time + r.ri_system_time)),\"p0_ns\":\(ns(r.ri_user_ptime + r.ri_system_ptime)),"
                 + "\"instructions\":\(r.ri_instructions),\"p0_instructions\":\(r.ri_pinstructions),"
-                + "\"cycles\":\(r.ri_cycles),\"p0_cycles\":\(r.ri_pcycles),\"energy_nj\":\(r.ri_energy_nj)}")
+                + "\"cycles\":\(r.ri_cycles),\"p0_cycles\":\(r.ri_pcycles),\"energy_nj\":\(r.ri_energy_nj),"
+                + "\"p0_top_hz\":\(Int(fastest))}")
         return 0
     }
 

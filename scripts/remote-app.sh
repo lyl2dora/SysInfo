@@ -83,9 +83,10 @@ shot)
     ;;
 clean)
     # /tmp 是 /private/tmp 的链接，进程的可执行文件路径是 /private/tmp/…，两种写法都要匹配。
-    exe_pattern="^(/private)?$app/Contents/MacOS/SysInfo( |\$)"
+    # Debug（dd）与测量用的 Release（measure-dd）两种构建都认。
+    exe_pattern="^(/private)?$dir/(dd|measure-dd)/Build/Products/(Debug|Release)/SysInfo.app/Contents/MacOS/SysInfo( |\$)"
     remote "pids=\$(pgrep -f '$exe_pattern' || true); if [ -n \"\$pids\" ]; then echo \"结束 SysInfo Dev：\$(echo \$pids | tr '\\n' ' ')\"; echo \"\$pids\" | xargs kill -TERM; sleep 2; fi; true"
-    remote "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u '$app' 2>/dev/null; true"
+    remote "for a in '$app' '$dir/measure-dd/Build/Products/Release/SysInfo.app'; do /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u \"\$a\" 2>/dev/null; done; true"
     list=""
     for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
     remote "touch $dir/preexisting.txt; for p in $list; do if [ -e \"\$p\" ] && ! grep -qxF \"\$p\" $dir/preexisting.txt; then rm -rf \"\$p\" && echo \"删除 \$p\"; fi; done; true"
