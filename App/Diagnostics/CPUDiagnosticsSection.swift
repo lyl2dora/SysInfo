@@ -271,8 +271,12 @@ struct CPUDiagnosticsSection: View {
     @ViewBuilder
     private func calibrationReport(_ report: CPUDiagnosticsModel.CalibrationReport) -> some View {
         LabeledContent("完成于", value: report.date.formatted(date: .omitted, time: .standard))
-        ForEach(report.clusterKeyCounts, id: \.cluster) { c in
-            LabeledContent(c.cluster, value: String(localized: "温度键 \(c.keys) 个，功耗轨 \(c.rails) 个"))
+        // 各组放进同一行的 VStack 里、用带前缀的标识：同一个 Form 分区里几组 ForEach 都用簇名做 id 时，
+        // SwiftUI 会把它们当成同一批行，画出重复、错位的内容（2026-10-15 自查发现）。
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(report.clusterKeyCounts.map { ("count-" + $0.cluster, $0) }, id: \.0) { _, c in
+                LabeledContent(c.cluster, value: String(localized: "温度键 \(c.keys) 个，功耗轨 \(c.rails) 个"))
+            }
         }
         if let comparison = report.comparison {
             Label(
@@ -280,11 +284,13 @@ struct CPUDiagnosticsSection: View {
                 systemImage: comparison.passed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
             )
             .foregroundStyle(comparison.passed ? .green : .orange)
-            ForEach(comparison.temperatures, id: \.cluster) { t in
-                Self.comparisonLine(String(localized: "\(t.cluster) 温度"), t)
-            }
-            ForEach(comparison.rails, id: \.cluster) { r in
-                Self.comparisonLine(String(localized: "\(r.cluster) 功耗轨"), r)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(comparison.temperatures.map { ("temp-" + $0.cluster, $0) }, id: \.0) { _, t in
+                    Self.comparisonLine(String(localized: "\(t.cluster) 温度"), t)
+                }
+                ForEach(comparison.rails.map { ("rail-" + $0.cluster, $0) }, id: \.0) { _, r in
+                    Self.comparisonLine(String(localized: "\(r.cluster) 功耗轨"), r)
+                }
             }
             if !comparison.missingSentinels.isEmpty {
                 Text("占位值：缺 \(comparison.missingSentinels.map { String($0) }.joined(separator: " "))")
