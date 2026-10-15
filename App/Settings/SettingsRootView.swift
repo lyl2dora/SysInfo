@@ -40,17 +40,21 @@ private struct SettingsSplitView: View {
         }
     }
 
+    private func openPage(_ page: SettingsPage) {
+        context.state.selection = page
+    }
+
     @ViewBuilder
     private func detail(for page: SettingsPage) -> some View {
         switch page {
         case .general:
             GeneralSettingsView(settings: context.settings)
         case .menuBar:
-            MenuBarSettingsView(settings: context.settings, store: context.store)
+            MenuBarSettingsView(settings: context.settings, store: context.store, openPage: openPage)
         case .cpu:
-            CPUSettingsView(settings: context.settings, store: context.store)
+            CPUSettingsView(settings: context.settings, store: context.store, openPage: openPage)
         case .history:
-            HistorySettingsView(settings: context.settings, history: context.services.history)
+            HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
             PrivacySettingsView()
         case .diagnostics:
@@ -93,30 +97,59 @@ private struct GeneralSettingsView: View {
     }
 }
 
+/// 菜单栏页（D41）：只放与具体指标无关的容器级设置——全局排版与小标签、已开启 widget 的只读总览、溢出区提示。
+/// 各 widget 的开关与配置在所属模块页。
 private struct MenuBarSettingsView: View {
     @Bindable var settings: AppSettings
     let store: MetricStore
+    let openPage: (SettingsPage) -> Void
 
     var body: some View {
         Form {
             Section {
-                ForEach(CPUMenuWidget.allCases) { widget in
-                    Toggle(isOn: Binding(get: { settings.isVisible(widget) }, set: { settings.setVisible(widget, $0) })) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(Self.title(widget))
-                            if let note = note(widget) {
-                                Text(note).font(.caption).foregroundStyle(.secondary)
-                            }
+                Picker("排版", selection: $settings.menuBarLayout) {
+                    Text("上下（标签在上）").tag(MenuBarLayout.stacked)
+                    Text("左右").tag(MenuBarLayout.inline)
+                }
+                Toggle("显示小标签", isOn: $settings.menuBarShowsLabel)
+            } header: {
+                Text("外观")
+            } footer: {
+                Text("对所有模块的 widget 统一生效。折线、柱状等图形固定按上下排版绘制。")
+            }
+
+            Section {
+                let widgets = settings.visibleCPUWidgets
+                if widgets.isEmpty {
+                    Text("还没有开启任何菜单栏项目。").foregroundStyle(.secondary)
+                } else {
+                    ForEach(widgets) { widget in
+                        let configuration = CPUStatusItemConfiguration(widget: widget, settings: settings)
+                        LabeledContent {
+                            StatusItemPreview(store: store, configuration: configuration)
+                        } label: {
+                            Text(CPUWidgetInfo.title(widget))
+                            Text("CPU · \(Self.points(CPUStatusItemView.fixedWidth(for: configuration)))")
                         }
                     }
+                    LabeledContent(
+                        "合计宽度",
+                        value: Self.points(
+                            widgets.map { CPUStatusItemView.fixedWidth(for: CPUStatusItemConfiguration(widget: $0, settings: settings)) }
+                                .reduce(0, +)))
                 }
             } header: {
-                Text("CPU")
+                Text("已开启的项目")
             } footer: {
-                Text("每个菜单栏项目只显示一项。想同时看占用和温度，就把两项都打开；各项可以按住 ⌘ 单独拖动位置。样式与着色在「CPU」页设置。")
+                HStack(spacing: 4) {
+                    Text("各项目的开关和配置在所属模块页。")
+                    Button("CPU") { openPage(.cpu) }
+                        .buttonStyle(.link)
+                }
             }
+
             Section {
-                Text("菜单栏项目较多时，部分项目可能被系统收进溢出区。可以到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
+                Text("每个菜单栏项目只显示一项，可以按住 ⌘ 单独拖动位置。项目较多时，部分项目可能被系统收进溢出区；可以到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -124,28 +157,8 @@ private struct MenuBarSettingsView: View {
         .formStyle(.grouped)
     }
 
-    static func title(_ widget: CPUMenuWidget) -> String {
-        switch widget {
-        case .usage: String(localized: "CPU 占用")
-        case .frequency: String(localized: "CPU 频率")
-        case .temperature: String(localized: "CPU 温度")
-        case .power: String(localized: "CPU 功耗")
-        }
-    }
-
-    /// 开销说明（D19）：按菜单栏采集间隔换算。
-    private func note(_ widget: CPUMenuWidget) -> String? {
-        let interval = settings.cpuInterval.rawValue
-        switch widget {
-        case .usage:
-            return nil
-        case .frequency:
-            return String(localized: "最忙的簇的实际频率。高开销：\(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: interval, store: store))")
-        case .temperature:
-            return String(localized: "CPU 最高温。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
-        case .power:
-            return String(localized: "CPU 各簇功耗之和，不含 GPU；没有专用功耗轨的芯片显示「—」。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
-        }
+    private static func points(_ width: CGFloat) -> String {
+        String(localized: "\(Int(width.rounded())) pt")
     }
 }
 

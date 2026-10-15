@@ -1,8 +1,12 @@
-// 设置的 CPU 页（CPU 模块设计 §7.3，D19、D29、D32）。
+// 设置的 CPU 页（CPU 模块设计 §7.3，D19、D29、D32、D41）。
 //
+// 按 D41 的模块页结构分节：
+// - 菜单栏：四个 widget 的开关；打开后就地展开该 widget 的配置（呈现形式、着色、开销、预览）。
+//   排版与小标签是全局设置，在「菜单栏」页；
+// - 阈值：始终显示（P2 的提醒复用）；
 // - 采集：模块间隔覆盖；面板内频率、温度与功耗、Top N 的间隔（1/2/5 s），旁边标注开销；
-// - 菜单栏：样式、「CPU」标签、着色与阈值，带实时预览（用真实的 item view 渲染）；
-// - 面板：图表默认跨度、用户/系统拆分、Top N 行数与分组。
+// - 面板：图表默认跨度、用户/系统拆分、Top N 行数与分组；
+// - 历史：是否记录 CPU 与每应用历史、后台高精度历史。
 // 开销标注（D19）：优先用诊断数据里本机实测的单次 CPU 耗时换算；还没有实测时用参考值并注明出处。
 
 import AppKit
@@ -13,11 +17,40 @@ import SysModel
 struct CPUSettingsView: View {
     @Bindable var settings: AppSettings
     let store: MetricStore
+    let openPage: (SettingsPage) -> Void
 
     var body: some View {
         Form {
+            Section {
+                ForEach(CPUMenuWidget.allCases) { widget in
+                    widgetRow(widget)
+                }
+            } header: {
+                Text("菜单栏")
+            } footer: {
+                HStack(spacing: 4) {
+                    Text("排版和小标签对所有模块统一生效。")
+                    Button("在「菜单栏」页设置") { openPage(.menuBar) }
+                        .buttonStyle(.link)
+                }
+                .font(.callout)
+            }
+
+            Section {
+                Stepper(value: $settings.menuBarCPUWarningPercent, in: 50...99) {
+                    LabeledContent("橙色阈值", value: "\(settings.menuBarCPUWarningPercent)%")
+                }
+                Stepper(value: $settings.menuBarCPUCriticalPercent, in: settings.menuBarCPUWarningPercent...100) {
+                    LabeledContent("红色阈值", value: "\(settings.menuBarCPUCriticalPercent)%")
+                }
+            } header: {
+                Text("阈值")
+            } footer: {
+                Text("总占用平滑后持续 10 秒达到阈值才算越界，回落时留 5 个百分点。占用 widget 的着色使用这组阈值，以后的提醒也会使用。")
+            }
+
             Section("采集") {
-                Picker("菜单栏采集间隔", selection: $settings.cpuIntervalOverride) {
+                Picker("常驻采集间隔", selection: $settings.cpuIntervalOverride) {
                     Text("跟随默认（\(DisplayNames.interval(settings.globalInterval))）")
                         .tag(SamplingInterval?.none)
                     ForEach(SamplingInterval.allCases) { interval in
@@ -30,47 +63,9 @@ struct CPUSettingsView: View {
                     String(localized: "面板：温度与功耗"), $settings.panelSensorInterval, collector: SensorCollector.collectorID)
                 intervalPicker(
                     String(localized: "面板：Top N"), $settings.panelTopNInterval, collector: AppSampler.collectorID)
-                Text("面板内的采样只在 CPU 页可见时进行，占用固定每秒一次。开销按本机实测的单次耗时换算，按单核计。")
+                Text("常驻采集间隔决定菜单栏 widget 的刷新。面板内的采样只在 CPU 页可见时进行，占用固定每秒一次。开销按本机实测的单次耗时换算，按单核计。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("高开销选项") {
-                Toggle(isOn: $settings.historyHighPrecision) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("后台高精度历史")
-                        Text(
-                            "频率、温度与功耗在后台每 5 秒采一次（默认 60 秒 / 10 秒）。频率 \(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: 5, store: store))；温度与功耗 \(CostLabel.text(collector: SensorCollector.collectorID, interval: 5, store: store))。"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-                .disabled(!settings.historyCPUEnabled)
-            }
-
-            Section("菜单栏") {
-                Picker("占用的样式", selection: $settings.menuBarCPUStyle) {
-                    ForEach(MenuBarCPUStyle.allCases) { style in
-                        Text(Self.styleName(style)).tag(style)
-                    }
-                }
-                Toggle("显示小标签（CPU、FREQ、TEMP、PWR）", isOn: $settings.menuBarCPULabel)
-                Toggle("占用高时着色", isOn: $settings.menuBarCPUColoring)
-                if settings.menuBarCPUColoring {
-                    Stepper(value: $settings.menuBarCPUWarningPercent, in: 50...99) {
-                        LabeledContent("橙色阈值", value: "\(settings.menuBarCPUWarningPercent)%")
-                    }
-                    Stepper(value: $settings.menuBarCPUCriticalPercent, in: settings.menuBarCPUWarningPercent...100) {
-                        LabeledContent("红色阈值", value: "\(settings.menuBarCPUCriticalPercent)%")
-                    }
-                    Text("总占用平滑后持续 10 秒达到阈值才变色，回落时留 5 个百分点。温度和热状态不参与着色。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                LabeledContent("预览") {
-                    StatusItemPreview(store: store, configuration: previewConfiguration)
-                }
             }
 
             Section("面板") {
@@ -90,22 +85,68 @@ struct CPUSettingsView: View {
                     Text("按进程").tag(TopNGrouping.byProcess)
                 }
             }
+
+            Section {
+                Toggle("记录 CPU 历史", isOn: $settings.historyCPUEnabled)
+                Toggle("记录每应用 CPU", isOn: $settings.historyAppsEnabled)
+                Toggle(isOn: $settings.historyHighPrecision) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("后台高精度历史")
+                        Text(
+                            "频率、温度与功耗在后台每 5 秒采一次（默认 60 秒 / 10 秒）。频率 \(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: 5, store: store))；温度与功耗 \(CostLabel.text(collector: SensorCollector.collectorID, interval: 5, store: store))。"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!settings.historyCPUEnabled)
+            } header: {
+                Text("历史")
+            } footer: {
+                HStack(spacing: 4) {
+                    Text("面板关闭时也在后台低频采样（占用、频率每 60 秒，温度与每应用每 10 秒）。")
+                    Button("历史库与导出") { openPage(.history) }
+                        .buttonStyle(.link)
+                }
+                .font(.callout)
+            }
         }
         .formStyle(.grouped)
     }
 
-    private var previewConfiguration: CPUStatusItemConfiguration {
-        let topology = CPUTopologyService.shared.current
-        return CPUStatusItemConfiguration(
-            style: settings.menuBarCPUStyle, showsLabel: settings.menuBarCPULabel, coloring: settings.menuBarCPUColoring,
-            levelCount: max(topology?.perfLevels.count ?? 2, 1),
-            coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8)
+    /// 一个 widget：开关与说明；打开后展开它自己的配置与预览（D41）。
+    @ViewBuilder
+    private func widgetRow(_ widget: CPUMenuWidget) -> some View {
+        let visible = settings.isVisible(widget)
+        Toggle(isOn: Binding(get: { settings.isVisible(widget) }, set: { settings.setVisible(widget, $0) })) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(CPUWidgetInfo.title(widget))
+                if let note = CPUWidgetInfo.note(widget, settings: settings, store: store) {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        if visible {
+            Group {
+                if widget == .usage {
+                    Picker("呈现形式", selection: $settings.cpuUsagePresentation) {
+                        ForEach(CPUUsagePresentation.allCases) { presentation in
+                            Text(Self.presentationName(presentation)).tag(presentation)
+                        }
+                    }
+                    Toggle("占用高时着色", isOn: $settings.menuBarCPUColoring)
+                }
+                LabeledContent("预览") {
+                    StatusItemPreview(store: store, configuration: CPUStatusItemConfiguration(widget: widget, settings: settings))
+                }
+            }
+            .padding(.leading, 16)
+        }
     }
 
-    static func styleName(_ style: MenuBarCPUStyle) -> String {
-        switch style {
-        case .stacked: String(localized: "上下（标签在上）")
-        case .inline: String(localized: "左右")
+    static func presentationName(_ presentation: CPUUsagePresentation) -> String {
+        switch presentation {
+        case .number: String(localized: "数字")
         case .sparkline: String(localized: "迷你折线")
         case .barsTotal: String(localized: "柱：总量")
         case .barsLevels: String(localized: "柱：按档")
@@ -118,6 +159,33 @@ struct CPUSettingsView: View {
             ForEach(AppSettings.panelIntervals, id: \.self) { seconds in
                 Text("\(seconds) 秒  \(CostLabel.text(collector: collector, interval: seconds, store: store))").tag(seconds)
             }
+        }
+    }
+}
+
+/// CPU widget 的名称与说明，CPU 页与菜单栏总览共用。
+enum CPUWidgetInfo {
+    static func title(_ widget: CPUMenuWidget) -> String {
+        switch widget {
+        case .usage: String(localized: "CPU 占用")
+        case .frequency: String(localized: "CPU 频率")
+        case .temperature: String(localized: "CPU 温度")
+        case .power: String(localized: "CPU 功耗")
+        }
+    }
+
+    /// 开销说明（D19）：按常驻采集间隔换算。
+    static func note(_ widget: CPUMenuWidget, settings: AppSettings, store: MetricStore) -> String? {
+        let interval = settings.cpuInterval.rawValue
+        switch widget {
+        case .usage:
+            return nil
+        case .frequency:
+            return String(localized: "最忙的簇的实际频率。高开销：\(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: interval, store: store))")
+        case .temperature:
+            return String(localized: "CPU 最高温。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
+        case .power:
+            return String(localized: "CPU 各簇功耗之和，不含 GPU；没有专用功耗轨的芯片显示「—」。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
         }
     }
 }
@@ -146,7 +214,7 @@ enum CostLabel {
 }
 
 /// 设置页的菜单栏预览：用真实的 item view 渲染。
-private struct StatusItemPreview: NSViewRepresentable {
+struct StatusItemPreview: NSViewRepresentable {
     let store: MetricStore
     let configuration: CPUStatusItemConfiguration
 

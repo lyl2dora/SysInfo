@@ -161,14 +161,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
         store.colorThresholds = settings.cpuColorThresholds
-        let topology = CPUTopologyService.shared.current
         statusItems.update(
-            settings.visibleCPUWidgets.map { widget in
-                CPUStatusItemConfiguration(
-                    widget: widget, style: settings.menuBarCPUStyle, showsLabel: settings.menuBarCPULabel,
-                    coloring: settings.menuBarCPUColoring, levelCount: max(topology?.perfLevels.count ?? 2, 1),
-                    coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8)
-            }, interval: settings.cpuInterval)
+            settings.visibleCPUWidgets.map { CPUStatusItemConfiguration(widget: $0, settings: settings) },
+            interval: settings.cpuInterval)
         throttle.automatic = settings.autoThrottle
         let configuration = HistoryRecorder.Configuration(
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
