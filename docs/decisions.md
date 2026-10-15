@@ -314,3 +314,12 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 ### D34 D19 参考开销更正 · 已定（修订 D19 的「参考开销」一句）
 - D19 引用的 IOReport 开销（每次 4.2–8.25 ms）是紧循环里测的。真实节奏指按 1 s 或更长周期醒来后的第一次调用，CPU 频率订阅在这种情况下每次的开销是：M5 约 9.5 ms，M4 约 8.5 ms，即 1 Hz 约 0.85–0.95% 单核，5 s 约 0.17–0.19%。提高 QoS 也降不下来。
 - 建订阅的成本几乎全在 `IOReportCopyChannelsInGroup`：首次约 62–64 ms，之后每次约 28–31 ms。所以通道字典全 app 只枚举一次、共享使用（D29 的 IOReport hub）。
+
+### D35 私有符号改为运行时 dlsym 解析 · 已定（2026-10-15 用户确认；修订 D23 中「统一 C 头文件 + 弱链接」的「弱链接」一词）
+- 私有函数一律在运行时用 `dlopen` / `dlsym` 解析，每组用 `pthread_once` 只解析一次，不在链接期依赖私有库：
+  - IOReport：`dlopen("/usr/lib/libIOReport.dylib")`；
+  - coalition：`dlsym(RTLD_DEFAULT, …)`。
+- 理由：弱链接仍要在链接期依赖私有库，Xcode 与 `swift build` 都得加非标准的链接参数；dlsym 不需要任何链接设置。符号缺失时，对应的 `csp_*_available()` 返回 0，app 照常启动，上层回退或显示不可用。这与 D05、D23 的原意一致。
+- D23 的其余部分不变：私有声明集中在 `CSysPrivate` 一份头文件里，对上按数据源封装。头文件只暴露 `csp_*` 封装函数，不暴露私有符号本身。
+- 「不写 SMC」（D18）由私有层的命令白名单保证：读写共用 selector 2，私有层只定义三个读命令，调用前检查命令字节，并有单测覆盖。
+- 详见 `docs/design/cpu-module.md` 偏离记录 2026-10-15 条。
