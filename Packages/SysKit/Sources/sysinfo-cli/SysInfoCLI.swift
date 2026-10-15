@@ -75,6 +75,10 @@ struct SysInfoCLI {
             case "topo":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runTopo(json: options.flag("--json")))
+            case "rusage":
+                let options = try Options(arguments, flags: [], values: ["--pid"])
+                guard let raw = options.value("--pid"), let pid = Int32(raw) else { throw UsageError("rusage 需要 --pid") }
+                exit(runRusage(pid: pid))
             case "cores":
                 let options = try Options(arguments, flags: [], values: ["--interval", "--count"])
                 exit(
@@ -131,6 +135,7 @@ struct SysInfoCLI {
               verify passive [--seconds 30] [--yes]   经调度器跑拓扑与频率的被动核对；--yes 在本进程内施加负载
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
+              rusage --pid PID                        打印进程的 rusage_info_v6 按档计数（一行 JSON，开销测量按 D40 折算用）
               cores [--interval 2] [--count 3]       逐核频率（诊断用），以及每核 tick 忙碌与逐核通道活跃的相关系数（要求 ≥0.99）
               irq [--interval 5] [--count 2] [--rows 10]
                                                       中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
@@ -346,6 +351,24 @@ struct SysInfoCLI {
         while nanosleep(&request, &remaining) != 0, errno == EINTR {
             request = remaining
         }
+    }
+
+    // MARK: - rusage
+
+    /// 进程的按档计数（D40）：时间换算成纳秒；只对同 uid 的进程可读。
+    static func runRusage(pid: pid_t) -> Int32 {
+        guard let r = ProcessInfoReader.rusage(of: pid) else {
+            printError("读不到 pid \(pid) 的 rusage")
+            return 1
+        }
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        func ns(_ ticks: UInt64) -> UInt64 { ticks * UInt64(tb.numer) / UInt64(max(tb.denom, 1)) }
+        print(
+            "{\"cpu_ns\":\(ns(r.ri_user_time + r.ri_system_time)),\"p0_ns\":\(ns(r.ri_user_ptime + r.ri_system_ptime)),"
+                + "\"instructions\":\(r.ri_instructions),\"p0_instructions\":\(r.ri_pinstructions),"
+                + "\"cycles\":\(r.ri_cycles),\"p0_cycles\":\(r.ri_pcycles),\"energy_nj\":\(r.ri_energy_nj)}")
+        return 0
     }
 
     // MARK: - cores

@@ -6,7 +6,8 @@
 #   1. 出厂默认配置：1 个 CPU 占用 item，面板关闭，历史记录开启（--factory-defaults 时历史库在临时目录）；
 #   2. 面板打开：CPU tab 可见（含 Top N 5 行），固定为浮窗（--open-panel --pin-panel），测量期间点别处也不会关；
 #   3. 面板打开且「详情」「中断来源」展开（再加 --expand-details），面板内最重的一档。
-# 每档先预热 WARMUP 秒，再测 DURATION 秒。app 的 CPU 占用用 `ps -o time=` 的差值算（按单核的比例）；
+# 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D40：用 sysinfo-cli rusage 读 app 的按档计数，把其他档的指令
+# 折算成最快档的等效时间（按单核的比例）；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
 #
 # 操作边界（D18、D16）：
@@ -87,6 +88,12 @@ xcodebuild -project SysInfo.xcodeproj -scheme SysInfo -configuration Release \
     ${sign_args[@]+"${sign_args[@]}"} build -quiet
 [ -x "${exe}" ] || { echo "构建产物不存在：${exe}" >&2; exit 1; }
 
+# D40：读进程的按档计数（rusage_info_v6），把其他档的指令折算成最快档的等效时间。
+echo "==> 构建 sysinfo-cli（读按档计数用）"
+swift build -c release --package-path Packages/SysKit --product sysinfo-cli >/dev/null
+cli="Packages/SysKit/.build/release/sysinfo-cli"
+[ -x "${cli}" ] || { echo "sysinfo-cli 构建失败" >&2; exit 1; }
+
 # ---------------------------------------------------------------- 测量
 
 app_pid=""
@@ -143,22 +150,41 @@ measure() {
         echo "==> [baseline] 不运行 SysInfo" >&2
     fi
 
-    local t0 a0="" m0 w0 t1 a1="" m1 w1
+    local t0 a0="" m0 w0 t1 a1="" m1 w1 r0="" r1=""
     t0="$(now)"
     [ -n "${app_pid}" ] && a0="$(cpu_seconds "${app_pid}")"
+    [ -n "${app_pid}" ] && r0="$("${cli}" rusage --pid "${app_pid}" 2>/dev/null || true)"
     m0="$(cpu_seconds "${mba_pid}")"
     w0="$(cpu_seconds "${ws_pid}")"
     echo "    测量 ${DURATION}s …" >&2
     nap "${DURATION}"
     t1="$(now)"
     [ -n "${app_pid}" ] && a1="$(cpu_seconds "${app_pid}")"
+    [ -n "${app_pid}" ] && r1="$("${cli}" rusage --pid "${app_pid}" 2>/dev/null || true)"
     m1="$(cpu_seconds "${mba_pid}")"
     w1="$(cpu_seconds "${ws_pid}")"
 
-    local elapsed app_pct="—" footprint="—"
+    local elapsed app_pct="—" footprint="—" equiv="—" cyc="—" p0share="—" mw="—"
     elapsed="$(perl -e 'printf "%.3f", $ARGV[1] - $ARGV[0]' "${t0}" "${t1}")"
     if [ -n "${app_pid}" ]; then
         app_pct="$(percent "${a0}" "${a1}" "${elapsed}")"
+        if [ -n "${r0}" ] && [ -n "${r1}" ]; then
+            # 输出：等效最快档 %、按周期折算 %、最快档时间占比 %、能耗 mW（D40）
+            read -r equiv cyc p0share mw < <(perl -e '
+                my ($a, $b, $sec) = @ARGV;
+                my %x; my %y;
+                %x = $a =~ /"(\w+)":(\d+)/g; %y = $b =~ /"(\w+)":(\d+)/g;
+                my %d = map { $_ => $y{$_} - $x{$_} } keys %y;
+                my $el = $sec * 1e9;
+                my ($cpu, $p0, $i, $ip, $c, $cp) = @d{qw(cpu_ns p0_ns instructions p0_instructions cycles p0_cycles)};
+                my $eq = "—"; my $cy = "—";
+                if ($p0 >= 20e6 && $ip > 0) { $eq = sprintf "%.3f", ($p0 + ($i - $ip) * $p0 / $ip) / $el * 100 }
+                elsif ($cp > 0 && $p0 > 0) { $eq = sprintf "%.3f*", ($p0 + ($c - $cp) * $p0 / $cp) / $el * 100 }
+                if ($cp > 0 && $p0 > 0) { $cy = sprintf "%.3f", ($p0 + ($c - $cp) * $p0 / $cp) / $el * 100 }
+                my $share = $cpu > 0 ? sprintf("%.0f", $p0 / $cpu * 100) : "—";
+                printf "%s %s %s %.1f\n", $eq, $cy, $share, $d{energy_nj} / $sec / 1e6;
+            ' "${r0}" "${r1}" "${elapsed}")
+        fi
         footprint="$(/usr/bin/footprint -p "${app_pid}" 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1)"
         [ -n "${footprint}" ] || footprint="?"
         # 面板档：测量期间面板若被关闭（有人点了关闭按钮），这一档作废。
@@ -174,8 +200,8 @@ measure() {
     local mba_pct ws_pct
     mba_pct="$(percent "${m0}" "${m1}" "${elapsed}")"
     ws_pct="$(percent "${w0}" "${w1}" "${elapsed}")"
-    echo "    app ${app_pct}%  MenuBarAgent ${mba_pct}%  WindowServer ${ws_pct}%  footprint ${footprint} ${note}" >&2
-    results+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s' "${label}" "${app_pct}" "${mba_pct}" "${ws_pct}" "${footprint}" "${note}")")
+    echo "    app ${app_pct}%（等效最快档 ${equiv}%，按周期 ${cyc}%，最快档占比 ${p0share}%，${mw} mW）  MenuBarAgent ${mba_pct}%  WindowServer ${ws_pct}%  footprint ${footprint} ${note}" >&2
+    results+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "${label}" "${app_pct}" "${equiv}" "${cyc}" "${p0share}" "${mw}" "${mba_pct}" "${ws_pct}" "${footprint}" "${note}")")
 }
 
 echo "测量期间尽量不要操作鼠标和键盘（会抬高 WindowServer 等软指标）。面板档固定为浮窗，点别处不会关闭。" >&2
@@ -220,10 +246,10 @@ fi
     echo "- 机器：${model}，${chip}，${ncpu} 个逻辑核，macOS ${os}"
     echo "- 预热 ${WARMUP} s，每档测量 ${DURATION} s"
     echo ""
-    echo "| 档位 | app CPU（单核 %） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
-    echo "|---|---|---|---|---|---|"
+    echo "| 档位 | app 等效最快档（单核 %，D40 考核值） | app 原始 CPU（单核 %） | 按周期折算（%） | 最快档时间占比 | app 能耗（mW） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
+    echo "|---|---|---|---|---|---|---|---|---|---|"
     for row in "${results[@]}"; do
-        IFS=$'\t' read -r label app_pct mba_pct ws_pct footprint note <<<"${row}"
+        IFS=$'\t' read -r label app_pct equiv cyc p0share mw mba_pct ws_pct footprint note <<<"${row}"
         case "${label}" in
             baseline) name="基线（不运行 SysInfo）" ;;
             default) name="出厂默认（1 个 CPU 占用 item，面板关闭，历史开启）" ;;
@@ -231,7 +257,7 @@ fi
             details) name="面板打开 + 详情与中断来源展开" ;;
             *) name="${label}" ;;
         esac
-        echo "| ${name} | ${app_pct} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
+        echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
     done
 } >>"${OUTPUT}"
 
