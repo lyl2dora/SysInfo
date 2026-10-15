@@ -6,3 +6,7 @@
 - 版本库里只有源码（`.swift/.c/.m/.h/.py/.sh`、探针 app 的 `Info.plist`、`.entitlements`），另有 `sdk-swiftui/` 下两份 `.md` 发布说明副本。其他网页和文档快照（`web-release-notes/`、`verify-web-release-notes/` 等目录下的 `.txt/.json`）只保存在本地。二进制文件、原始日志和大体积 dump 都没有保留。
 - **文本输出（`.txt/.csv/.json`）和数据 dump（ioreg/diskutil 导出的 `.plist`）里含本机标识**，如磁盘序列号、卷 UUID、MAC、IP、设备名。这些文件已在 `.gitignore` 中排除，只保存在本地。
 - 编译示例：`xcrun swiftc -O x.swift -o x`；IOReport 相关的加 `-lIOReport`；C 探针用 `xcrun clang -framework IOKit -framework CoreFoundation`。
+
+## power-thermal/（2026-10-15，功耗与散热模块边界补测）
+- 在 M5 Pro 与 M4 Pro（macOS 27.0.1）上同时跑：`build.sh <outdir>` 编译，`orchestrate.sh <dir> <tag>` 等到 PMGR 批次边界后在 30 分钟窗口里跑负载（`ROUND=2` 为第二轮），`analyze.py` / `analyze_r2.py` / `tele.py` 分析，`costbench.c` 测真实节奏开销。
+- 结论见 `docs/design/power-thermal-boundary.md`。原始记录与输出（`out/`）按 `.gitignore` 只留在本地。

@@ -17,6 +17,8 @@ xcuserdata/
 research/probes/**/*.txt
 research/probes/**/*.csv
 research/probes/**/*.json
+research/probes/**/*.log
+research/probes/**/*.gz
 # Data dumps (ioreg/diskutil plists) also carry UUIDs; keep probe app Info.plist only
 research/probes/**/*.plist
 !research/probes/**/Info.plist
