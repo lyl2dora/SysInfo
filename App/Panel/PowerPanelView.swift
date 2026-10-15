@@ -76,6 +76,7 @@ struct PMGRBatchCard: View {
     @State private var batch: PMGRBatch?
     @State private var railWatts: Double?
     @State private var now = Date()
+    @Environment(\.panelLayoutChanged) private var layoutChanged
 
     /// 显示顺序与合并：归一化名 → 显示名。不认识的通道（例如 AFR、MSR）放在最后，原样显示。
     static let rows: [(title: String, components: [String])] = [
@@ -127,6 +128,9 @@ struct PMGRBatchCard: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+        // 批次异步读到后行数会变：请面板重新量高度。
+        .onChange(of: batch) { layoutChanged() }
+        .onChange(of: railWatts) { layoutChanged() }
     }
 
     private var railText: String? {
@@ -178,6 +182,7 @@ struct EnergyCard: View {
     let enabled: Bool
 
     @State private var rows: [(title: String, summary: EnergySummary)] = []
+    @Environment(\.panelLayoutChanged) private var layoutChanged
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -228,6 +233,8 @@ struct EnergyCard: View {
             let end = to == now ? now : to.addingTimeInterval(-1)
             if let summary = try? await history.energySummary(from: from, to: end) { out.append((title, summary)) }
         }
+        let shapeChanged = out.count != rows.count || out.contains { $0.1.filled > 0 } != rows.contains { $0.summary.filled > 0 }
         rows = out
+        if shapeChanged { layoutChanged() }
     }
 }
