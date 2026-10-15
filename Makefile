@@ -40,7 +40,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean release measure strings install notarize clean check-private-imports test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -52,6 +52,8 @@ help:
 	@echo "  cli         构建并运行 sysinfo-cli，ARGS 为子命令与选项"
 	@echo "  remote-cli  在对照机（$(REMOTE_HOST)）上构建并运行 sysinfo-cli（只写远端 $(REMOTE_DIR)）"
 	@echo "  remote-test 在对照机上运行 SysKit 单元测试，包括硬件测试（只写远端 $(REMOTE_DIR)）"
+	@echo "  remote-app-build / remote-app-run / remote-app-shot / remote-app-clean"
+	@echo "              在对照机上构建、启动、截图、清场 Debug 版 app（D39；run 的 ARGS 传给 app，shot 用 OUT= 与 POS=）"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
@@ -100,6 +102,19 @@ remote-cli: remote-sync
 # 在远端跑单元测试，包括硬件测试（D25：每个模块验收要附两台机器的结果）。
 remote-test: test-scripts remote-sync
 	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && $(REMOTE_ENV) SYSINFO_HW_TESTS=1 swift test $(REMOTE_SWIFTPM)'
+
+# D39：对照机上的截图自查。启动总是带 --factory-defaults；用完 remote-app-clean 清场。
+remote-app-build: check-private-imports
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh build
+
+remote-app-run:
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh run $(ARGS)
+
+remote-app-shot:
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh shot "$(OUT)" $(POS)
+
+remote-app-clean:
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh clean
 
 measure:
 	@if [ ! -x scripts/measure-overhead.sh ]; then \

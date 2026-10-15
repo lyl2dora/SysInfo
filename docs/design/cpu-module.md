@@ -568,3 +568,18 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
   - 占用 widget 的 autosaveName 沿用 `<bundle id>.cpu`，保住用户拖好的位置；其余为 `<bundle id>.cpu.<项>`。
   - 点击任一 widget 都打开同一个面板，锚在被点击的 widget 下方（`StatusItemController.activeItem`）。
   - 实测：四个 widget 一起显示正常；点击 TEMP 后，面板锚在它下方，Esc 可以关闭，修饰键无残留。
+- **2026-10-15 · 两台截图自查（D39）**
+  - 新增 `scripts/remote-app.sh` 与 `make remote-app-build / -run / -shot / -clean`：
+    - 在 M4 上用 xcodebuild 构建 Debug 版，产物与 DerivedData 都放在 `/tmp/sysinfo-remote`；
+    - 远端用 ad-hoc 签名：远端改了 HOME，钥匙串里的 Developer ID 证书用不了，也不该去碰；
+    - 启动时总是带 `--factory-defaults`，并把 TMPDIR 指向 `/tmp/sysinfo-remote/tmp`；
+    - 截图用 `scripts/window-shot.swift`：取 SysInfo Dev 最大的窗口（面板在 popUpMenu 层级），需要时用辅助功能接口滚动。
+  - 清场：
+    - 结束 app，按可执行文件路径匹配，`/tmp` 与 `/private/tmp` 两种写法都认；
+    - `lsregister -u` 取消登记；
+    - 只删除启动前不存在的痕迹：状态栏 item 的位置会写进偏好 plist，`--factory-defaults` 也拦不住。
+    - 实测清场后 M4 家目录里没有 `zone.lyl.sysinfo.dev` 的任何文件，LaunchServices 里也没有登记。
+  - M4 截图结论：
+    - 面板：两个 P 簇共用温度键，温度只显示在「性能核 ×10」的组标题里，簇行留空（D37）；能效核没有温度行（D33）；功耗按簇显示。
+    - 诊断页：三种档次依据一致；档案为内置的 M4 Pro。
+  - 本机（M5 Pro）：面板、四个菜单栏 widget、设置的 CPU 页、诊断页都截图核对过。
