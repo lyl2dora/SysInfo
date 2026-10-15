@@ -3,6 +3,7 @@
 // - selftest：运行所有采集器的自检并打印结果；
 // - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用、用户/系统、每档、每簇和每核占用；
 // - topo：打印拓扑发现的结果和三种档次依据（CPU 模块设计 §8）；
+// - freq、verify freq：每簇频率，以及按档与内核计数对照（Freq.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
 // 输出里只有机型标识（如 Mac17,16）和系统 build 号，不含序列号等设备唯一标识。
@@ -31,6 +32,18 @@ struct SysInfoCLI {
                 let interval = try options.double("--interval", default: 1, range: 0.1...3600)
                 let count = try options.int("--count", default: 5, range: 1...1_000_000)
                 exit(runCPU(interval: interval, count: count, json: options.flag("--json")))
+            case "freq":
+                let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count"])
+                let interval = try options.double("--interval", default: 5, range: 0.1...3600)
+                let count = try options.int("--count", default: 3, range: 1...1_000_000)
+                exit(runFreq(interval: interval, count: count, json: options.flag("--json")))
+            case "verify":
+                guard let what = arguments.first else { throw UsageError("verify 需要指定对象：freq") }
+                let options = try Options(Array(arguments.dropFirst()), flags: ["--yes"], values: [])
+                switch what {
+                case "freq": exit(runVerifyFreq(confirmed: options.flag("--yes")))
+                default: throw UsageError("未知的 verify 对象：\(what)")
+                }
             case "topo":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runTopo(json: options.flag("--json")))
@@ -61,6 +74,10 @@ struct SysInfoCLI {
               cpu [--interval 1] [--count 5] [--json] 直接用采集器逐次打印总占用、用户/系统、每档、每簇和每核占用
                                                       （--json 为每行一个 JSON）
               topo [--json]                           打印 CPU 拓扑：簇、核档、三种档次依据及其是否一致
+              freq [--interval 5] [--count 3] [--json]
+                                                      逐次打印每簇实际频率（另附请求频率作对照）
+              verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
+                                                      不带 --yes 只打印将要做什么
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，
                                                       检查 tick 计数不再增长、定时器已停
               version                                 打印版本信息

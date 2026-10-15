@@ -4,6 +4,7 @@
 import Darwin
 import Dispatch
 import Synchronization
+import SysModel
 import Testing
 @testable import SysCollectors
 
@@ -68,6 +69,23 @@ struct PrivateLayerHardwareTests {
         #expect(all.count == 80)
         #expect(Set(all).count == 1 && all[0] > 0)
         #expect(hub.enumerationCount == 1)
+    }
+
+    // MARK: 频率采集器
+
+    @Test func frequencyCollectorSelfTestsAndReportsEveryCluster() throws {
+        let topology = CPUTopologyService.shared.refresh()
+        let collector = CPUFrequencyCollector()
+        let result = collector.selfTest()
+        #expect(result.isUsable, "\(result.checks.filter { !$0.passed })")
+        #expect(collector.sample(at: .now()).samples.isEmpty, "第一次只建立基线")
+        usleep(300_000)
+        let output = collector.sample(at: .now())
+        let ids = Set(output.samples.compactMap(\.id.cpuFrequencyClusterKey))
+        #expect(ids == Set(topology.clusters.map(\.key)))
+        for sample in output.samples {
+            if let hz = sample.value { #expect((300e6...10e9).contains(hz)) }
+        }
     }
 
     // MARK: SMC

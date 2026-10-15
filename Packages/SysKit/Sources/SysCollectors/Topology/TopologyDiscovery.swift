@@ -99,8 +99,19 @@ public final class CPUTopologyService: Sendable {
     private let state = Mutex(State())
     private let read: @Sendable () -> TopologyInputs
 
-    init(read: @escaping @Sendable () -> TopologyInputs = { TopologyReader.readInputs() }) {
+    init(read: @escaping @Sendable () -> TopologyInputs = { CPUTopologyService.readWithFrequencyEvidence() }) {
         self.read = read
+    }
+
+    /// 读取输入，并补上频率依据：先按设备树分簇，再为每簇找 DVFS 表顶（频率发现不需要 perflevel，只需要簇）。
+    static func readWithFrequencyEvidence() -> TopologyInputs {
+        var inputs = TopologyReader.readInputs()
+        let preliminary = TopologyResolver.resolve(inputs)
+        guard !preliminary.clusters.isEmpty else { return inputs }
+        let tops = FrequencyPlan.discover(clusters: preliminary.clusters, logicalCPUCount: preliminary.logicalCPUCount)
+            .tableTops
+        if tops.count == preliminary.clusters.count { inputs.tableTopByCluster = tops }
+        return inputs
     }
 
     /// 最近一次发现的拓扑；还没发现过时为 nil。

@@ -41,8 +41,9 @@ public struct CollectorOutput: Sendable, Hashable {
 
 /// 各处共用的采集器清单：app 交给引擎，sysinfo-cli selftest 逐个自检。
 public enum StandardCollectors: Sendable {
-    /// M0 的全部采集器：CPU 负载（`cpu.load`）与本进程开销（`app.self`）。每次调用返回新实例。
+    /// 全部采集器：CPU 负载（`cpu.load`）、CPU 频率（`cpu.freq`）与本进程开销（`app.self`）。每次调用返回新实例。
+    /// `cpu.load` 排在 `cpu.freq` 前面：前者的自检会刷新拓扑，后者按拓扑建采样方案。
     public static func make() -> [any Collector] {
-        [CPULoadCollector(), SelfUsageCollector()]
+        [CPULoadCollector(), CPUFrequencyCollector(), SelfUsageCollector()]
     }
 }

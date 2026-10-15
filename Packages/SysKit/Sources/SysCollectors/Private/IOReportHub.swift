@@ -37,6 +37,8 @@ public struct IOReportChannelInfo: Hashable, Sendable {
     public var driverName: String?
     public var unitLabel: String?
     /// 状态类通道的状态名（例如 `DOWN`、`IDLE`、`V0P18`）；计数类通道为空。
+    /// 注意：`IOReportCopyChannelsInGroup` 的枚举结果里没有状态名（2026-10-15 实测为空），
+    /// 需要状态名时用 `IOReportHub.stateNames(inGroup:where:)` 从一次样本里取。
     public var stateNames: [String]
 }
 
@@ -112,6 +114,18 @@ public final class IOReportHub: Sendable {
         }
         guard let merged, let handle = csp_ior_subscription_create(merged) else { return nil }
         return IOReportSubscription(handle: handle)
+    }
+
+    /// 从一次样本里读状态类通道的状态名（枚举结果里没有）。建一个临时订阅，只采一次。
+    public func stateNames(inGroup group: String, where include: (IOReportChannelInfo) -> Bool)
+        -> [IOReportChannelKey: [String]]?
+    {
+        let subscription = withoutActuallyEscaping(include) { include in
+            makeSubscription(selecting: [(group: group, include: include)])
+        }
+        guard let subscription, let snapshot = subscription.snapshot()
+        else { return nil }
+        return Dictionary(snapshot.map { ($0.key, $0.stateNames) }, uniquingKeysWith: { a, _ in a })
     }
 
     // MARK: - 私有
@@ -208,6 +222,12 @@ public final class IOReportSubscription {
         previous = nil
     }
 
+    /// 取一次样本，返回各通道的累计值（不做差分，也不改动基线）。读取失败时返回 nil。
+    public func snapshot() -> [IOReportChannelDelta]? {
+        guard let current = csp_ior_subscription_sample(handle) else { return nil }
+        return Self.values(of: current)
+    }
+
     /// 取一次样本，并返回与上一次样本之间的增量；第一次调用（或 `resetBaseline()` 之后）只建立基线，返回空数组。
     /// 读取失败时返回 nil，并保留原基线。
     public func sampleDelta() -> [IOReportChannelDelta]? {
@@ -215,7 +235,11 @@ public final class IOReportSubscription {
         defer { previous = current }
         guard let previous else { return [] }
         guard let delta = csp_ior_samples_delta(previous, current) else { return nil }
-        return IOReportHub.channelArray(delta).map { channel in
+        return Self.values(of: delta)
+    }
+
+    private static func values(of sample: CFDictionary) -> [IOReportChannelDelta] {
+        IOReportHub.channelArray(sample).map { channel in
             let count = csp_ior_state_count(channel)
             if count > 0 {
                 return IOReportChannelDelta(

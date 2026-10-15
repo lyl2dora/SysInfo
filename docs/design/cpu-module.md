@@ -411,3 +411,18 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
     - M5 Pro：3 簇（d0c0、d0c1 为 Performance，d0c2 为 Super）；
     - M4 Pro：3 簇（d0c0 为 Efficiency，d0c1、d0c2 为 Performance）。
     - 两台都是核数与 L2 两种依据成立且一致，状态 ok。
+- **2026-10-15 · §5.4 IOReport 枚举结果里没有状态名**
+  - 实测：`IOReportCopyChannelsInGroup` 返回的通道字典里，`IOReportStateGetCount` 为 0，状态名要从一次样本里取（探针当初也是从样本里读的）。
+  - 做法：`IOReportHub.stateNames(inGroup:where:)` 建一个临时订阅、采一次快照（`IOReportSubscription.snapshot()`），只在建采样方案时调用一次。`IOReportChannelInfo.stateNames` 的文档已注明枚举结果里它为空。
+- **2026-10-15 · §5.4 频率采集器的落地细节与两台实测**
+  - 订阅只包含方案里用到的簇通道（实际 + 请求），不订阅逐核通道；逐核频率留给诊断页按需订阅（第 7 步）。
+  - 活跃驻留占比低于 0.2% 判为空闲，输出 `unavailable(clusterIdle)`。
+  - 拓扑的 generation 变了而采样方案还没重建时，频率输出不可用；引擎连续收到不可用后会触发复检。
+  - 主动核对：自旋 50 ms，线程 ≥90% 的时间停在同一簇才下结论，最多试 3 次；3 次都跨簇时记为「不确定」，不算失败。
+  - 被动判据推迟到第 5 步，届时用 coalition 全量求和的按档 cycles 核对，并做「每核 tick 忙碌与逐核通道活跃的相关系数 ≥0.99」检查。
+  - 拓扑的频率依据已接入：两台的 `topo` 现在三种依据都成立且一致。
+  - `sysinfo-cli verify freq`（每段 3 s，共约 14 s 负载，Stats 均未运行）：
+    - M5 Pro：各档实际通道误差 ≤0.4%；请求通道在 Super 多核时 +8.78%。
+    - M4 Pro：各档实际通道误差 ≤0.02%；请求通道在 P 簇多核时 +17.13%。
+    - 结论与边界稿 §2.2、§9.1 一致。
+  - 真实节奏开销（`freq --interval 5`，每次采样的线程 CPU 时间）：M5 8.2–8.7 ms，M4 8.6–8.8 ms，5 s 一次约 0.17% 单核。

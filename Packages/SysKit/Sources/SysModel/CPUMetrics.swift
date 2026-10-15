@@ -32,4 +32,17 @@ extension MetricID {
         else { return nil }
         return index
     }
+
+    private static let clusterFrequencyPrefix = "cpu.freq.cluster."
+
+    /// 一个簇的实际频率，Hz（按活跃驻留加权）。簇空闲时为不可用（clusterIdle）。
+    public static func cpuFrequencyCluster(_ key: ClusterKey) -> MetricID {
+        MetricID(clusterFrequencyPrefix + key.description)
+    }
+
+    /// 若是每簇频率，返回簇键。
+    public var cpuFrequencyClusterKey: ClusterKey? {
+        guard rawValue.hasPrefix(Self.clusterFrequencyPrefix) else { return nil }
+        return ClusterKey(string: String(rawValue.dropFirst(Self.clusterFrequencyPrefix.count)))
+    }
 }

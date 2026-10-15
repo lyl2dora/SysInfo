@@ -133,6 +133,16 @@ public enum ProcessPrivateInfo {
         public var userTimeTicks: UInt64
         public var systemTimeTicks: UInt64
         public var energyNanojoules: UInt64
+
+        public init(
+            instructions: UInt64, cycles: UInt64, userTimeTicks: UInt64, systemTimeTicks: UInt64, energyNanojoules: UInt64
+        ) {
+            self.instructions = instructions
+            self.cycles = cycles
+            self.userTimeTicks = userTimeTicks
+            self.systemTimeTicks = systemTimeTicks
+            self.energyNanojoules = energyNanojoules
+        }
     }
 
     /// 本进程线程 `threadID`（`pthread_threadid_np`）按 perflevel 拆分的计数，下标即 perflevel。

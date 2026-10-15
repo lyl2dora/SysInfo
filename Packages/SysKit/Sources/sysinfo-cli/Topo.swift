@@ -12,7 +12,7 @@ extension SysInfoCLI {
 
     /// 退出码：拓扑判定成立（quality == ok）为 0，否则为 1。
     static func runTopo(json: Bool) -> Int32 {
-        let topology = TopologyResolver.resolve(TopologyReader.readInputs())
+        let topology = CPUTopologyService.shared.refresh()
         if json {
             let report = TopoReport(machine: .current, topology: topology)
             print(String(decoding: (try? makeEncoder().encode(report)) ?? Data(), as: UTF8.self))
