@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventPump: Task<Void, Never>?
     /// 历史记录器（D30）；打开历史库失败时为 nil，app 照常运行。
     private var history: HistoryRecorder?
+    private var services: CPUServices!
 
     /// 把 SIGTERM（`make stop`、登出、`kill`）转成正常的 `NSApp.terminate`，让 applicationWillTerminate 有机会收尾。
     private var terminateSignalSource: DispatchSourceSignal?
@@ -53,11 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.store = store
         self.engine = engine
 
-        eventPump = Task {
-            for await event in await engine.events() {
-                store.apply(event)
-            }
-        }
         Task { [weak self] in
             await engine.runSelfTests()  // K19：启动时自检
             self?.applySettings()  // 自检刷新了拓扑：按档柱的个数随之确定
@@ -69,6 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first,
             factoryDefaults: options.factoryDefaults, settings: settings)
         self.history = history
+        let services = CPUServices(collectors: CPUCollectors(collectors), history: history)
+        self.services = services
+        eventPump = Task {
+            for await event in await engine.events() {
+                store.apply(event)
+                services.handle(event)
+            }
+        }
         throttle.onWake = {
             Task { await engine.runSelfTests() }  // K19：唤醒时复检
             Task { await history?.noteWake() }
@@ -78,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.throttle = throttle
 
-        let panel = PanelController(store: store, engine: engine)
+        let panel = PanelController(store: store, engine: engine, services: services, settings: settings)
         let statusItems = StatusItemController(store: store, engine: engine)
         statusItems.expandedInterfaceDelegate = panel
         statusItems.onUserRemoved = { [weak settings] in settings?.cpuItemVisible = false }
@@ -165,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let configuration = HistoryRecorder.Configuration(
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled)
         Task { [history] in await history?.setConfiguration(configuration) }
+        panel?.updateDemands()
     }
 
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）。

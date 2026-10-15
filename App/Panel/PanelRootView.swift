@@ -7,6 +7,8 @@ struct PanelRootView: View {
     let store: MetricStore
     @Bindable var state: PanelState
     let actions: PanelActions
+    let services: CPUServices
+    let settings: AppSettings
 
     var body: some View {
         VStack(spacing: 12) {
@@ -22,7 +24,7 @@ struct PanelRootView: View {
 
             switch state.selectedTab {
             case .cpu:
-                CPUPanelView(store: store)
+                CPUPanelView(store: store, services: services, settings: settings)
             }
         }
         .padding(14)
