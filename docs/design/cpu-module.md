@@ -390,3 +390,11 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
 ## 12. 偏离记录
 
 （实现过程中偏离本文的地方记在这里：日期、内容、原因。）
+
+- **2026-10-15 · §3 私有符号改为运行时 dlsym 解析，不做链接期弱链接**
+  - 原文写的是「`__attribute__((weak_import))` 弱链接」（沿用 D23 / K12 的说法）。实现中，IOReport 用 `dlopen("/usr/lib/libIOReport.dylib")` + `dlsym`，coalition 用 `dlsym(RTLD_DEFAULT, …)`，都在第一次使用时用 `pthread_once` 解析一次。
+  - 原因：弱链接仍然要在链接期依赖 `libIOReport`（SwiftPM 需要 `-weak-lIOReport` 这类 unsafeFlags，Xcode 和 `swift build` 两边都得配）；dlsym 不需要任何链接设置，符号缺失时同样只让对应的 `csp_*_available()` 返回 0，效果与 D23 的意图一致：app 照常启动，上层回退或显示不可用。
+  - 对上只暴露 `csp_*` 封装函数，私有符号本身不出现在头文件里。SMC 的读写共用 selector 2，所以「不写 SMC」靠命令白名单保证：私有层只定义三个读命令，`smc_call` 在调用前检查命令字节，单测遍历 0–255 核对只有 5、8、9 被放行。
+  - coalition 的「写出字节数」探测（自检 S3）拆成单独的 `csp_coal_resource_usage_probe`，常规采样只调用一次 `csp_coal_resource_usage`。
+- **2026-10-15 · §9 硬件测试：`*_IDLE` 通道不是完整的时间积分**
+  - M4 Pro 实测 `PCPM_IDLE`（状态里是 `NON_IDLE` 而不是 `IDLE`）的驻留增量 / 墙钟只有 0.48，而标准性能状态通道是 1.00。驻留积分的硬件测试只检查带 `IDLE` 状态的通道；频率发现按 §5.4 的结构规则本来就排除这类通道。
