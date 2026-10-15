@@ -272,7 +272,12 @@ public actor HistoryRecorder {
     @discardableResult
     public func export(_ options: HistoryExportOptions, to destination: URL) throws -> [URL] {
         flush()
-        try store.checkpoint()
+        // 合并 WAL 只是让主文件更完整；失败（例如有读事务未结束）不影响从同一连接读出的导出内容。
+        do {
+            try store.checkpoint()
+        } catch {
+            logger.notice("导出前合并 WAL 失败，照常导出：\(String(describing: error), privacy: .public)")
+        }
         return try HistoryExporter.export(store, options: options, to: destination)
     }
 }

@@ -167,4 +167,13 @@ import SysModel
         #expect(lines[1].contains("\"metric\":\"cpu.usage.total\""))
         #expect(!lines[1].contains("\"max\""))
     }
+
+    @Test func checkpointWorksAfterStatsOnDisk() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sysstore-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try HistoryStore(url: dir.appendingPathComponent("History.sqlite"))
+        try store.write(rows: [row(1, avg: 0.5, max: 0.5)], apps: [])
+        _ = try store.stats()  // 读页数等 PRAGMA
+        try store.checkpoint()  // 不能因为上面留着的读语句报 SQLITE_LOCKED
+    }
 }

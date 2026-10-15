@@ -88,9 +88,8 @@ final class SQLiteDatabase {
 
     /// 读一个整数 PRAGMA（例如 `user_version`）。
     func pragmaInt(_ name: String) throws(SQLiteError) -> Int64 {
-        let s = try statement("PRAGMA \(name)")
-        guard try s.step() else { return 0 }
-        return s.int(0)
+        // 读完就复位：留着一条没走完的读语句，之后的 wal_checkpoint(TRUNCATE) 会报 SQLITE_LOCKED（2026-10-15 自查发现）。
+        try statement("PRAGMA \(name)").query { $0.int(0) }.first ?? 0
     }
 
     var lastInsertRowID: Int64 { sqlite3_last_insert_rowid(handle) }
