@@ -2,12 +2,14 @@
 //
 // 数据源：`host_processor_info(PROCESSOR_CPU_LOAD_INFO)`，读每核 tick 并差分；总占用取所有核之和。
 // 不用 `HOST_CPU_LOAD_INFO`：它受全系统节流，其他监控 app 在跑时会拿到无标记的缓存值（调研报告 §0-7）。
-// M0 只输出总占用和每核占用，不做 perflevel 或簇的映射（那是 CPU 模块的能力边界）。
+// CPU 模块（设计 §5.3）在同一次读数上另外输出用户/系统、每簇、每档的占用；簇和档来自 `CPUTopologyService`，
+// 拓扑降级时只出能确定的那一层（clustersOnly 不出每档，coresOnly 两者都不出）。
 //
 // 自检（K19，D24 修订：按通道逐项判定）：
 // - 必需：能读到、返回的布局是「核数 × CPU_STATE_MAX」。不通过时整个数据源不可用；
-// - 提示：核数与 `hw.logicalcpu_max` 一致、每个核的计数器非零、两次读数单调不减。不通过时照常出数，
+// - 提示：核数与 `hw.logicalcpu_max` 一致、每个核的计数器非零、两次读数单调不减、拓扑判定成立。不通过时照常出数，
 //   状态降为 degraded；有问题的核在采样时由差分逐个标为不可用（回退或没有前进），总占用标为估算。
+//   自检同时刷新拓扑（启动、唤醒、build 变化即重新发现，K19）。
 
 import Darwin
 import Synchronization
@@ -41,14 +43,27 @@ public final class CPULoadCollector: Collector {
 
     private let readTicks: TickReader
     private let maxLogicalCPUCount: @Sendable () -> Int?
+    /// 当前拓扑（采样时读）；nil 表示还没发现，只出整机和每核。
+    private let topology: @Sendable () -> CPUTopology?
+    /// 重新发现拓扑（自检时调用）；nil 表示不做拓扑（测试）。
+    private let refreshTopology: (@Sendable () -> CPUTopology)?
 
     public convenience init() {
-        self.init(readTicks: { CPULoadCollector.readTicks() }, maxLogicalCPUCount: { SystemInfo.maxLogicalCPUCount })
+        let service = CPUTopologyService.shared
+        self.init(
+            readTicks: { CPULoadCollector.readTicks() }, maxLogicalCPUCount: { SystemInfo.maxLogicalCPUCount },
+            topology: { service.current }, refreshTopology: { service.refresh() })
     }
 
-    init(readTicks: @escaping TickReader, maxLogicalCPUCount: @escaping @Sendable () -> Int?) {
+    init(
+        readTicks: @escaping TickReader, maxLogicalCPUCount: @escaping @Sendable () -> Int?,
+        topology: @escaping @Sendable () -> CPUTopology? = { nil },
+        refreshTopology: (@Sendable () -> CPUTopology)? = nil
+    ) {
         self.readTicks = readTicks
         self.maxLogicalCPUCount = maxLogicalCPUCount
+        self.topology = topology
+        self.refreshTopology = refreshTopology
     }
 
     // MARK: - Collector
@@ -100,6 +115,14 @@ public final class CPULoadCollector: Collector {
             }
         }
 
+        if let refreshTopology {
+            let topology = refreshTopology()
+            checks.append(
+                SelfTestCheck(
+                    name: "cpu.topology", passed: topology.quality.isOK, detail: Self.describe(topology),
+                    severity: .advisory))
+        }
+
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
         state.withLock {
             // 从不可用恢复：不可用期间没有更新基线，旧基线不可用
@@ -149,7 +172,9 @@ public final class CPULoadCollector: Collector {
                 case .usage(let usage):
                     state.baseline = ticks
                     state.consecutiveStale = 0
-                    let samples = Self.samples(for: usage, state: &state, at: time)
+                    let samples =
+                        Self.samples(for: usage, state: &state, at: time)
+                        + Self.aggregateSamples(for: usage, topology: topology(), at: time)
                     return output(samples, usage.droppedCores > 0 ? .degraded : .ok, state)
                 }
             }
@@ -249,6 +274,51 @@ public final class CPULoadCollector: Collector {
             }
         }
         return samples
+    }
+
+    /// 用户/系统、每簇、每档的汇总样本。拓扑核数与本次读数不符时不出簇和档。
+    static func aggregateSamples(for usage: CPUUsage, topology: CPUTopology?, at time: SampleTime) -> [Sample] {
+        var samples: [Sample] = []
+        let allCores = 0..<usage.perCoreTicks.count
+        if let all = usage.aggregate(cores: allCores) {
+            let quality: DataQuality = all.partial ? .estimated : .measured
+            samples.append(Sample(id: .cpuUsageUser, value: all.user, quality: quality, time: time))
+            samples.append(Sample(id: .cpuUsageSystem, value: all.system, quality: quality, time: time))
+        } else {
+            samples.append(.unavailable(.cpuUsageUser, reason: .counterReset("all cores dropped"), at: time))
+            samples.append(.unavailable(.cpuUsageSystem, reason: .counterReset("all cores dropped"), at: time))
+        }
+
+        guard let topology, topology.logicalCPUCount == usage.perCoreTicks.count else { return samples }
+        func append(_ id: MetricID, _ cores: [Int]) {
+            if let group = usage.aggregate(cores: cores) {
+                samples.append(Sample(id: id, value: group.busy, quality: group.partial ? .estimated : .measured, time: time))
+            } else {
+                samples.append(.unavailable(id, reason: .counterReset("all cores in group dropped"), at: time))
+            }
+        }
+        for cluster in topology.clusters {
+            append(.cpuUsageCluster(cluster.key), cluster.cpus)
+        }
+        if topology.quality.isOK {
+            for level in topology.perfLevels {
+                let cores = topology.clusters.filter { $0.perfLevel == level.index }.flatMap(\.cpus)
+                append(.cpuUsagePerfLevel(level.index), cores)
+            }
+        }
+        return samples
+    }
+
+    /// 拓扑的一行说明（自检详情、诊断页）。不含设备唯一标识。
+    static func describe(_ topology: CPUTopology) -> String {
+        let quality: String
+        switch topology.quality {
+        case .ok: quality = "ok"
+        case .clustersOnly(let reason): quality = "clustersOnly(\(reason))"
+        case .coresOnly(let reason): quality = "coresOnly(\(reason))"
+        }
+        let levels = topology.perfLevels.map { "\($0.index):\($0.name)×\($0.cpuCount)" }.joined(separator: " ")
+        return "\(topology.logicalCPUCount) CPU, \(topology.clusters.count) clusters, levels [\(levels)], \(quality)"
     }
 
     /// 总占用和每核（核数已知时）全部标为不可用。

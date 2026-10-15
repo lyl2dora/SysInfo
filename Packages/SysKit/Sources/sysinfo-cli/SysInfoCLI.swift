@@ -1,7 +1,8 @@
 // sysinfo-cli：跨机对照用的命令行（M0 设计 §7，D25）。
 //
 // - selftest：运行所有采集器的自检并打印结果；
-// - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用和每核占用；
+// - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用、用户/系统、每档、每簇和每核占用；
+// - topo：打印拓扑发现的结果和三种档次依据（CPU 模块设计 §8）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
 // 输出里只有机型标识（如 Mac17,16）和系统 build 号，不含序列号等设备唯一标识。
@@ -30,6 +31,9 @@ struct SysInfoCLI {
                 let interval = try options.double("--interval", default: 1, range: 0.1...3600)
                 let count = try options.int("--count", default: 5, range: 1...1_000_000)
                 exit(runCPU(interval: interval, count: count, json: options.flag("--json")))
+            case "topo":
+                let options = try Options(arguments, flags: ["--json"], values: [])
+                exit(runTopo(json: options.flag("--json")))
             case "engine":
                 let options = try Options(arguments, flags: [], values: ["--demand", "--idle"])
                 let demand = try options.double("--demand", default: 3, range: 1...600)
@@ -54,7 +58,9 @@ struct SysInfoCLI {
 
             子命令：
               selftest [--json]                       运行所有采集器的自检并打印结果；全部通过时退出码为 0
-              cpu [--interval 1] [--count 5] [--json] 直接用采集器逐次打印总占用和每核占用（--json 为每行一个 JSON）
+              cpu [--interval 1] [--count 5] [--json] 直接用采集器逐次打印总占用、用户/系统、每档、每簇和每核占用
+                                                      （--json 为每行一个 JSON）
+              topo [--json]                           打印 CPU 拓扑：簇、核档、三种档次依据及其是否一致
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，
                                                       检查 tick 计数不再增长、定时器已停
               version                                 打印版本信息
@@ -154,6 +160,12 @@ struct SysInfoCLI {
         var totalQuality: String
         /// 每核占用 0…1，顺序与 host_processor_info 一致；不可用的核为 null。
         var cores: [Double?]
+        var user: Double?
+        var system: Double?
+        /// 每档占用，键为档序号；拓扑降级时为空。
+        var perfLevels: [String: Double?]
+        /// 每簇占用，键为簇键（如 d0c1）。
+        var clusters: [String: Double?]
     }
 
     static func runCPU(interval: Double, count: Int, json: Bool) -> Int32 {
@@ -202,10 +214,20 @@ struct SysInfoCLI {
 
     static func cpuRecord(from output: CollectorOutput, index: Int, time: SampleTime, interval: Double) -> CPURecord? {
         guard let total = output.samples.first(where: { $0.id == .cpuUsageTotal }) else { return nil }
-        let cores = output.samples.filter { $0.id != .cpuUsageTotal }.map(\.value)
+        let cores = output.samples.compactMap { s in s.id.cpuCoreIndex.map { ($0, s.value) } }
+            .sorted { $0.0 < $1.0 }.map(\.1)
+        var levels: [String: Double?] = [:]
+        var clusters: [String: Double?] = [:]
+        for sample in output.samples {
+            if let level = sample.id.cpuUsagePerfLevelIndex { levels[String(level)] = sample.value }
+            if let key = sample.id.cpuUsageClusterKey { clusters[key.description] = sample.value }
+        }
         return CPURecord(
             index: index, time: time.wallClock, intervalSeconds: interval, total: total.value,
-            totalQuality: qualityName(total.quality), cores: cores)
+            totalQuality: qualityName(total.quality), cores: cores,
+            user: output.samples.first { $0.id == .cpuUsageUser }?.value,
+            system: output.samples.first { $0.id == .cpuUsageSystem }?.value,
+            perfLevels: levels, clusters: clusters)
     }
 
     static func textLine(_ record: CPURecord) -> String {
@@ -215,7 +237,14 @@ struct SysInfoCLI {
             "\(index):\(value.map { PercentFormat.string(fromRatio: $0) } ?? "—")"
         }
         let clock = record.time.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute().second())
-        return "#\(record.index) \(clock)  总占用 \(total)\(quality)  每核 \(cores.joined(separator: " "))"
+        func pct(_ value: Double??) -> String {
+            (value ?? nil).map { PercentFormat.string(fromRatio: $0) } ?? "—"
+        }
+        let split = "用户 \(pct(record.user)) 系统 \(pct(record.system))"
+        let levels = record.perfLevels.keys.sorted().map { "档\($0):\(pct(record.perfLevels[$0]))" }
+        let clusters = record.clusters.keys.sorted().map { "\($0):\(pct(record.clusters[$0]))" }
+        return "#\(record.index) \(clock)  总占用 \(total)\(quality)  \(split)  \(levels.joined(separator: " "))  "
+            + "簇 \(clusters.joined(separator: " "))  每核 \(cores.joined(separator: " "))"
     }
 
     static func qualityName(_ quality: DataQuality) -> String {

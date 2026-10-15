@@ -4,6 +4,12 @@
 //   这一步很贵（首次约 62 ms，之后每次 28–31 ms，M5 与 M4 实测），而订阅本身只要 0.1–0.3 ms；
 // - 订阅按「组 + 通道筛选」建立；同一驱动的多个组合并进一个订阅时，开销约等于其中最贵的一组；
 // - 样本差分后转成 Swift 值类型，采集器不接触 CF 对象和私有符号。
+//
+// 线程安全（2026-10-15 实测）：`IOReportChannelGetChannelName` 等访问器会往通道字典里写缓存
+// （崩溃栈为 `-[__NSDictionaryM __setObject:forKey:]`），所以「只读」访问也不能并发。
+// - 缓存的组字典只在 `cache` 的锁里访问，通道信息只算一次、缓存成值类型；
+// - 建订阅时对组字典做深拷贝，每个订阅独占自己的 CF 对象，与缓存和其他订阅互不共享；
+// - 订阅本身由单个采集器独占（见 `IOReportSubscription`）。
 
 import CoreFoundation
 import Synchronization
@@ -49,9 +55,14 @@ public struct IOReportChannelDelta: Hashable, Sendable {
 public final class IOReportHub: Sendable {
     public static let shared = IOReportHub()
 
-    /// 每个组的通道字典（CF 对象只在本类内部使用，外部拿到的都是值类型）。
+    /// 一个组的枚举结果：CF 字典只在锁内使用，通道信息与 `IOReportChannels` 数组下标一一对应。
+    private struct GroupEntry {
+        var dictionary: CFMutableDictionary
+        var infos: [IOReportChannelInfo]
+    }
+
     private struct Cache: ~Copyable {
-        var channelsByGroup: [String: CFMutableDictionary] = [:]
+        var groups: [String: GroupEntry] = [:]
         var enumerationCount = 0
     }
 
@@ -67,8 +78,8 @@ public final class IOReportHub: Sendable {
 
     /// 某个组的全部通道信息。第一次调用时枚举并缓存；不可用时返回 nil。
     public func channels(inGroup group: String) -> [IOReportChannelInfo]? {
-        guard let dict = groupDictionary(group) else { return nil }
-        return Self.channelArray(dict).map(Self.info(of:))
+        guard isAvailable else { return nil }
+        return cache.withLock { Self.entry(group, in: &$0)?.infos }
     }
 
     /// 建立订阅：从每个组里挑出满足条件的通道，合并进一个订阅。
@@ -78,12 +89,21 @@ public final class IOReportHub: Sendable {
     public func makeSubscription(
         selecting selections: [(group: String, include: (IOReportChannelInfo) -> Bool)]
     ) -> IOReportSubscription? {
+        guard isAvailable else { return nil }
         var merged: CFMutableDictionary?
         for selection in selections {
-            guard let source = groupDictionary(selection.group) else { continue }
-            let picked = Self.channelArray(source).filter { selection.include(Self.info(of: $0)) }
+            // 在锁内深拷贝组字典；之后的筛选、合并、订阅都只碰这份拷贝。
+            guard let (copy, infos) = cache.withLock({ cache -> (CFMutableDictionary, [IOReportChannelInfo])? in
+                guard let entry = Self.entry(selection.group, in: &cache),
+                    let copy = Self.deepCopy(entry.dictionary)
+                else { return nil }
+                return (copy, entry.infos)
+            }) else { continue }
+            let channels = Self.channelArray(copy)
+            guard channels.count == infos.count else { continue }
+            let picked = zip(channels, infos).filter { selection.include($0.1) }.map(\.0)
             guard !picked.isEmpty else { continue }
-            let filtered = Self.dictionary(source, replacingChannelsWith: picked)
+            let filtered = Self.dictionary(copy, replacingChannelsWith: picked)
             if let merged {
                 csp_ior_merge_channels(merged, filtered)
             } else {
@@ -96,15 +116,23 @@ public final class IOReportHub: Sendable {
 
     // MARK: - 私有
 
-    private func groupDictionary(_ group: String) -> CFMutableDictionary? {
-        guard isAvailable else { return nil }
-        return cache.withLock { cache in
-            if let hit = cache.channelsByGroup[group] { return hit }
-            guard let dict = csp_ior_copy_channels_in_group(group as CFString, nil) else { return nil }
-            cache.enumerationCount += 1
-            cache.channelsByGroup[group] = dict
-            return dict
-        }
+    /// 取缓存的组；没有就枚举一次。只能在 `cache` 的锁内调用。
+    private static func entry(_ group: String, in cache: inout Cache) -> GroupEntry? {
+        if let hit = cache.groups[group] { return hit }
+        guard let dict = csp_ior_copy_channels_in_group(group as CFString, nil) else { return nil }
+        cache.enumerationCount += 1
+        let entry = GroupEntry(dictionary: dict, infos: channelArray(dict).map(info(of:)))
+        cache.groups[group] = entry
+        return entry
+    }
+
+    /// 深拷贝（容器全部可变）。通道字典里只有属性列表类型；拷贝失败时返回 nil，不退回浅拷贝。
+    private static func deepCopy(_ dict: CFDictionary) -> CFMutableDictionary? {
+        guard let copy = CFPropertyListCreateDeepCopy(
+            kCFAllocatorDefault, dict, CFOptionFlags(CFPropertyListMutabilityOptions.mutableContainers.rawValue))
+        else { return nil }
+        guard CFGetTypeID(copy) == CFDictionaryGetTypeID() else { return nil }
+        return unsafeDowncast(copy, to: CFMutableDictionary.self)
     }
 
     static func channelArray(_ dict: CFDictionary) -> [CFDictionary] {

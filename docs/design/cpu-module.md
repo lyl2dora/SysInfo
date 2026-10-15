@@ -398,3 +398,16 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
   - coalition 的「写出字节数」探测（自检 S3）拆成单独的 `csp_coal_resource_usage_probe`，常规采样只调用一次 `csp_coal_resource_usage`。
 - **2026-10-15 · §9 硬件测试：`*_IDLE` 通道不是完整的时间积分**
   - M4 Pro 实测 `PCPM_IDLE`（状态里是 `NON_IDLE` 而不是 `IDLE`）的驻留增量 / 墙钟只有 0.48，而标准性能状态通道是 1.00。驻留积分的硬件测试只检查带 `IDLE` 状态的通道；频率发现按 §5.4 的结构规则本来就排除这类通道。
+- **2026-10-15 · §5.4 IOReportHub 的线程安全：通道访问器会写字典**
+  - 实测：并行跑硬件测试时稳定崩溃（SIGSEGV）。栈为 `IOReportChannelGetChannelName` → `-[__NSDictionaryM __setObject:forKey:]`：访问器会把结果缓存进通道字典，所以「只读」访问也不能并发。拓扑发现（自检线程）和频率采样（引擎队列）在生产环境里同样可能并发读到同一份缓存字典。
+  - 做法：
+    - 缓存的组字典只在 hub 的锁内访问，通道信息在枚举时算一次，缓存成值类型；
+    - 建订阅时在锁内用 `CFPropertyListCreateDeepCopy` 深拷贝组字典，筛选、合并和订阅只用这份拷贝，每个订阅独占自己的 CF 对象。
+  - 回归测试：16 个线程同时读通道、建订阅、采样（`concurrentChannelAccessAndSubscriptions`）。修复后本机并行连跑 5 次、M4 跑 1 次，均通过。
+- **2026-10-15 · §5.2 拓扑：频率依据与被动核对的接入时机**
+  - 频率依据（DVFS 表顶）要用到第 3 步的通道与 pmgr 表发现。现在 `TopologyInputs.tableTopByCluster` 先留空，`topo` 显示「no DVFS tables」；第 3 步接入后由频率发现传入，三种依据一起核对。
+  - 用 rusage v6 `ri_*_ptime` 做被动核对需要知道本进程线程在哪个簇上运行，常规采样里拿不到。改为在第 5 步用系统级数据核对：全体 coalition 的 perflevel0 时间（slot 22）之和 / CPU 时间之和，应约等于按映射算出的 perflevel0 核忙碌 tick 占比。
+  - 两台实测（`topo`）：
+    - M5 Pro：3 簇（d0c0、d0c1 为 Performance，d0c2 为 Super）；
+    - M4 Pro：3 簇（d0c0 为 Efficiency，d0c1、d0c2 为 Performance）。
+    - 两台都是核数与 L2 两种依据成立且一致，状态 ok。

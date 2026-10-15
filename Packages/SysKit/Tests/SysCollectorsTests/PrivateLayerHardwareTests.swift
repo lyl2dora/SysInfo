@@ -2,6 +2,8 @@
 // 断言只用运行时发现的值，不写死任何芯片的通道名、键名或核数（D20）。
 
 import Darwin
+import Dispatch
+import Synchronization
 import Testing
 @testable import SysCollectors
 
@@ -43,6 +45,29 @@ struct PrivateLayerHardwareTests {
             let ratio = Double(channel.stateResidencies.reduce(0, +)) / (elapsedNanos * ticksPerNano)
             #expect(ratio > 0.9 && ratio < 1.1, "\(channel.key)：驻留/墙钟 = \(ratio)")
         }
+    }
+
+    /// 回归（2026-10-15）：IOReport 的通道访问器会往通道字典里写缓存，并发读同一份缓存字典曾导致崩溃。
+    /// 多个线程同时读通道信息、建订阅并采样，不应崩溃，结果也应一致。
+    @Test func concurrentChannelAccessAndSubscriptions() {
+        let hub = IOReportHub()
+        let counts = Mutex([Int]())
+        DispatchQueue.concurrentPerform(iterations: 16) { i in
+            for _ in 0..<5 {
+                let infos = hub.channels(inGroup: "CPU Stats") ?? []
+                let subscription = hub.makeSubscription(selecting: [
+                    (group: "CPU Stats", include: { $0.key.subgroup == "CPU Core Performance States" })
+                ])
+                _ = subscription?.sampleDelta()
+                _ = subscription?.sampleDelta()
+                counts.withLock { $0.append(infos.count) }
+            }
+            _ = i
+        }
+        let all = counts.withLock { $0 }
+        #expect(all.count == 80)
+        #expect(Set(all).count == 1 && all[0] > 0)
+        #expect(hub.enumerationCount == 1)
     }
 
     // MARK: SMC
