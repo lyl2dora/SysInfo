@@ -19,7 +19,7 @@ import SysCollectors
 import SysModel
 import OSLog
 
-/// 面板里的模块（D21）：点哪个模块的 widget 就预选对应的 tab。
+/// 面板里的模块（D21、D47）：单 widget 模式下面板只显示被点击 widget 所属的模块。
 enum PanelTab: String, CaseIterable, Identifiable {
     case cpu
     case power
@@ -114,6 +114,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private var sessionlessClosedByItemClickAt: TimeInterval?
     /// 上面两件事之间允许的最大间隔，秒（实测约 20 ms）。
     static let itemClickSessionWindow: TimeInterval = 0.5
+    /// 面板开着时点了本 app 的另一个 widget 的时刻（同上的时钟）：旧 session 结束时不隐藏面板，
+    /// 等新 session 开始后原地换内容（D47）。原先先隐藏再显示，中间约 60 ms 空白，看起来是闪烁。
+    private var switchRequestedAt: TimeInterval?
 
     init(store: MetricStore, engine: SamplingEngine, services: AppServices, settings: AppSettings) {
         self.store = store
@@ -137,7 +140,11 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             ProcessInfo.processInfo.systemUptime - $0 < Self.itemClickSessionWindow
         } ?? false
         sessionlessClosedByItemClickAt = nil
-        if presentation == .anchored, sessionItem == nil {
+        // 从一个 widget 点到另一个（D47）：系统先结束旧 session（sessionItem 已清空），再开新 session。
+        // 这时面板还开着、没有 session，但不是「无 session 的面板被点了」，要先判断，原地换内容。
+        let switching = switchRequestedAt.map { ProcessInfo.processInfo.systemUptime - $0 < Self.itemClickSessionWindow } ?? false
+        switchRequestedAt = nil
+        if presentation == .anchored, sessionItem == nil, !switching {
             Log.panel.info("无 session 的面板开着时点击 item：关闭面板，取消系统新开的 session")
             hide()
             session.cancel()
@@ -155,7 +162,11 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         if let widget = statusItems?.widget(for: statusItem) {
             state.selectedTab = PanelTab(widget.module)
         }
-        showAnchored()
+        if switching, presentation == .anchored {
+            swapInPlace()
+        } else {
+            showAnchored()
+        }
     }
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
@@ -164,9 +175,19 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             sessionItem = nil
         }
         // 固定为浮窗时 session 由我们主动结束，面板保留。
-        if presentation == .anchored {
-            hide()
+        guard presentation == .anchored else { return }
+        // 点到了另一个 widget：面板先留着，等新 session 开始后原地换内容；新 session 没来就照常隐藏。
+        if switchRequestedAt != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.itemClickSessionWindow) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.switchRequestedAt != nil, self.sessionItem == nil else { return }
+                    self.switchRequestedAt = nil
+                    self.hide()
+                }
+            }
+            return
         }
+        hide()
     }
 
     // MARK: - 打开与关闭
@@ -289,6 +310,20 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         installMonitors()
         updateDemands()
         Log.panel.info("面板已显示：\(NSStringFromRect(panel.frame), privacy: .public)")
+    }
+
+    /// 面板保持可见，换成新模块的内容并移到新 widget 下方，同一次提交里完成（不出现空白帧，D47）。
+    private func swapInPlace() {
+        guard let panel else { return showAnchored() }
+        let size = installContent(in: panel)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.setFrame(anchoredFrame(for: size), display: true)
+        CATransaction.commit()
+        panel.makeKey()
+        shownAt = ProcessInfo.processInfo.systemUptime
+        updateDemands()
+        Log.panel.info("面板原地换为 \(self.state.selectedTab.rawValue, privacy: .public)：\(NSStringFromRect(panel.frame), privacy: .public)")
     }
 
     private func hide() {
@@ -451,6 +486,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 // 无 session 的面板：系统随后会为这次点击开启新 session，didBegin 里把它取消。
                 sessionlessClosedByItemClickAt = ProcessInfo.processInfo.systemUptime
             }
+        } else if sessionItem != nil, statusItems?.isOtherItem(at: location, excluding: sessionItem) == true {
+            Log.panel.info("点击另一个 widget：等新 session 开始后原地换内容")
+            switchRequestedAt = ProcessInfo.processInfo.systemUptime
+            return
         } else {
             Log.panel.info("点击面板以外的位置，关闭面板")
         }

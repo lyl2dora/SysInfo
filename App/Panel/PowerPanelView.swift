@@ -13,10 +13,17 @@ struct PowerPanelView: View {
     let store: MetricStore
     let services: AppServices
     @Bindable var settings: AppSettings
-    var openCPUTab: () -> Void = {}
     /// 风扇数：自检时才发现，面板可能更早建好（`--open-panel`），所以等一会儿再定高度。
-    @State private var fanCount = 0
+    /// 一开始就取已知的值：从一个 widget 切过来时高度一步到位，不先矮后高（D47）。
+    @State private var fanCount: Int
     @Environment(\.panelLayoutChanged) private var layoutChanged
+
+    init(store: MetricStore, services: AppServices, settings: AppSettings) {
+        self.store = store
+        self.services = services
+        self.settings = settings
+        _fanCount = State(initialValue: services.power.sensors?.fans.count ?? 0)
+    }
 
     var body: some View {
         let hasFans = fanCount > 0
@@ -34,13 +41,9 @@ struct PowerPanelView: View {
                         collector: PowerRailCollector.collectorID, scale: .watts))
             }
             PanelCard {
-                VStack(alignment: .leading, spacing: 4) {
-                    LiveView(make: { PowerBreakdownDrawView(store: store) })
-                        .frame(height: PowerBreakdownDrawView.height)
-                    Button("按簇查看 CPU 功耗", action: openCPUTab)
-                        .buttonStyle(.link)
-                        .font(.caption)
-                }
+                // 按簇的 CPU 功耗在 CPU 面板里看（D47：单 widget 模式下面板不切换模块）。
+                LiveView(make: { PowerBreakdownDrawView(store: store) })
+                    .frame(height: PowerBreakdownDrawView.height)
             }
             PanelCard { PMGRBatchCard(pmgr: services.power.pmgr, history: services.history) }
             PanelCard {
@@ -77,6 +80,13 @@ struct PMGRBatchCard: View {
     @State private var railWatts: Double?
     @State private var now = Date()
     @Environment(\.panelLayoutChanged) private var layoutChanged
+
+    init(pmgr: PMGRBatchCollector?, history: HistoryRecorder?) {
+        self.pmgr = pmgr
+        self.history = history
+        // 一开始就取最近一批：行数在第一次布局时就确定，不先空后满（D47）。
+        _batch = State(initialValue: pmgr?.latestBatch)
+    }
 
     /// 显示顺序与合并：归一化名 → 显示名。不认识的通道（例如 AFR、MSR）放在最后，原样显示。
     static let rows: [(title: String, components: [String])] = [
@@ -159,7 +169,7 @@ struct PMGRBatchCard: View {
     private func reload() async {
         now = Date()
         let latest = pmgr?.latestBatch
-        if latest != batch {
+        if latest != batch || (latest != nil && railWatts == nil) {
             batch = latest
             railWatts = nil
             if let latest, let history {
@@ -182,7 +192,8 @@ struct EnergyCard: View {
     let enabled: Bool
 
     @State private var rows: [(title: String, summary: EnergySummary)] = []
-    @Environment(\.panelLayoutChanged) private var layoutChanged
+
+    static let titles = [String(localized: "今天"), String(localized: "昨天"), String(localized: "近 7 天")]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -192,20 +203,22 @@ struct EnergyCard: View {
             } else if history == nil {
                 Text("历史库不可用").font(.caption2).foregroundStyle(.secondary)
             } else {
-                ForEach(rows, id: \.title) { row in
+                // 行数固定（读到之前显示「—」），说明行也总在：高度不随异步读取变化（D47）。
+                ForEach(Self.titles, id: \.self) { title in
                     HStack {
-                        Text(row.title).foregroundStyle(.secondary)
+                        Text(title).foregroundStyle(.secondary)
                         Spacer()
-                        Text(Formatting.energy(row.summary.total)).monospacedDigit()
+                        Text(rows.first { $0.title == title }.map { Formatting.energy($0.summary.total) } ?? "—").monospacedDigit()
                     }
                     .font(.caption)
                 }
-                if rows.contains(where: { $0.summary.filled > 0 }) {
-                    Text("含 SysInfo 未运行时段的系统累计值，满载时可能偏低。")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(
+                    rows.contains(where: { $0.summary.filled > 0 })
+                        ? "含 SysInfo 未运行时段的系统累计值，满载时可能偏低。" : "按整机功率每秒积分。"
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
             }
         }
         .task(id: enabled) {
@@ -225,16 +238,11 @@ struct EnergyCard: View {
         let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
         let week = calendar.date(byAdding: .day, value: -6, to: today) ?? today
         var out: [(String, EnergySummary)] = []
-        for (title, from, to) in [
-            (String(localized: "今天"), today, now), (String(localized: "昨天"), yesterday, today),
-            (String(localized: "近 7 天"), week, now),
-        ] {
+        for (title, from, to) in [(Self.titles[0], today, now), (Self.titles[1], yesterday, today), (Self.titles[2], week, now)] {
             // 区间右端按分钟取整：查询按分钟边界，「昨天」不能带上今天的第一分钟。
             let end = to == now ? now : to.addingTimeInterval(-1)
             if let summary = try? await history.energySummary(from: from, to: end) { out.append((title, summary)) }
         }
-        let shapeChanged = out.count != rows.count || out.contains { $0.1.filled > 0 } != rows.contains { $0.summary.filled > 0 }
         rows = out
-        if shapeChanged { layoutChanged() }
     }
 }

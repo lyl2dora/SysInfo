@@ -82,7 +82,14 @@ final class StatusItemController {
         widget == .usage ? .menubarCPU : DemandSource("menubar.\(widget.module.rawValue).\(widget.rawValue)")
     }
 
-    /// 某个 item 是哪个 widget（点击后按模块预选面板 tab，D21）。
+    /// 屏幕上的这一点是否落在本 app 除 `excluded` 以外的某个 widget 上（从一个 widget 点到另一个时原地换面板，D47）。
+    func isOtherItem(at point: NSPoint, excluding excluded: NSStatusItem?) -> Bool {
+        entries.values.contains { entry in
+            entry.item !== excluded && (entry.item.view?.window ?? entry.item.button?.window)?.frame.contains(point) == true
+        }
+    }
+
+    /// 某个 item 是哪个 widget（点击后按模块选择面板内容，D47）。
     func widget(for item: NSStatusItem) -> MenuWidget? {
         entries.first { $0.value.item === item }?.key
     }

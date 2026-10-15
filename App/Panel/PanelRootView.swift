@@ -1,4 +1,5 @@
-// 面板内容（D21，M0 设计 §6）：顶栏玻璃按钮 + tabs 切换模块 + 模块内容。
+// 面板内容（D21、D47，M0 设计 §6）：顶栏玻璃按钮 + 被点击 widget 所属模块的内容。
+// 单 widget 模式下不提供模块切换（D47）；合并模式（D06）上线后再恢复。
 // 玻璃只用在控件层；图表和数值层用标准材质（见 PanelCard）。
 
 import SwiftUI
@@ -11,23 +12,19 @@ struct PanelRootView: View {
     let settings: AppSettings
     /// 内容的结构变了（展开或收起、行数变化），请面板重新量一次高度。
     var onLayoutChange: () -> Void = {}
-    /// 切换了 tab：重新登记需求（只采当前 tab 要的数据）。
+    /// 换了模块：重新登记需求（只采当前模块要的数据）。
     var onTabChange: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 12) {
             topBar
 
-            SegmentedButtons(
-                selection: $state.selectedTab, options: PanelTab.allCases.map { ($0, $0.title) }, size: .regular)
-
             switch state.selectedTab {
             case .cpu:
                 CPUPanelView(
                     store: store, services: services, settings: settings, expandDetails: state.expandDetailsInitially)
             case .power:
-                PowerPanelView(
-                    store: store, services: services, settings: settings, openCPUTab: { state.selectedTab = .cpu })
+                PowerPanelView(store: store, services: services, settings: settings)
             }
         }
         .onChange(of: state.selectedTab) { onTabChange() }
@@ -49,10 +46,6 @@ struct PanelRootView: View {
             }
             .help("打开活动监视器")
 
-            Spacer(minLength: 4)
-            Text("SysInfo")
-                .font(.headline)
-                .lineLimit(1)
             Spacer(minLength: 4)
 
             if !state.isPinned {
