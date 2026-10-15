@@ -126,6 +126,15 @@ struct SysInfoCLI {
                     runStorage(
                         interval: try options.double("--interval", default: 1, range: 0.5...3600),
                         count: try options.int("--count", default: 3, range: 1...1_000_000), json: options.flag("--json")))
+            case "disktop":
+                let options = try Options(arguments, flags: ["--json", "--by-process", "--fallback"], values: ["--interval", "--count", "--rows"])
+                exit(
+                    runDiskTopN(
+                        count: try options.int("--count", default: 1, range: 1...1_000_000),
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        rows: try options.int("--rows", default: 10, range: 1...100),
+                        grouping: options.flag("--by-process") ? .byProcess : .byApp, fallback: options.flag("--fallback"),
+                        json: options.flag("--json")))
             case "smart":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runSMART(json: options.flag("--json")))
@@ -198,6 +207,8 @@ struct SysInfoCLI {
               storage [--interval 1] [--count 3] [--json]
                                                       物理盘清单、RAID 组、容量组，以及每盘读写、IOPS、延迟、温度与寿命
               smart [--json]                          每块物理盘的 NVMe SMART 全字段
+              disktop [--interval 2] [--count 1] [--rows 10] [--by-process] [--fallback] [--json]
+                                                      按磁盘读写的 Top N（按应用或按进程）；--fallback 为同 uid 回退
               verify storage [--seconds 5]            每盘读写与 iostat -d 同一时间窗对照，容量组可用空间与 df -k 对照
               pmgr [--watch] [--timeout 1900]         PMGR 订阅的部件；--watch 等到下一个 30 分钟批次，打印分部件明细与交叉核对
               catalog [--samples 4] [--all] [--json]  传感器目录：全部 T/V/I/P/F 数值键的质量（有效 / 占位 / 恒定 / 非温度）与已验证分组

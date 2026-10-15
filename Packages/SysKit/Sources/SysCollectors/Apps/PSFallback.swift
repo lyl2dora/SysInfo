@@ -16,6 +16,9 @@ public final class SameUIDSampler: Sendable {
     private struct State {
         var previous: [pid_t: (ticks: UInt64, unique: UInt64)] = [:]
         var previousNanos: UInt64?
+        /// 磁盘回退的基线：pid → (读, 写, 唯一 id)。
+        var previousDisk: [pid_t: (read: UInt64, written: UInt64, unique: UInt64)] = [:]
+        var previousDiskNanos: UInt64?
     }
 
     private let state = Mutex(State())
@@ -68,6 +71,54 @@ public final class SameUIDSampler: Sendable {
         }
         out.sort { $0.cpu > $1.cpu }
         return Result(rows: Array(out.prefix(rows)), hiddenCount: hidden)
+    }
+
+    /// 两次调用之间每个同 uid 进程的磁盘读写（存储模块设计 §4.5 的回退）；第一次调用只建立基线。
+    public func sampleDisk(rows: Int) -> Result {
+        let pids = Self.allPIDs()
+        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let ownUID = getuid()
+        var current: [pid_t: (read: UInt64, written: UInt64, unique: UInt64)] = [:]
+        var hidden = 0
+        for pid in pids {
+            guard let r = ProcessInfoReader.rusage(of: pid), ProcessInfoReader.uid(of: pid) == ownUID else {
+                hidden += 1
+                continue
+            }
+            current[pid] = (r.ri_diskio_bytesread, r.ri_diskio_byteswritten, ProcessPrivateInfo.uniqueID(of: pid) ?? 0)
+        }
+        let (previous, previousNanos) = state.withLock { s in
+            defer {
+                s.previousDisk = current
+                s.previousDiskNanos = now
+            }
+            return (s.previousDisk, s.previousDiskNanos)
+        }
+        guard let previousNanos, now > previousNanos else { return Result(rows: [], hiddenCount: hidden) }
+        let seconds = Double(now - previousNanos) / 1e9
+        var out: [TopNRow] = []
+        for (pid, io) in current {
+            guard let before = previous[pid], before.unique == io.unique, io.read >= before.read, io.written >= before.written
+            else { continue }
+            let read = Double(io.read - before.read) / seconds
+            let write = Double(io.written - before.written) / seconds
+            guard read + write > 0 else { continue }
+            out.append(
+                TopNRow(
+                    id: "p\(pid)", kind: .process, coalitionID: 0, name: "", appPath: nil, representativePID: pid,
+                    memberCount: 1, cpu: 0, perfLevel0Share: nil, energyWatts: nil, topMember: nil, members: [],
+                    residualCPU: nil, residualCount: 0, eligibility: ProcessControl.eligibility(uid: ownUID, pid: pid),
+                    diskRead: read, diskWrite: write))
+        }
+        out.sort { $0.diskTotal > $1.diskTotal }
+        let top = out.prefix(rows).map { row -> TopNRow in
+            var row = row
+            let info = TopNBuilder.resolveName(path: ProcessInfoReader.path(of: row.representativePID), command: "", pid: row.representativePID)
+            row.name = info.name
+            row.appPath = info.appPath
+            return row
+        }
+        return Result(rows: top, hiddenCount: hidden)
     }
 
     /// 同 uid 进程的内存 footprint（D49 的回退）：footprint 是当前值，不需要基线。

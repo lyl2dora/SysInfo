@@ -211,3 +211,50 @@ extension SysInfoCLI {
         return passed ? 0 : 1
     }
 }
+
+extension SysInfoCLI {
+    /// 按磁盘 IO 的 Top N（存储模块设计 §4.5）。第一次扫描只建立基线。
+    static func runDiskTopN(count: Int, interval: Double, rows: Int, grouping: TopNGrouping, fallback: Bool, json: Bool) -> Int32 {
+        let encoder = makeEncoder()
+        let sampler: AppSampler? = fallback ? nil : prepareAppSampler()
+        if !fallback, sampler == nil { printError("coalition 不可用，改用同 uid 回退") }
+        let builder = TopNBuilder()
+        let same = SameUIDSampler()
+        if let sampler { _ = sampler.sample(at: .now()) } else { _ = same.sampleDisk(rows: rows) }
+        if let window = sampler?.latestWindow { _ = builder.buildDisk(window: window, rows: rows, grouping: grouping) }
+        var deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        for index in 1...count {
+            deadline += UInt64(interval * 1e9)
+            sleep(untilUptimeNanos: deadline)
+            let cpu0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            let list: [TopNRow]
+            var note: String?
+            if let sampler {
+                _ = sampler.sample(at: .now())
+                guard let window = sampler.latestWindow else { return 1 }
+                list = builder.buildDisk(window: window, rows: rows, grouping: grouping)
+            } else {
+                let result = same.sampleDisk(rows: rows)
+                list = result.rows
+                note = "只列同 uid 进程，另有 \(result.hiddenCount) 个读不到"
+            }
+            let cpuMs = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu0) / 1e6
+            if json {
+                struct Record: Encodable { var index: Int; var rows: [TopNRow] }
+                if let data = try? encoder.encode(Record(index: index, rows: list)) { print(String(decoding: data, as: UTF8.self)) }
+                continue
+            }
+            print("#\(index)" + (note.map { "  \($0)" } ?? "") + String(format: "  · %.2f ms CPU", cpuMs))
+            for row in list {
+                var line = "  读 \(decimalBytes(row.diskRead ?? 0))/s  写 \(decimalBytes(row.diskWrite ?? 0))/s  " + row.name
+                if row.memberCount > 1 { line += " ×\(row.memberCount)" }
+                if let top = row.topMember {
+                    line += "  （\(top.name) 读 \(decimalBytes(top.diskRead ?? 0))/s 写 \(decimalBytes(top.diskWrite ?? 0))/s）"
+                }
+                line += "  [\(row.eligibility.rawValue)]"
+                print(line)
+            }
+        }
+        return 0
+    }
+}

@@ -1,7 +1,8 @@
 // 历史记录器（CPU 模块设计 §6，D30）：订阅引擎事件，按分钟聚合，定时写库。
 //
 // - 登记 background 层需求（锁屏、显示器睡眠时继续采，不受降频影响）：
-//   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）；内存每 10 s（D49）。
+//   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）；内存每 10 s（D49）；
+//   存储（读写、SMART、容量）每 60 s（存储模块设计 §5）。
 //   用户开启「后台高精度」时，频率、温度与功耗改为每 5 s（D19 的高开销项）。
 //   菜单栏、面板的前台需求更密时，引擎按较短的间隔采样，记录器直接用这些样本，峰值随之更准；
 // - 每 5 分钟（整 5 分之后 1 分钟，即 :01、:06…）提交一次事务：写入已结束的分钟、新开 epoch、小时汇总、
@@ -33,10 +34,12 @@ public actor HistoryRecorder {
         public var recordEnergy: Bool
         /// 记录内存指标（D49）：后台每 10 s。
         public var recordMemory: Bool
+        /// 记录存储指标（存储模块设计 §5）：后台每 60 s。
+        public var recordStorage: Bool
 
         public init(
             recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false, recordPower: Bool = true,
-            recordEnergy: Bool = true, recordMemory: Bool = true
+            recordEnergy: Bool = true, recordMemory: Bool = true, recordStorage: Bool = true
         ) {
             self.recordSystem = recordSystem
             self.recordApps = recordApps
@@ -44,6 +47,7 @@ public actor HistoryRecorder {
             self.recordPower = recordPower
             self.recordEnergy = recordEnergy
             self.recordMemory = recordMemory
+            self.recordStorage = recordStorage
         }
     }
 
@@ -63,6 +67,8 @@ public actor HistoryRecorder {
     public static let pmgrInterval = 60
     static let anchorKey = "energy.anchor"
     static let pmgrKey = "pmgr.state"
+    /// 盘与组的标签（导出时把加盐键对应成「型号 + 位置」，存储模块设计 §3.1）。
+    public static let storageLabelsKey = "storage.labels"
 
     /// 后台采样间隔（D30），基础 tick 数。
     public static let slowInterval = 60
@@ -81,6 +87,8 @@ public actor HistoryRecorder {
     private let engine: SamplingEngine
     private let appSampler: AppSampler?
     private let power: PowerSources
+    /// 容量组（标签用）；nil 时只记盘的标签。
+    private let storageCapacity: StorageCapacityCollector?
     private var energy = EnergyIntegrator()
     /// 本次运行是否已经处理过「app 没运行的时段」的补数。
     private var gapHandled = false
@@ -110,9 +118,11 @@ public actor HistoryRecorder {
     ///   - epoch: 返回当前机器的 epoch（参数是起始分钟）；默认按 `HistoryRecorder.currentEpoch` 读取。
     public init(
         store: sending HistoryStore, engine: SamplingEngine, appSampler: AppSampler?,
-        power: PowerSources = PowerSources(ledger: nil, pmgr: nil), configuration: Configuration = Configuration(),
+        power: PowerSources = PowerSources(ledger: nil, pmgr: nil), storageCapacity: StorageCapacityCollector? = nil,
+        configuration: Configuration = Configuration(),
         epoch: @escaping @Sendable (Int64) -> HistoryEpoch? = { HistoryRecorder.currentEpoch(startMinute: $0) }
     ) {
+        self.storageCapacity = storageCapacity
         self.store = store
         self.engine = engine
         self.appSampler = appSampler
@@ -217,6 +227,12 @@ public actor HistoryRecorder {
                     collectors: [MemoryCollector.collectorID], interval: Self.sensorInterval, source: .history,
                     tier: .background))
         }
+        if configuration.recordStorage {
+            demands.append(
+                Demand(
+                    collectors: [StorageIOCollector.collectorID, SMARTCollector.collectorID, StorageCapacityCollector.collectorID],
+                    interval: Self.slowInterval, source: .history, tier: .background))
+        }
         if configuration.recordEnergy {
             demands.append(
                 Demand(
@@ -244,6 +260,7 @@ public actor HistoryRecorder {
         if configuration.recordSystem { modules.insert(.cpu) }
         if configuration.recordPower { modules.insert(.power) }
         if configuration.recordMemory { modules.insert(.memory) }
+        if configuration.recordStorage { modules.insert(.storage) }
         if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
         if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
             energy.ingest(watts: watts, at: sample.time)
@@ -302,6 +319,7 @@ public actor HistoryRecorder {
             try store.rollUpHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try store.rollUpEnergyHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try saveAnchorAndPMGR()
+            try saveStorageLabels()
             if lastPrune.map({ now.timeIntervalSince($0) >= 86_400 }) ?? true {
                 try store.prune(before: current - Int64(HistoryStore.minuteRetention / 60))
                 lastPrune = now
@@ -343,6 +361,24 @@ public actor HistoryRecorder {
             savedPMGR = state
         }
     }
+
+    private var savedStorageLabels: [String: String] = [:]
+
+    /// 提交时更新盘与组的标签（只增不减：拔掉的盘在导出里仍然认得出来）。
+    private func saveStorageLabels() throws {
+        guard configuration.recordStorage else { return }
+        let current = StorageLabels.labels(inventory: DiskInventory.shared.inventory, groups: storageGroups())
+        guard !current.isEmpty else { return }
+        if savedStorageLabels.isEmpty {
+            savedStorageLabels = (try? store.decoded([String: String].self, forKey: Self.storageLabelsKey)) ?? [:]
+        }
+        let merged = savedStorageLabels.merging(current) { _, new in new }
+        guard merged != savedStorageLabels else { return }
+        try store.setEncoded(merged, forKey: Self.storageLabelsKey)
+        savedStorageLabels = merged
+    }
+
+    private func storageGroups() -> [CapacityGroup] { storageCapacity?.latestGroups ?? [] }
 
     /// 一段时间内的能耗（先提交内存里的数据）。
     public func energySummary(from: Date, to: Date) throws -> EnergySummary {
