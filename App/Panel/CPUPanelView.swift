@@ -15,7 +15,11 @@ struct CPUPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            PanelCard { CPUOverview(store: store, splitUserSystem: settings.panelSplitUserSystem) }
+            PanelCard {
+                let split = settings.panelSplitUserSystem
+                LiveView(make: { OverviewDrawView(store: store) }, update: { $0.splitUserSystem = split })
+                    .frame(height: split ? OverviewDrawView.height : OverviewDrawView.height - 22)
+            }
             PanelCard { CPUHistoryChart(store: store, history: services.history, defaultSpan: settings.panelChartSpan) }
             PanelCard { CPUCoresSection(store: store, sensors: services.collectors.sensors) }
             PanelCard { CPUDetailsSection(store: store, services: services, expandInitially: expandDetails) }
@@ -26,222 +30,31 @@ struct CPUPanelView: View {
     }
 }
 
-// MARK: - 概览
-
-private struct CPUOverview: View {
-    let store: MetricStore
-    let splitUserSystem: Bool
-
-    var body: some View {
-        let total = store.latest[.cpuUsageTotal]
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("总占用")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(total?.value.map { PercentFormat.string(fromRatio: $0) } ?? PercentFormat.placeholder)
-                        .font(.system(size: 34, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                    if total?.quality == .estimated {
-                        Text("估算")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .help("部分核的计数器复位，总占用由其余核估算")
-                    }
-                }
-                if splitUserSystem {
-                    UserSystemBar(user: store.latest[.cpuUsageUser]?.value, system: store.latest[.cpuUsageSystem]?.value)
-                }
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 6) {
-                smallValue(String(localized: "频率"), fastestFrequency)
-                smallValue(
-                    String(localized: "最高温"), store.latest[.cpuTemperatureMax]?.value.map(Formatting.temperature) ?? "—")
-                if let state = store.latest[.cpuThermalState]?.value, let badge = DisplayNames.thermalState(state) {
-                    Text(badge.text)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(badge.color.opacity(0.25), in: .capsule)
-                        .help("系统热状态")
-                }
-            }
-        }
-    }
-
-    /// 最快档（perflevel0）各簇实际频率的最大值；都空闲时显示「空闲」。
-    private var fastestFrequency: String {
-        guard let topology = CPUTopologyService.shared.current, topology.quality.isOK,
-            let level = topology.perfLevels.first
-        else { return "—" }
-        let samples = level.clusters.compactMap { store.latest[.cpuFrequencyCluster($0)] }
-        if let hz = samples.compactMap(\.value).max() { return Formatting.frequency(hz) }
-        return samples.isEmpty ? "—" : String(localized: "空闲")
-    }
-
-    private func smallValue(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.callout.weight(.medium)).monospacedDigit()
-        }
-    }
-}
-
-private struct UserSystemBar: View {
-    let user: Double?
-    let system: Double?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            GeometryReader { proxy in
-                HStack(spacing: 0) {
-                    Rectangle().fill(Color.accentColor).frame(width: proxy.size.width * clamp(user))
-                    Rectangle().fill(Color.orange).frame(width: proxy.size.width * clamp(system))
-                    Spacer(minLength: 0)
-                }
-                .background(.quaternary)
-                .clipShape(.rect(cornerRadius: 2))
-            }
-            .frame(width: 150, height: 5)
-            HStack(spacing: 8) {
-                legend(Color.accentColor, String(localized: "用户"), user)
-                legend(.orange, String(localized: "系统"), system)
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private func clamp(_ v: Double?) -> CGFloat { CGFloat(min(max(v ?? 0, 0), 1)) }
-
-    private func legend(_ color: Color, _ title: String, _ value: Double?) -> some View {
-        HStack(spacing: 3) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(title) \(value.map { PercentFormat.string(fromRatio: $0) } ?? "—")").monospacedDigit()
-        }
-    }
-}
-
 // MARK: - 核心
 
+/// 核心区：高度按拓扑固定，内容由 CoresDrawView 自绘。
+/// 拓扑在第一次采样后才确定（核数对上），这里只在核数变化时重新算高度并请面板量高。
 struct CPUCoresSection: View {
     let store: MetricStore
     let sensors: SensorCollector?
+    @State private var coreCount = 0
     @Environment(\.panelLayoutChanged) private var layoutChanged
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let topology = CPUTopologyService.shared.current, topology.logicalCPUCount == store.cpuCores.count {
-                switch topology.quality {
-                case .ok:
-                    ForEach(topology.perfLevels, id: \.index) { level in
-                        levelGroup(level, topology)
+        LiveView(make: { CoresDrawView(store: store, sensors: sensors) })
+            .frame(height: CoresDrawView.height(for: CPUTopologyService.shared.current, cores: coreCount))
+            .task {
+                // 只在核数变化时更新（不订阅每秒的数据），最多等 10 s 拿到第一次采样
+                for _ in 0..<40 {
+                    let count = store.cpuCores.count  // task 不在 body 里，不会让 SwiftUI 订阅每秒的数据
+                    if count != coreCount {
+                        coreCount = count
+                        layoutChanged()
                     }
-                case .clustersOnly:
-                    ForEach(topology.clusters, id: \.key) { cluster in
-                        clusterRow(cluster, title: cluster.key.description, color: .accentColor, showsTemperature: true)
-                    }
-                case .coresOnly:
-                    coreBars(Array(store.cpuCores.indices), color: .accentColor)
-                }
-                Text("温度为簇所在位置的温度，GPU 重载时也会升高；功耗不含 GPU。")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            } else {
-                Text("每核占用（\(store.cpuCores.count) 个逻辑核）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                coreBars(Array(store.cpuCores.indices), color: .accentColor)
-            }
-        }
-        // 第一次采样之后才按拓扑分组显示，行数会变
-        .onChange(of: store.cpuCores.count) { layoutChanged() }
-    }
-
-    /// 档内各簇是否共用同一组温度键（D37：共用时温度只显示在组标题里）。
-    private func sharesTemperature(_ level: PerfLevel) -> Bool {
-        guard level.clusters.count > 1, let profile = sensors?.profile?.profile else { return false }
-        let sets = level.clusters.map { Set(profile.temperature.clusters[$0.description] ?? []) }
-        return sets.allSatisfy { !$0.isEmpty && $0 == sets[0] }
-    }
-
-    private func levelGroup(_ level: PerfLevel, _ topology: CPUTopology) -> some View {
-        let color = DisplayNames.perfLevelColor(level.name, index: level.index)
-        let shared = sharesTemperature(level)
-        let usage = store.latest[.cpuUsagePerfLevel(level.index)]?.value
-        // 共用温度键时各簇温度相同，取第一个簇的值放在标题里。
-        let sharedTemperature = shared ? level.clusters.compactMap { store.latest[.cpuTemperatureCluster($0)]?.value }.max() : nil
-        var title = "\(DisplayNames.perfLevel(level.name)) ×\(level.cpuCount)"
-        title += " · \(usage.map { PercentFormat.string(fromRatio: $0) } ?? "—")"
-        if let sharedTemperature { title += " · \(Formatting.temperature(sharedTemperature))" }
-        let clusters = topology.clusters.filter { $0.perfLevel == level.index }
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 7, height: 7)
-                Text(title).font(.caption.weight(.semibold)).monospacedDigit()
-            }
-            ForEach(Array(clusters.enumerated()), id: \.element.key) { offset, cluster in
-                clusterRow(
-                    cluster, title: clusters.count > 1 ? String(localized: "簇 \(offset + 1)") : String(localized: "簇"),
-                    color: color, showsTemperature: !shared)
-            }
-        }
-    }
-
-    private func clusterRow(_ cluster: CPUCluster, title: String, color: Color, showsTemperature: Bool) -> some View {
-        let usage = store.latest[.cpuUsageCluster(cluster.key)]?.value
-        let frequency = store.latest[.cpuFrequencyCluster(cluster.key)]
-        let temperature = showsTemperature ? store.latest[.cpuTemperatureCluster(cluster.key)]?.value : nil
-        let power = store.latest[.cpuPowerCluster(cluster.key)]?.value
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 0) {
-                Text(title).frame(width: 40, alignment: .leading).foregroundStyle(.secondary)
-                Text(usage.map { PercentFormat.string(fromRatio: $0) } ?? "—").frame(width: 42, alignment: .trailing)
-                Text(frequencyText(frequency)).frame(width: 76, alignment: .trailing)
-                Text(temperature.map(Formatting.temperature) ?? "").frame(width: 52, alignment: .trailing)
-                Text(power.map(Formatting.watts) ?? "").frame(width: 62, alignment: .trailing)
-            }
-            .font(.caption)
-            .monospacedDigit()
-            coreBars(cluster.cpus, color: color)
-        }
-    }
-
-    private func frequencyText(_ sample: Sample?) -> String {
-        guard let sample else { return "—" }
-        if let hz = sample.value { return Formatting.frequency(hz) }
-        if case .unavailable(let reason) = sample.quality, reason.code == UnavailableReason.clusterIdle().code {
-            return String(localized: "空闲")
-        }
-        return "—"
-    }
-
-    /// 一组核的小柱：一个 Canvas 画完（原先每核一个 GeometryReader，每秒重算十几个视图，开销实测后改掉）。
-    /// 不可用时画成空槽，不画成 0。
-    private func coreBars(_ cores: [Int], color: Color) -> some View {
-        let all = store.cpuCores
-        let values = cores.map { $0 < all.count ? all[$0].value : nil }
-        return Canvas { context, size in
-            let gap: CGFloat = 2
-            let count = CGFloat(max(values.count, 1))
-            let width = (size.width - gap * (count - 1)) / count
-            for (i, value) in values.enumerated() {
-                let x = CGFloat(i) * (width + gap)
-                let slot = CGRect(x: x, y: 0, width: width, height: size.height)
-                context.fill(Path(roundedRect: slot, cornerRadius: 1.5), with: .color(.secondary.opacity(0.25)))
-                if let value {
-                    let h = max(size.height * CGFloat(min(max(value, 0), 1)), 1)
-                    let bar = CGRect(x: x, y: size.height - h, width: width, height: h)
-                    context.fill(Path(roundedRect: bar, cornerRadius: 1.5), with: .color(color))
+                    if count > 0 { break }
+                    try? await Task.sleep(for: .milliseconds(250))
                 }
             }
-        }
-        .frame(height: 18)
-        .help(
-            zip(cores, values).map { cpu, value in "\(cpu)：\(value.map { PercentFormat.string(fromRatio: $0) } ?? "—")" }
-                .joined(separator: "  "))
     }
 }
 

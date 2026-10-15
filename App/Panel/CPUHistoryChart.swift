@@ -20,15 +20,6 @@ struct CPUHistoryChart: View {
 
     private var current: ChartSpan { span ?? defaultSpan }
 
-    /// 一个点：x 为相对现在的秒数（≤ 0），`segment` 在空洞处断开。
-    struct ChartPoint: Identifiable {
-        var id: Double { x }
-        var x: Double
-        var y: Double
-        var peak: Double?
-        var segment: Int
-    }
-
     struct StoredPoint {
         var date: Date
         var avg: Double
@@ -95,81 +86,17 @@ struct CPUHistoryChart: View {
         }
     }
 
-    private var points: [ChartPoint] {
-        if current.usesHistory {
-            let now = Date()
-            var segment = 0
-            var previous: StoredPoint?
-            return stored.map { p in
-                if let previous, p.date.timeIntervalSince(previous.date) > p.bucket * 1.5 { segment += 1 }
-                previous = p
-                // 点画在桶的中间
-                let x = p.date.addingTimeInterval(p.bucket / 2).timeIntervalSince(now)
-                return ChartPoint(x: min(x, 0), y: p.avg, peak: p.max, segment: segment)
-            }
-        }
-        let raw = store.recentPoints(.cpuUsageTotal, seconds: current.seconds)
-        guard let newest = raw.last?.continuousNanos else { return [] }
-        let maxGap = store.maxContinuousGapNanos(for: CPULoadCollector.collectorID)
-        return TimeSeries.segmented(raw, maxGapNanos: maxGap).map { point, value, segment in
-            ChartPoint(x: -Double(newest - point.continuousNanos) / 1e9, y: value, peak: nil, segment: segment)
-        }
-    }
-
     // MARK: - 图
 
-    /// 用 Canvas 自绘（均值线 + 面积 / 峰值带、网格、刻度）。原先用 Swift Charts，每秒重新布局整张图，
-    /// 是面板开销的大头之一（CPU 模块偏离记录 2026-10-15）。
+    /// 绘制区由 ChartDrawView 自绘（AppKit，数据变化时只重绘它自己）；刻度文字是静态的 SwiftUI。
     private var chart: some View {
-        let points = points
         let span = current.seconds
-        let showsArea = !current.usesHistory
-        let ticks = [-span, -span / 2, 0]
+        let stored: [StoredPoint]? = current.usesHistory ? self.stored : nil
         return VStack(spacing: 2) {
             HStack(alignment: .top, spacing: 4) {
-                Canvas { context, size in
-                    func x(_ v: Double) -> CGFloat { CGFloat((v + span) / span) * size.width }
-                    func y(_ v: Double) -> CGFloat { size.height * (1 - CGFloat(min(max(v, 0), 1))) }
-                    // 网格
-                    var grid = Path()
-                    for level in [0.0, 0.5, 1.0] {
-                        grid.move(to: CGPoint(x: 0, y: y(level)))
-                        grid.addLine(to: CGPoint(x: size.width, y: y(level)))
-                    }
-                    for t in ticks {
-                        grid.move(to: CGPoint(x: x(t), y: 0))
-                        grid.addLine(to: CGPoint(x: x(t), y: size.height))
-                    }
-                    context.stroke(grid, with: .color(.secondary.opacity(0.25)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-                    // 按段画：空洞处断开
-                    let segments = Dictionary(grouping: points, by: \.segment).values.map { $0.sorted { $0.x < $1.x } }
-                    for segment in segments where !segment.isEmpty {
-                        var line = Path()
-                        for (i, p) in segment.enumerated() {
-                            let pt = CGPoint(x: x(p.x), y: y(p.y))
-                            if i == 0 { line.move(to: pt) } else { line.addLine(to: pt) }
-                        }
-                        if showsArea, let first = segment.first, let last = segment.last {
-                            var area = line
-                            area.addLine(to: CGPoint(x: x(last.x), y: y(0)))
-                            area.addLine(to: CGPoint(x: x(first.x), y: y(0)))
-                            area.closeSubpath()
-                            context.fill(area, with: .color(.accentColor.opacity(0.18)))
-                        }
-                        // 峰值带：均值到峰值之间
-                        let peaks = segment.filter { $0.peak != nil }
-                        if peaks.count == segment.count, segment.count > 1 {
-                            var band = Path()
-                            for (i, p) in segment.enumerated() {
-                                let pt = CGPoint(x: x(p.x), y: y(p.peak ?? p.y))
-                                if i == 0 { band.move(to: pt) } else { band.addLine(to: pt) }
-                            }
-                            for p in segment.reversed() { band.addLine(to: CGPoint(x: x(p.x), y: y(p.y))) }
-                            band.closeSubpath()
-                            context.fill(band, with: .color(.accentColor.opacity(0.15)))
-                        }
-                        context.stroke(line, with: .color(.accentColor), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
-                    }
+                LiveView(make: { ChartDrawView(store: store) }) { view in
+                    view.spanSeconds = span
+                    view.stored = stored
                 }
                 VStack(alignment: .leading) {
                     Text(PercentFormat.string(fromRatio: 1))
