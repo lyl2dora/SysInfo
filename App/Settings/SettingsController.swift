@@ -13,7 +13,7 @@ import SwiftUI
 import SysCollectors
 import OSLog
 
-/// 设置侧栏的页面，顺序按 D25：通用、菜单栏、每个模块一页、历史与导出、诊断、关于。
+/// 设置侧栏的页面，顺序按 D25、D27；各页职责按 D41（模块页放本模块的一切，菜单栏与历史页只放容器级设置与只读总览）。
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case general
     case menuBar

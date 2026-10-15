@@ -138,3 +138,14 @@ final class StatusItemController {
         Log.menubar.info("\(widget.rawValue, privacy: .public) widget 已移除")
     }
 }
+
+extension CPUStatusItemConfiguration {
+    /// 按当前设置与拓扑生成某个 widget 的显示配置（菜单栏、设置页预览与总览共用）。
+    init(widget: CPUMenuWidget, settings: AppSettings) {
+        let topology = CPUTopologyService.shared.current
+        self.init(
+            widget: widget, style: settings.renderStyle(for: widget), showsLabel: settings.menuBarShowsLabel,
+            coloring: settings.menuBarCPUColoring, levelCount: max(topology?.perfLevels.count ?? 2, 1),
+            coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8)
+    }
+}

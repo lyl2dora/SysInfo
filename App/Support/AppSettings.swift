@@ -7,7 +7,10 @@
 // - cpu.interval          CPU 模块的间隔覆盖：0 表示跟随全局，否则 1 / 2 / 5
 // - menubar.cpu.visible   CPU 占用 widget 是否显示
 // - menubar.cpu.freq.visible / .temp.visible / .power.visible   频率、温度、功耗 widget 是否显示（D38，默认关）
-// - menubar.cpu.style / .label / .coloring / .warningPercent / .criticalPercent   菜单栏 CPU item 的样式与着色（D32）
+// - menubar.layout / menubar.label   所有 widget 共用的排版（stacked / inline）与小标签开关（D41）
+// - menubar.cpu.usage.presentation   占用 widget 的呈现形式（number / sparkline / barsTotal / barsLevels / barsCores，D41）
+// - menubar.cpu.coloring / .warningPercent / .criticalPercent   占用着色与阈值（D32）
+// - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
 // - cpu.panel.topNRows / .grouping / .chartSpan / .splitUserSystem   面板显示
 // - history.cpu.enabled / history.apps.enabled / history.cpu.highPrecision   是否记录历史与后台高精度（D30、D19）
@@ -38,8 +41,12 @@ final class AppSettings {
         static let historyCPU = "history.cpu.enabled"
         static let historyApps = "history.apps.enabled"
         static let historyHighPrecision = "history.cpu.highPrecision"
-        static let menuBarCPUStyle = "menubar.cpu.style"
-        static let menuBarCPULabel = "menubar.cpu.label"
+        static let menuBarLayout = "menubar.layout"
+        static let menuBarLabel = "menubar.label"
+        static let cpuUsagePresentation = "menubar.cpu.usage.presentation"
+        /// D41 之前的键，只读不写。
+        static let legacyCPUStyle = "menubar.cpu.style"
+        static let legacyCPULabel = "menubar.cpu.label"
         static let menuBarCPUColoring = "menubar.cpu.coloring"
         static let menuBarCPUWarning = "menubar.cpu.warningPercent"
         static let menuBarCPUCritical = "menubar.cpu.criticalPercent"
@@ -128,14 +135,25 @@ final class AppSettings {
         didSet { persist(historyHighPrecision, Key.historyHighPrecision) }
     }
 
-    /// 菜单栏 CPU item 的样式（D32：默认上下布局）。
-    var menuBarCPUStyle: MenuBarCPUStyle {
-        didSet { persist(menuBarCPUStyle.rawValue, Key.menuBarCPUStyle) }
+    /// 所有 widget 共用的排版（D32 默认上下；D41 改为全局）。
+    var menuBarLayout: MenuBarLayout {
+        didSet { persist(menuBarLayout.rawValue, Key.menuBarLayout) }
     }
 
-    /// 是否显示「CPU」小标签。
-    var menuBarCPULabel: Bool {
-        didSet { persist(menuBarCPULabel, Key.menuBarCPULabel) }
+    /// 所有 widget 是否显示小标签（D41：全局）。
+    var menuBarShowsLabel: Bool {
+        didSet { persist(menuBarShowsLabel, Key.menuBarLabel) }
+    }
+
+    /// 占用 widget 的呈现形式（D41：按 widget 设置）。
+    var cpuUsagePresentation: CPUUsagePresentation {
+        didSet { persist(cpuUsagePresentation.rawValue, Key.cpuUsagePresentation) }
+    }
+
+    /// widget 实际的绘制样式：占用 widget 选了图形时用图形，其余按全局排版。
+    func renderStyle(for widget: CPUMenuWidget) -> MenuBarCPUStyle {
+        if widget == .usage, let graphic = cpuUsagePresentation.graphicStyle { return graphic }
+        return menuBarLayout == .inline ? .inline : .stacked
     }
 
     /// 是否按占用着色（D32：默认开）。
@@ -214,8 +232,16 @@ final class AppSettings {
         historyCPUEnabled = defaults?.object(forKey: Key.historyCPU) as? Bool ?? true
         historyAppsEnabled = defaults?.object(forKey: Key.historyApps) as? Bool ?? true
         historyHighPrecision = defaults?.object(forKey: Key.historyHighPrecision) as? Bool ?? false
-        menuBarCPUStyle = defaults?.string(forKey: Key.menuBarCPUStyle).flatMap(MenuBarCPUStyle.init(rawValue:)) ?? .stacked
-        menuBarCPULabel = defaults?.object(forKey: Key.menuBarCPULabel) as? Bool ?? true
+        // D41 之前只有一个样式键：上下 / 左右换算成排版，图形换算成占用的呈现形式。
+        let legacyStyle = defaults?.string(forKey: Key.legacyCPUStyle).flatMap(MenuBarCPUStyle.init(rawValue:))
+        menuBarLayout =
+            defaults?.string(forKey: Key.menuBarLayout).flatMap(MenuBarLayout.init(rawValue:))
+            ?? (legacyStyle == .inline ? .inline : .stacked)
+        menuBarShowsLabel =
+            defaults?.object(forKey: Key.menuBarLabel) as? Bool ?? defaults?.object(forKey: Key.legacyCPULabel) as? Bool ?? true
+        cpuUsagePresentation =
+            defaults?.string(forKey: Key.cpuUsagePresentation).flatMap(CPUUsagePresentation.init(rawValue:))
+            ?? legacyStyle.flatMap(CPUUsagePresentation.init(graphicStyle:)) ?? .number
         menuBarCPUColoring = defaults?.object(forKey: Key.menuBarCPUColoring) as? Bool ?? true
         menuBarCPUWarningPercent = Self.int(defaults, Key.menuBarCPUWarning, in: 50...100) ?? 85
         menuBarCPUCriticalPercent = Self.int(defaults, Key.menuBarCPUCritical, in: 50...100) ?? 95
@@ -244,7 +270,43 @@ final class AppSettings {
     }
 }
 
-/// 菜单栏 CPU item 的样式（D32、边界稿 §5.1）。
+/// 所有 widget 共用的排版（D41）。
+enum MenuBarLayout: String, CaseIterable, Identifiable {
+    /// 上行小标签，下行数值（D32 默认）。
+    case stacked
+    /// 左右布局「CPU 23%」。
+    case inline
+
+    var id: String { rawValue }
+}
+
+/// 占用 widget 的呈现形式（D41）：数字跟随全局排版，图形固定按上下布局画。
+enum CPUUsagePresentation: String, CaseIterable, Identifiable {
+    case number
+    case sparkline
+    case barsTotal
+    case barsLevels
+    case barsCores
+
+    var id: String { rawValue }
+
+    var graphicStyle: MenuBarCPUStyle? {
+        switch self {
+        case .number: nil
+        case .sparkline: .sparkline
+        case .barsTotal: .barsTotal
+        case .barsLevels: .barsLevels
+        case .barsCores: .barsCores
+        }
+    }
+
+    init?(graphicStyle: MenuBarCPUStyle) {
+        guard let match = Self.allCases.first(where: { $0.graphicStyle == graphicStyle }) else { return nil }
+        self = match
+    }
+}
+
+/// widget 的绘制样式（D32、边界稿 §5.1），由排版与呈现形式合成（`AppSettings.renderStyle(for:)`）。
 enum MenuBarCPUStyle: String, CaseIterable, Identifiable {
     /// 上行小标签「CPU」，下行数值（默认）。
     case stacked

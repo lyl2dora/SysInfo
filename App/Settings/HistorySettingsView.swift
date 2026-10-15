@@ -1,7 +1,7 @@
 // 设置的「历史与导出」页（CPU 模块设计 §7.3、§6，D30）。
 //
-// - 是否记录 CPU 历史、是否记录每应用 CPU；一键清除每应用数据；
-// - 历史库概况（大小、时间范围、行数）；
+// - 各模块记录状态的只读总览（D41：记录开关在模块页）；
+// - 历史库概况（大小、时间范围、行数）；一键清除每应用数据；
 // - 导出：时间范围、粒度、格式（CSV 文件夹或 JSON Lines）、是否含每应用数据。只在点击时运行。
 
 import AppKit
@@ -11,6 +11,7 @@ import SysStore
 struct HistorySettingsView: View {
     @Bindable var settings: AppSettings
     let history: HistoryRecorder?
+    let openPage: (SettingsPage) -> Void
 
     @State private var stats: HistoryStats?
     @State private var message: String?
@@ -48,14 +49,17 @@ struct HistorySettingsView: View {
 
     var body: some View {
         Form {
-            Section("记录") {
-                Toggle("记录 CPU 历史", isOn: $settings.historyCPUEnabled)
-                Toggle("记录每应用 CPU", isOn: $settings.historyAppsEnabled)
-                Text("面板关闭时也在后台低频采样（占用、频率每 60 秒，温度与每应用每 10 秒），锁屏和显示器睡眠时不停。分钟数据与每应用数据保留 30 天，小时数据永久保留。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Button("清除每应用数据…") { confirmClear = true }
-                    .disabled(history == nil || busy)
+            Section {
+                LabeledContent("CPU") {
+                    HStack {
+                        Text(recordingSummary)
+                        Button("设置…") { openPage(.cpu) }
+                    }
+                }
+            } header: {
+                Text("记录")
+            } footer: {
+                Text("记录开关在各模块页。锁屏和显示器睡眠时后台记录不停。分钟数据与每应用数据保留 30 天，小时数据永久保留。")
             }
 
             Section("历史库") {
@@ -72,6 +76,8 @@ struct HistorySettingsView: View {
                 } else {
                     ProgressView().controlSize(.small)
                 }
+                Button("清除每应用数据…") { confirmClear = true }
+                    .disabled(history == nil || busy)
             }
 
             Section("导出") {
@@ -114,6 +120,17 @@ struct HistorySettingsView: View {
         } message: {
             Text("整机历史不受影响。此操作无法撤销。")
         }
+    }
+
+    /// 只读：CPU 模块当前记录了哪些（D41）。
+    private var recordingSummary: String {
+        guard settings.historyCPUEnabled || settings.historyAppsEnabled else { return String(localized: "不记录") }
+        var parts: [String] = []
+        if settings.historyCPUEnabled {
+            parts.append(settings.historyHighPrecision ? String(localized: "整机（高精度）") : String(localized: "整机"))
+        }
+        if settings.historyAppsEnabled { parts.append(String(localized: "每应用")) }
+        return parts.joined(separator: String(localized: "、"))
     }
 
     private func reload() async {
