@@ -340,6 +340,12 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         frame.size.height = height
         if presentation == .anchored {
             frame = anchoredFrame(for: frame.size)
+        } else if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+            // 浮窗向下长到屏幕可见区域以外（被程序坞挡住）时，整体往上挪，但顶边不超出可见区域。
+            let margin = Self.screenMargin
+            if frame.minY < visible.minY + margin {
+                frame.origin.y = min(visible.minY + margin, visible.maxY - margin - frame.height)
+            }
         }
         panel.setFrame(frame, display: true)
     }

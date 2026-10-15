@@ -59,12 +59,15 @@ extension TopNSection {
     fileprivate var layoutSignature: [Int] {
         [model.rows.count, model.isFallback ? 1 : 0]
             + model.rows.map { row in
-                (row.topMember == nil ? 0 : 1) + (expanded.contains(row.id) ? 2 + row.members.count * 4 : 0)
+                (row.topMember == nil ? 0 : 1) + (expanded.contains(row.id) ? 2 + min(row.members.count, 9) * 4 : 0)
             }
     }
 }
 
 private struct TopNRowView: View {
+    /// 展开后最多列出的成员数（按 CPU 降序）；宿主 coalition 可能有几十个成员，全列出来面板会比屏幕还高。
+    static let memberLimit = 8
+
     let row: TopNRow
     let expanded: Bool
     let toggle: () -> Void
@@ -117,7 +120,7 @@ private struct TopNRowView: View {
             .font(.caption)
             .monospacedDigit()
             if expanded {
-                ForEach(row.members, id: \.pid) { member in
+                ForEach(row.members.prefix(Self.memberLimit), id: \.pid) { member in
                     HStack(spacing: 6) {
                         Text(member.name).lineLimit(1).padding(.leading, 22)
                         Spacer()
@@ -132,6 +135,14 @@ private struct TopNRowView: View {
                     .font(.caption2)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                }
+                if row.members.count > Self.memberLimit {
+                    let rest = row.members.dropFirst(Self.memberLimit)
+                    let cpu = rest.reduce(0.0) { $0 + ($1.cpu ?? 0) }
+                    Text("另有 \(rest.count) 个你的进程 · \(PercentFormat.string(fromRatio: cpu))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 22)
                 }
                 if row.residualCount > 0 {
                     Text("另有 \(row.residualCount) 个其他用户或 root 的进程\(row.residualCPU.map { " · " + PercentFormat.string(fromRatio: $0) } ?? "")")

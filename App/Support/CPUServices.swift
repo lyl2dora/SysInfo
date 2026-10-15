@@ -129,7 +129,9 @@ final class TopNModel {
 
     /// 结束进程（D31）：先确认，按住 ⌥ 时默认强制。GUI app 用 NSRunningApplication，其余用信号。
     func terminate(pid: pid_t, name: String) {
-        let optionHeld = NSEvent.modifierFlags.contains(.option)
+        // 先看触发这次操作的事件上的修饰键（合成点击也带在事件上），再看全局键盘状态。
+        let optionHeld = (NSApp.currentEvent?.modifierFlags ?? []).contains(.option)
+            || NSEvent.modifierFlags.contains(.option)
         let alert = NSAlert()
         alert.messageText = String(localized: "结束「\(name)」？")
         alert.informativeText = String(localized: "未存储的更改可能会丢失。强制结束不会给进程清理的机会。")
