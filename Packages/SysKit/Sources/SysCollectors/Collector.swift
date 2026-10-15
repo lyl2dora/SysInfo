@@ -58,7 +58,8 @@ public struct CollectorOutput: Sendable, Hashable {
 /// 各处共用的采集器清单：app 交给引擎，sysinfo-cli selftest 逐个自检。
 public enum StandardCollectors: Sendable {
     /// 全部采集器：CPU 负载（`cpu.load`）、频率（`cpu.freq`）、杂项（`cpu.misc`）、温度与功耗（`cpu.sensors`）、应用活动（`app.coalition`）、
-    /// 本进程开销（`app.self`），以及功耗与散热（`power.rail`、`power.sensors`、`power.gpu`、`power.pmgr`、`sensors.catalog`）。
+    /// 本进程开销（`app.self`），功耗与散热（`power.rail`、`power.sensors`、`power.gpu`、`power.pmgr`、`sensors.catalog`），
+    /// 以及内存（`memory.vm`、`memory.bandwidth`）。
     /// 每次调用返回新实例。`cpu.load` 排在最前：它的自检会刷新拓扑，其余采集器按拓扑建方案。
     public static func make() -> [any Collector] {
         let frequency = CPUFrequencyCollector()
@@ -67,7 +68,7 @@ public enum StandardCollectors: Sendable {
             CPULoadCollector(), frequency, CPUMiscCollector(), InterruptDeviceCollector(),
             CoreFrequencyCollector(frequency: frequency), SensorCollector(), AppSampler(), SelfUsageCollector(),
             PowerRailCollector(ledger: ledger), PowerSensorCollector(ledger: ledger), GPUPowerCollector(ledger: ledger),
-            PMGRBatchCollector(ledger: ledger), SensorCatalog(),
+            PMGRBatchCollector(ledger: ledger), SensorCatalog(), MemoryCollector(), DRAMBandwidthCollector(),
         ]
     }
 }

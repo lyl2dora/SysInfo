@@ -48,7 +48,19 @@ struct PowerCollectors {
     var hasFans: Bool { !(sensors?.fans.isEmpty ?? true) }
 }
 
-/// Top N（D31，CPU 模块设计 §5.7、§7.2）：只在 CPU tab 可见且行数大于 0 时工作。
+/// 引擎里的内存采集器实例（诊断页读状态，D49）。
+struct MemoryCollectors {
+    var vm: MemoryCollector?
+    var bandwidth: DRAMBandwidthCollector?
+
+    init(_ collectors: [any Collector]) {
+        vm = collectors.compactMap { $0 as? MemoryCollector }.first
+        bandwidth = collectors.compactMap { $0 as? DRAMBandwidthCollector }.first
+    }
+}
+
+/// Top N（D31，CPU 模块设计 §5.7、§7.2）：只在所属 tab 可见且行数大于 0 时工作。
+/// CPU 与内存（D49）各用一个实例，共用同一次 coalition 扫描；内存按 footprint 排序，不需要差分。
 /// 组装（libproc 查询、名称解析）在后台执行，不占 MainActor（D03、D23）。
 @Observable
 final class TopNModel {
@@ -62,6 +74,9 @@ final class TopNModel {
     /// 鼠标悬停在列表上时冻结排序（CPU 模块设计 §5.7）。
     var isFrozen = false
 
+    /// 按 CPU 还是按内存排序。
+    let metric: TopNMetric
+    @ObservationIgnored private var isActive = false
     @ObservationIgnored private let builder = TopNBuilder()
     @ObservationIgnored private let fallbackSampler = SameUIDSampler()
     @ObservationIgnored private let sampler: AppSampler?
@@ -73,14 +88,16 @@ final class TopNModel {
     /// 两档芯片、拓扑成立、槽位可信时显示 perflevel0 占比（D29）。
     @ObservationIgnored var showsPerfLevel0 = false
 
-    init(sampler: AppSampler?) {
+    init(sampler: AppSampler?, metric: TopNMetric = .cpu) {
         self.sampler = sampler
+        self.metric = metric
     }
 
-    /// 面板的 CPU tab 显示或隐藏。
+    /// 面板里所属的 tab 显示或隐藏。
     func setActive(_ active: Bool, coalitionUsable: Bool) {
         fallbackTimer?.invalidate()
         fallbackTimer = nil
+        isActive = active
         isFallback = active && (!coalitionUsable || sampler == nil)
         guard active else {
             rows = []
@@ -90,7 +107,11 @@ final class TopNModel {
         // 立即用它组装第一版，不必等面板自己的两次扫描（约 2–3 s 的「等待数据」）。
         if !isFallback { coalitionTick(maxAgeSeconds: Self.firstWindowMaxAge) }
         if isFallback {
-            _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
+            if metric == .memory {
+                refreshFallback()  // footprint 是当前值，不需要基线
+            } else {
+                _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
+            }
             let timer = Timer(timeInterval: TimeInterval(interval), repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshFallback() }
             }
@@ -104,7 +125,12 @@ final class TopNModel {
 
     /// 引擎交付了一个 `app.coalition` 结果；或面板刚打开，用已有的窗口（不超过 `maxAgeSeconds`）。
     func coalitionTick(maxAgeSeconds: Double? = nil) {
-        guard !isFallback, !building, !isFrozen, rowCount > 0, let sampler, let window = sampler.latestWindow else { return }
+        guard isActive, !isFallback, !building, !isFrozen, rowCount > 0, let sampler else { return }
+        if metric == .memory {
+            memoryTick(sampler, maxAgeSeconds: maxAgeSeconds)
+            return
+        }
+        guard let window = sampler.latestWindow else { return }
         if let maxAgeSeconds {
             let age = Double(SampleTime.now().continuousNanos &- window.time.continuousNanos) / 1e9
             guard age <= maxAgeSeconds else { return }
@@ -121,7 +147,28 @@ final class TopNModel {
             await MainActor.run {
                 guard let self else { return }
                 self.building = false
-                if !self.isFrozen { self.rows = built }
+                if !self.isFrozen, self.isActive { self.rows = built }
+            }
+        }
+    }
+
+    /// 内存：用最近一次扫描的 footprint 组装（D49）。
+    private func memoryTick(_ sampler: AppSampler, maxAgeSeconds: Double?) {
+        guard let footprints = sampler.latestFootprints else { return }
+        if let maxAgeSeconds {
+            let age = Double(SampleTime.now().continuousNanos &- footprints.time.continuousNanos) / 1e9
+            guard age <= maxAgeSeconds else { return }
+        }
+        building = true
+        let builder = builder
+        let rows = rowCount
+        let grouping = grouping
+        Task.detached(priority: .utility) { [weak self] in
+            let built = builder.buildMemory(footprints: footprints, rows: rows, grouping: grouping)
+            await MainActor.run {
+                guard let self else { return }
+                self.building = false
+                if !self.isFrozen, self.isActive { self.rows = built }
             }
         }
     }
@@ -131,8 +178,9 @@ final class TopNModel {
         building = true
         let sampler = fallbackSampler
         let rows = rowCount
+        let memory = metric == .memory
         Task.detached(priority: .utility) { [weak self] in
-            let result = sampler.sample(rows: rows)
+            let result = memory ? sampler.sampleMemory(rows: rows) : sampler.sample(rows: rows)
             await MainActor.run {
                 guard let self else { return }
                 self.building = false
@@ -143,8 +191,11 @@ final class TopNModel {
     }
 
     /// 回退时的「刷新全部」：间隔 2 s 运行两次 setuid `/bin/ps`，只在点击时运行（D31，CLAUDE.md）。
+    /// 只有 CPU 有：`ps` 没有 footprint 列（D49）。
+    var supportsRefreshAll: Bool { metric == .cpu }
+
     func refreshAll() {
-        guard isFallback, !isRefreshingAll else { return }
+        guard isFallback, supportsRefreshAll, !isRefreshingAll else { return }
         isRefreshingAll = true
         let rows = rowCount
         Task.detached(priority: .utility) { [weak self] in
@@ -200,15 +251,23 @@ final class AppServices {
     let collectors: CPUCollectors
     let power: PowerCollectors
     let topN: TopNModel
+    /// 内存面板的 Top N（D49）。
+    let memoryTopN: TopNModel
+    let memory: MemoryCollectors
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
     private let interruptDemand: DemandSlot
 
-    init(collectors: CPUCollectors, power: PowerCollectors, history: HistoryRecorder?, engine: SamplingEngine) {
+    init(
+        collectors: CPUCollectors, power: PowerCollectors, memory: MemoryCollectors, history: HistoryRecorder?,
+        engine: SamplingEngine
+    ) {
         self.collectors = collectors
         self.power = power
+        self.memory = memory
         self.topN = TopNModel(sampler: collectors.apps)
+        self.memoryTopN = TopNModel(sampler: collectors.apps, metric: .memory)
         self.history = history
         self.interruptDemand = DemandSlot(engine: engine)
     }
@@ -222,6 +281,9 @@ final class AppServices {
     func handle(_ event: EngineEvent) {
         guard case .tick(let result) = event else { return }
         diagnostics.ingest(result)
-        if result.collectors.contains(AppSampler.collectorID) { topN.coalitionTick() }
+        if result.collectors.contains(AppSampler.collectorID) {
+            topN.coalitionTick()
+            memoryTopN.coalitionTick()
+        }
     }
 }

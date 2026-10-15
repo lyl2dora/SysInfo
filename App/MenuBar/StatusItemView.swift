@@ -22,6 +22,8 @@ struct StatusItemConfiguration: Equatable {
     var levelCount = 2
     /// 每核柱的个数（逻辑核数）。
     var coreCount = 8
+    /// 内存占用 widget 显示已用 GB 而不是百分比（D49）。
+    var memoryShowsBytes = false
 }
 
 final class StatusItemView: NSView {
@@ -52,18 +54,29 @@ final class StatusItemView: NSView {
         case .socPower: String(localized: "SOC", comment: "菜单栏小标签：SoC 功率，保持英文缩写")
         case .gpuPower: String(localized: "GPU", comment: "菜单栏小标签：GPU 功率，保持英文缩写")
         case .fan: String(localized: "FAN", comment: "菜单栏小标签：风扇转速，保持英文缩写")
+        case .memoryUsage: String(localized: "MEM", comment: "菜单栏小标签：内存占用，保持英文缩写")
+        case .memoryPressure: String(localized: "PRES", comment: "菜单栏小标签：内存压力，保持英文缩写")
+        case .swapUsed: String(localized: "SWAP", comment: "菜单栏小标签：Swap 用量，保持英文缩写")
         }
     }
 
     /// 各 widget 数值的最坏情况，用来定宽。
-    private static func widestValue(_ widget: MenuWidget) -> String {
-        switch widget {
-        case .usage: "100%"
+    private static func widestValue(_ c: StatusItemConfiguration) -> String {
+        switch c.widget {
+        case .usage, .memoryPressure: "100%"
+        case .memoryUsage: c.memoryShowsBytes ? "99.9G" : "100%"
         case .frequency: "9.99G"
         case .temperature, .socHotspot: "125°"
         case .power, .systemPower, .socPower, .gpuPower: "99.9W"
         case .fan: "9999"
+        case .swapUsed: "99.9G"
         }
+    }
+
+    /// 内存字节数的显示：按 1024 换算成 GB，<100 一位小数，否则取整（「99.9G」与「128G」同宽或更窄）。
+    static func gigabytesText(_ bytes: Double) -> String {
+        let gb = bytes / 1_073_741_824
+        return String(format: gb < 99.95 ? "%.1fG" : "%.0fG", gb)
     }
 
     /// 功率的显示：<10 W 一位小数，否则取整（「99.9W」与「188W」同宽）。
@@ -84,7 +97,7 @@ final class StatusItemView: NSView {
     /// 按样式的最坏情况算好的固定宽度。
     static func fixedWidth(for c: StatusItemConfiguration) -> CGFloat {
         let label = label(c.widget)
-        let widestValue = widestValue(c.widget)
+        let widestValue = widestValue(c)
         let stackedLabel = c.showsLabel ? textWidth(label, stackedLabelFont) : 0
         let content: CGFloat
         switch effectiveStyle(c) {
@@ -152,6 +165,13 @@ final class StatusItemView: NSView {
             // 多风扇时显示最快的一个。
             let rpm = store.latest.compactMap { id, sample in id.fanSpeedIndex != nil ? sample.value : nil }.max()
             return rpm.map { String(format: "%.0f", $0) }
+        case .memoryUsage:
+            if configuration.memoryShowsBytes { return store.latest[.memoryUsed]?.value.map(Self.gigabytesText) }
+            return store.latest[.memoryUsage]?.value.map { PercentFormat.string(fromRatio: $0) }
+        case .memoryPressure:
+            return store.latest[.memoryPressure]?.value.map { PercentFormat.string(fromRatio: $0) }
+        case .swapUsed:
+            return store.latest[.memorySwapUsed]?.value.map(Self.gigabytesText)
         }
     }
 

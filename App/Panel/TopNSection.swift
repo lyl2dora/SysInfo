@@ -3,7 +3,8 @@
 // - 默认按应用分组，一个 coalition 一行，可展开看同 uid 成员；宿主 coalition 的副标题是占比最高的成员；
 // - 同 uid 的进程才有「结束」按钮，先确认，按住 ⌥ 时默认强制；组行、root、其他用户、SysInfo 自身没有按钮；
 // - 鼠标悬停在列表上时冻结排序；
-// - coalition 不可用时只列同 uid 进程，并提供手动「刷新全部」（setuid ps，只在点击时运行）。
+// - coalition 不可用时只列同 uid 进程，并提供手动「刷新全部」（setuid ps，只在点击时运行；内存没有，D49）；
+// - 内存面板（D49）复用同一套行：数值列换成 footprint，副标题、成员、外部成员合计都按 footprint。
 
 import AppKit
 import SwiftUI
@@ -20,7 +21,7 @@ struct TopNSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(grouping == .byApp ? "占用最高的应用" : "占用最高的进程")
+                Text(heading)
                     .font(.caption.weight(.semibold))
                 Spacer()
                 if model.isFrozen {
@@ -33,15 +34,17 @@ struct TopNSection: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button(model.isRefreshingAll ? "刷新中…" : "刷新全部", action: model.refreshAll)
-                        .controlSize(.mini)
-                        .disabled(model.isRefreshingAll)
-                        .help("运行两次 /bin/ps，间隔 2 秒，列出所有用户的进程")
+                    if model.supportsRefreshAll {
+                        Button(model.isRefreshingAll ? "刷新中…" : "刷新全部", action: model.refreshAll)
+                            .controlSize(.mini)
+                            .disabled(model.isRefreshingAll)
+                            .help("运行两次 /bin/ps，间隔 2 秒，列出所有用户的进程")
+                    }
                 }
             }
             ForEach(model.rows.prefix(slots)) { row in
                 TopNRowView(
-                    row: row, expanded: expanded.contains(row.id),
+                    row: row, metric: model.metric, expanded: expanded.contains(row.id),
                     toggle: {
                         if expanded.contains(row.id) { expanded.remove(row.id) } else { expanded.insert(row.id) }
                     },
@@ -58,6 +61,15 @@ struct TopNSection: View {
 }
 
 extension TopNSection {
+    fileprivate var heading: String {
+        switch (model.metric, grouping) {
+        case (.cpu, .byApp): String(localized: "占用最高的应用")
+        case (.cpu, .byProcess): String(localized: "占用最高的进程")
+        case (.memory, .byApp): String(localized: "内存最多的应用")
+        case (.memory, .byProcess): String(localized: "内存最多的进程")
+        }
+    }
+
     /// 影响高度的结构：行位数、回退提示、展开的行及其成员数。行高固定，行数据本身不影响高度。
     fileprivate var layoutSignature: [Int] {
         [slots, model.isFallback ? 1 : 0]
@@ -72,6 +84,7 @@ private struct TopNRowView: View {
     static let memberLimit = 8
 
     let row: TopNRow
+    let metric: TopNMetric
     let expanded: Bool
     let toggle: () -> Void
     let terminate: (pid_t, String) -> Void
@@ -90,7 +103,7 @@ private struct TopNRowView: View {
                             }
                         }
                         if let top = row.topMember {
-                            Text("\(top.name) \(top.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "")")
+                            Text("\(top.name) \(memberValue(top) ?? "")")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -107,8 +120,8 @@ private struct TopNRowView: View {
                 if let watts = row.energyWatts {
                     Text(Formatting.watts(watts)).font(.caption2).foregroundStyle(.secondary)
                 }
-                Text(PercentFormat.string(fromRatio: row.cpu))
-                    .frame(width: 44, alignment: .trailing)
+                Text(rowValue)
+                    .frame(width: valueWidth, alignment: .trailing)
                 if row.eligibility.isAllowed {
                     killButton(pid: row.representativePID, name: row.name)
                 } else if !row.members.isEmpty {
@@ -130,8 +143,8 @@ private struct TopNRowView: View {
                     HStack(spacing: 6) {
                         Text(member.name).lineLimit(1).padding(.leading, 22)
                         Spacer()
-                        Text(member.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "—")
-                            .frame(width: 44, alignment: .trailing)
+                        Text(memberValue(member) ?? "—")
+                            .frame(width: valueWidth, alignment: .trailing)
                         if member.eligibility.isAllowed {
                             killButton(pid: member.pid, name: member.name)
                         } else {
@@ -144,19 +157,43 @@ private struct TopNRowView: View {
                 }
                 if row.members.count > Self.memberLimit {
                     let rest = row.members.dropFirst(Self.memberLimit)
-                    let cpu = rest.reduce(0.0) { $0 + ($1.cpu ?? 0) }
-                    Text("另有 \(rest.count) 个你的进程 · \(PercentFormat.string(fromRatio: cpu))")
+                    let total =
+                        metric == .memory
+                        ? Formatting.memory(Double(rest.reduce(UInt64(0)) { $0 + ($1.footprint ?? 0) }))
+                        : PercentFormat.string(fromRatio: rest.reduce(0.0) { $0 + ($1.cpu ?? 0) })
+                    Text("另有 \(rest.count) 个你的进程 · \(total)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 22)
                 }
                 if row.residualCount > 0 {
-                    Text("另有 \(row.residualCount) 个其他用户或 root 的进程\(row.residualCPU.map { " · " + PercentFormat.string(fromRatio: $0) } ?? "")")
+                    let residual =
+                        metric == .memory
+                        ? row.residualFootprint.map { Formatting.memory(Double($0)) }
+                        : row.residualCPU.map { PercentFormat.string(fromRatio: $0) }
+                    Text("另有 \(row.residualCount) 个其他用户或 root 的进程\(residual.map { " · " + $0 } ?? "")")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 22)
                 }
             }
+        }
+    }
+
+    /// 数值列宽：百分比 44 pt；内存（「12.34 GB」）要宽一些。
+    private var valueWidth: CGFloat { metric == .memory ? 62 : 44 }
+
+    private var rowValue: String {
+        switch metric {
+        case .cpu: PercentFormat.string(fromRatio: row.cpu)
+        case .memory: row.footprint.map { Formatting.memory(Double($0)) } ?? "—"
+        }
+    }
+
+    private func memberValue(_ member: TopNMember) -> String? {
+        switch metric {
+        case .cpu: member.cpu.map { PercentFormat.string(fromRatio: $0) }
+        case .memory: member.footprint.map { Formatting.memory(Double($0)) }
         }
     }
 

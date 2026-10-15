@@ -13,6 +13,10 @@
 // - menubar.power.<widget>.visible / .color   功耗与散热 widget（systemPower / socHotspot / socPower / gpuPower / fan，D44：只有 systemPower 默认开）
 // - power.interval / power.panel.interval / power.panel.chartSpan / power.panel.overlaySoC   功耗与散热的常驻间隔覆盖与面板设置
 // - history.power.enabled / history.energy.enabled   是否记录功耗与散热历史、是否记录能耗（D46）
+// - menubar.memory.<widget>.visible / .color   内存 widget（memoryUsage / memoryPressure / swapUsed，D49、D51：只有 memoryUsage 默认开）
+// - menubar.memory.usage.presentation   内存占用 widget 显示百分比（percent）或已用 GB（bytes）
+// - memory.interval / memory.panel.topNInterval / .topNRows / .grouping / .chartSpan / .overlayPressure   内存的常驻间隔覆盖与面板设置
+// - history.memory.enabled   是否记录内存历史（D49）
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
@@ -60,6 +64,14 @@ final class AppSettings {
         static let powerChartOverlaySoC = "power.panel.overlaySoC"
         static let historyPower = "history.power.enabled"
         static let historyEnergy = "history.energy.enabled"
+        static let memoryInterval = "memory.interval"
+        static let memoryUsagePresentation = "menubar.memory.usage.presentation"
+        static let memoryTopNInterval = "memory.panel.topNInterval"
+        static let memoryTopNRows = "memory.panel.topNRows"
+        static let memoryGrouping = "memory.panel.grouping"
+        static let memoryChartSpan = "memory.panel.chartSpan"
+        static let memoryChartOverlayPressure = "memory.panel.overlayPressure"
+        static let historyMemory = "history.memory.enabled"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -102,7 +114,7 @@ final class AppSettings {
         didSet { persist(cpuPowerItemVisible, Key.cpuPowerItemVisible) }
     }
 
-    /// 功耗与散热 widget 的显示开关（D44：出厂只开整机功率）。
+    /// CPU 以外各模块 widget 的显示开关（D44：功耗只开整机功率；D51：内存只开占用）。
     private(set) var powerWidgetsVisible: [MenuWidget: Bool]
 
     /// 当前显示的 widget（全部模块，D38）。
@@ -259,11 +271,57 @@ final class AppSettings {
         didSet { persist(historyEnergyEnabled, Key.historyEnergy) }
     }
 
+    // MARK: 内存（D49）
+
+    /// 内存模块的常驻间隔覆盖；nil 表示跟随全局默认（D25）。
+    var memoryIntervalOverride: SamplingInterval? {
+        didSet { persist(memoryIntervalOverride?.rawValue ?? 0, Key.memoryInterval) }
+    }
+
+    /// 内存模块实际使用的常驻间隔。
+    var memoryInterval: SamplingInterval { memoryIntervalOverride ?? globalInterval }
+
+    /// 内存占用 widget 显示百分比还是已用 GB。
+    var memoryUsagePresentation: MemoryUsagePresentation {
+        didSet { persist(memoryUsagePresentation.rawValue, Key.memoryUsagePresentation) }
+    }
+
+    /// 面板内存 Top N 的间隔（默认 5 s：footprint 变化慢，coalition 全量扫描一次约 10–14 ms）。
+    var memoryTopNInterval: Int {
+        didSet { persist(memoryTopNInterval, Key.memoryTopNInterval) }
+    }
+
+    /// 内存 Top N 行数（0/3/5/8/10，默认 5）。
+    var memoryTopNRows: Int {
+        didSet { persist(memoryTopNRows, Key.memoryTopNRows) }
+    }
+
+    /// 内存 Top N 分组方式（默认按应用，D31）。
+    var memoryGrouping: TopNGrouping {
+        didSet { persist(memoryGrouping.rawValue, Key.memoryGrouping) }
+    }
+
+    /// 内存图的默认跨度。
+    var memoryChartSpan: ChartSpan {
+        didSet { persist(memoryChartSpan.rawValue, Key.memoryChartSpan) }
+    }
+
+    /// 内存图是否叠加压力。
+    var memoryChartOverlayPressure: Bool {
+        didSet { persist(memoryChartOverlayPressure, Key.memoryChartOverlayPressure) }
+    }
+
+    /// 是否记录内存历史（默认开）。
+    var historyMemoryEnabled: Bool {
+        didSet { persist(historyMemoryEnabled, Key.historyMemory) }
+    }
+
     /// 某个模块实际使用的常驻间隔。
     func interval(for module: MenuModule) -> SamplingInterval {
         switch module {
         case .cpu: cpuInterval
         case .power: powerInterval
+        case .memory: memoryInterval
         }
     }
 
@@ -308,7 +366,7 @@ final class AppSettings {
         panelChartSpan = defaults?.string(forKey: Key.panelChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
         panelSplitUserSystem = defaults?.object(forKey: Key.panelSplitUserSystem) as? Bool ?? true
         powerWidgetsVisible = Dictionary(
-            uniqueKeysWithValues: MenuWidget.widgets(of: .power).map { widget in
+            uniqueKeysWithValues: MenuWidget.allCases.filter { $0.module != .cpu }.map { widget in
                 (widget, defaults?.object(forKey: Key.widgetVisible(widget)) as? Bool ?? widget.visibleByDefault)
             })
         powerIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.powerInterval)) }
@@ -317,6 +375,15 @@ final class AppSettings {
         powerChartOverlaySoC = defaults?.object(forKey: Key.powerChartOverlaySoC) as? Bool ?? true
         historyPowerEnabled = defaults?.object(forKey: Key.historyPower) as? Bool ?? true
         historyEnergyEnabled = defaults?.object(forKey: Key.historyEnergy) as? Bool ?? true
+        memoryIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.memoryInterval)) }
+        memoryUsagePresentation =
+            defaults?.string(forKey: Key.memoryUsagePresentation).flatMap(MemoryUsagePresentation.init(rawValue:)) ?? .percent
+        memoryTopNInterval = Self.int(defaults, Key.memoryTopNInterval, choices: Self.panelIntervals) ?? 5
+        memoryTopNRows = Self.int(defaults, Key.memoryTopNRows, choices: Self.topNRowChoices) ?? 5
+        memoryGrouping = defaults?.string(forKey: Key.memoryGrouping).flatMap(TopNGrouping.init(rawValue:)) ?? .byApp
+        memoryChartSpan = defaults?.string(forKey: Key.memoryChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
+        memoryChartOverlayPressure = defaults?.object(forKey: Key.memoryChartOverlayPressure) as? Bool ?? true
+        historyMemoryEnabled = defaults?.object(forKey: Key.historyMemory) as? Bool ?? true
     }
 
     private static func int(_ defaults: UserDefaults?, _ key: String, in range: ClosedRange<Int>) -> Int? {
@@ -333,6 +400,16 @@ final class AppSettings {
         defaults?.set(value, forKey: key)
         onChange?()
     }
+}
+
+/// 内存占用 widget 的数值形式（D49 M2）。
+enum MemoryUsagePresentation: String, CaseIterable, Identifiable {
+    /// 占用率「64%」。
+    case percent
+    /// 已用「40.6G」。
+    case bytes
+
+    var id: String { rawValue }
 }
 
 /// 所有 widget 共用的排版（D41）。
@@ -426,6 +503,10 @@ enum MenuWidget: String, CaseIterable, Identifiable {
     case socPower
     case gpuPower
     case fan
+    // 内存（D49）
+    case memoryUsage
+    case memoryPressure
+    case swapUsed
 
     var id: String { rawValue }
 
@@ -433,19 +514,21 @@ enum MenuWidget: String, CaseIterable, Identifiable {
         switch self {
         case .usage, .frequency, .temperature, .power: .cpu
         case .systemPower, .socHotspot, .socPower, .gpuPower, .fan: .power
+        case .memoryUsage, .memoryPressure, .swapUsed: .memory
         }
     }
 
     static func widgets(of module: MenuModule) -> [MenuWidget] { allCases.filter { $0.module == module } }
 
-    /// 出厂默认是否显示（D38：CPU 只开占用；D44：功耗只开整机功率）。
-    var visibleByDefault: Bool { self == .usage || self == .systemPower }
+    /// 出厂默认是否显示（D51：CPU 占用、整机功率、内存占用）。
+    var visibleByDefault: Bool { self == .usage || self == .systemPower || self == .memoryUsage }
 }
 
 /// widget 所属的模块：决定常驻采集间隔、点击后预选的面板 tab、设置页的位置。
 enum MenuModule: String, CaseIterable, Identifiable {
     case cpu
     case power
+    case memory
 
     var id: String { rawValue }
 }

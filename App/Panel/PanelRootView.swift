@@ -25,6 +25,8 @@ struct PanelRootView: View {
                     store: store, services: services, settings: settings, expandDetails: state.expandDetailsInitially)
             case .power:
                 PowerPanelView(store: store, services: services, settings: settings)
+            case .memory:
+                MemoryPanelView(store: store, services: services, settings: settings)
             }
         }
         .onChange(of: state.selectedTab) { onTabChange() }

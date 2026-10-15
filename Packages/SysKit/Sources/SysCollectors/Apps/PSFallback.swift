@@ -2,6 +2,7 @@
 //
 // - 常规：只列同 uid 的进程（`proc_listallpids` + `proc_pid_rusage` v6，root 与其他用户的进程读不到，
 //   UI 提示「另有 N 个系统或其他用户进程不可见」）；
+// - 内存 Top N 的回退只列同 uid 进程的 `ri_phys_footprint`，没有「刷新全部」（`ps` 没有 footprint 列，D49）；
 // - 手动「刷新全部」：间隔 2 s 运行两次 setuid 的 `/bin/ps -axo pid=,time=`，取 TIME 差分（10 ms 分辨率，覆盖除 pid 0 外的全部进程）。
 //   只在用户点击时运行，不定时 spawn（CLAUDE.md）。不用 `top`：每次至少 1 s 墙钟、自身占 3–6% 单核，%CPU 还偏低。
 
@@ -67,6 +68,37 @@ public final class SameUIDSampler: Sendable {
         }
         out.sort { $0.cpu > $1.cpu }
         return Result(rows: Array(out.prefix(rows)), hiddenCount: hidden)
+    }
+
+    /// 同 uid 进程的内存 footprint（D49 的回退）：footprint 是当前值，不需要基线。
+    public func sampleMemory(rows: Int) -> Result {
+        let pids = Self.allPIDs()
+        let ownUID = getuid()
+        var hidden = 0
+        var out: [TopNRow] = []
+        for pid in pids {
+            guard let r = ProcessInfoReader.rusage(of: pid), ProcessInfoReader.uid(of: pid) == ownUID else {
+                hidden += 1
+                continue
+            }
+            guard r.ri_phys_footprint > 0 else { continue }
+            out.append(
+                TopNRow(
+                    id: "p\(pid)", kind: .process, coalitionID: 0, name: "", appPath: nil, representativePID: pid,
+                    memberCount: 1, cpu: 0, perfLevel0Share: nil, energyWatts: nil, topMember: nil, members: [],
+                    residualCPU: nil, residualCount: 0, eligibility: ProcessControl.eligibility(uid: ownUID, pid: pid),
+                    footprint: r.ri_phys_footprint))
+        }
+        out.sort { ($0.footprint ?? 0) > ($1.footprint ?? 0) }
+        // 只为排在前面的进程解析名字。
+        let top = out.prefix(rows).map { row -> TopNRow in
+            var row = row
+            let info = TopNBuilder.resolveName(path: ProcessInfoReader.path(of: row.representativePID), command: "", pid: row.representativePID)
+            row.name = info.name
+            row.appPath = info.appPath
+            return row
+        }
+        return Result(rows: top, hiddenCount: hidden)
     }
 
     static func allPIDs() -> [pid_t] {

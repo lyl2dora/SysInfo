@@ -3,10 +3,11 @@
 #
 # 用 Release 配置构建 app，按四档各测一次，结果追加到 docs/perf/cpu.md：
 #   0. 基线：不运行 SysInfo；
-#   1. 出厂默认配置：CPU 占用与整机功率两个 item（D38、D44），面板关闭，历史与能耗记录开启（--factory-defaults 时历史库在临时目录）；
+#   1. 出厂默认配置：CPU 占用、整机功率与内存占用三个 item（D38、D44、D51），面板关闭，历史与能耗记录开启（--factory-defaults 时历史库在临时目录）；
 #   2. 面板打开：CPU tab 可见（含 Top N 5 行），固定为浮窗（--open-panel --pin-panel），测量期间点别处也不会关；
 #   3. 面板打开且「详情」「中断来源」展开（再加 --expand-details），面板内最重的一档；
-#   power：面板打开且在「功耗与散热」tab（--panel-tab=power，功耗与散热模块设计 §1 第 8 项）。
+#   power：面板打开且在「功耗与散热」tab（--panel-tab=power，功耗与散热模块设计 §1 第 8 项）；
+#   memory：面板打开且在「内存」tab（--panel-tab=memory，Top N 5 行，内存模块设计 §10）。
 # 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D40：用 sysinfo-cli rusage 读 app 的按档计数，把其他档的指令
 # 折算成最快档的等效时间（按单核的比例）；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
@@ -19,7 +20,7 @@
 #   并带 --factory-defaults 启动（不读写偏好）：测量不碰日用版 zone.lyl.sysinfo 的 defaults 域。
 #
 # 环境变量：WARMUP（默认 30）、DURATION（默认 120）、BASELINE（默认 1；0 表示不测基线）、
-#          OUTPUT（默认 docs/perf/cpu.md）、TIERS（默认 "default panel details"，可只测其中几档；另有 power 档）。
+#          OUTPUT（默认 docs/perf/cpu.md）、TIERS（默认 "default panel details"，可只测其中几档；另有 power、memory 档）。
 # 对照机（make remote-measure，D39）另设：REMOTE_MODE=1（ad-hoc 签名；用 `open` 启动，ssh 会话里直接 exec 的
 #          GUI app 连不上窗口服务器）、DERIVED_DATA、GIT_COMMIT、BUILD_NUMBER（远端没有 .git）、APP_TMPDIR。
 set -euo pipefail
@@ -217,6 +218,7 @@ for tier in ${TIERS}; do
         panel) measure panel --factory-defaults --open-panel --pin-panel ;;
         details) measure details --factory-defaults --open-panel --pin-panel --expand-details ;;
         power) measure power --factory-defaults --open-panel --pin-panel --panel-tab=power ;;
+        memory) measure memory --factory-defaults --open-panel --pin-panel --panel-tab=memory ;;
         *) echo "未知档位：${tier}" >&2; exit 64 ;;
     esac
 done
@@ -255,10 +257,11 @@ fi
         IFS=$'\t' read -r label app_pct equiv cyc p0share mw mba_pct ws_pct footprint note <<<"${row}"
         case "${label}" in
             baseline) name="基线（不运行 SysInfo）" ;;
-            default) name="出厂默认（CPU 占用、整机功率两个 item，面板关闭，历史与能耗开启）" ;;
+            default) name="出厂默认（CPU 占用、整机功率、内存占用三个 item，面板关闭，历史与能耗开启）" ;;
             panel) name="面板打开（CPU tab，Top N 5 行）" ;;
             details) name="面板打开 + 详情与中断来源展开" ;;
             power) name="面板打开（功耗与散热 tab）" ;;
+            memory) name="面板打开（内存 tab，Top N 5 行）" ;;
             *) name="${label}" ;;
         esac
         echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"

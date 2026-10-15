@@ -1,7 +1,7 @@
 // 历史记录器（CPU 模块设计 §6，D30）：订阅引擎事件，按分钟聚合，定时写库。
 //
 // - 登记 background 层需求（锁屏、显示器睡眠时继续采，不受降频影响）：
-//   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）。
+//   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）；内存每 10 s（D49）。
 //   用户开启「后台高精度」时，频率、温度与功耗改为每 5 s（D19 的高开销项）。
 //   菜单栏、面板的前台需求更密时，引擎按较短的间隔采样，记录器直接用这些样本，峰值随之更准；
 // - 每 5 分钟（整 5 分之后 1 分钟，即 :01、:06…）提交一次事务：写入已结束的分钟、新开 epoch、小时汇总、
@@ -31,16 +31,19 @@ public actor HistoryRecorder {
         public var recordPower: Bool
         /// 记录能耗（D46）：PDTR 每 1 s 积分。
         public var recordEnergy: Bool
+        /// 记录内存指标（D49）：后台每 10 s。
+        public var recordMemory: Bool
 
         public init(
             recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false, recordPower: Bool = true,
-            recordEnergy: Bool = true
+            recordEnergy: Bool = true, recordMemory: Bool = true
         ) {
             self.recordSystem = recordSystem
             self.recordApps = recordApps
             self.highPrecision = highPrecision
             self.recordPower = recordPower
             self.recordEnergy = recordEnergy
+            self.recordMemory = recordMemory
         }
     }
 
@@ -208,6 +211,12 @@ public actor HistoryRecorder {
                         tier: .background))
             }
         }
+        if configuration.recordMemory {
+            demands.append(
+                Demand(
+                    collectors: [MemoryCollector.collectorID], interval: Self.sensorInterval, source: .history,
+                    tier: .background))
+        }
         if configuration.recordEnergy {
             demands.append(
                 Demand(
@@ -234,6 +243,7 @@ public actor HistoryRecorder {
         var modules: Set<HistoryModule> = []
         if configuration.recordSystem { modules.insert(.cpu) }
         if configuration.recordPower { modules.insert(.power) }
+        if configuration.recordMemory { modules.insert(.memory) }
         if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
         if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
             energy.ingest(watts: watts, at: sample.time)
