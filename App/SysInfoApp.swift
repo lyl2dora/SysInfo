@@ -10,6 +10,7 @@
 import AppKit
 import SysCollectors
 import SysModel
+import SysStore
 import OSLog
 
 @main
@@ -24,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var settingsWindow: SettingsController!
     private var eventPump: Task<Void, Never>?
+    /// 历史记录器（D30）；打开历史库失败时为 nil，app 照常运行。
+    private var history: HistoryRecorder?
 
     /// 把 SIGTERM（`make stop`、登出、`kill`）转成正常的 `NSApp.terminate`，让 applicationWillTerminate 有机会收尾。
     private var terminateSignalSource: DispatchSourceSignal?
@@ -44,7 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let settings = AppSettings(defaults: options.factoryDefaults ? nil : .standard)
         let store = MetricStore()
-        let engine = SamplingEngine(collectors: StandardCollectors.make())
+        let collectors = StandardCollectors.make()
+        let engine = SamplingEngine(collectors: collectors)
         self.settings = settings
         self.store = store
         self.engine = engine
@@ -60,8 +64,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         noteSystemBuild()
 
         let throttle = ThrottleMonitor(engine: engine, automatic: settings.autoThrottle)
+        let history = Self.makeHistory(
+            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first,
+            factoryDefaults: options.factoryDefaults, settings: settings)
+        self.history = history
         throttle.onWake = {
             Task { await engine.runSelfTests() }  // K19：唤醒时复检
+            Task { await history?.noteWake() }
+        }
+        throttle.onSleep = {
+            Task { await history?.flush() }  // D30：睡眠前立即提交
         }
         self.throttle = throttle
 
@@ -102,6 +114,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         eventPump?.cancel()
+        // D30：退出前立即提交。applicationWillTerminate 返回后进程就结束，所以同步等它完成（最多 2 s）。
+        if let history {
+            let done = DispatchSemaphore(value: 0)
+            Task.detached {
+                await history.stop()
+                done.signal()
+            }
+            _ = done.wait(timeout: .now() + 2)
+        }
         Log.app.info("即将退出")
     }
 
@@ -133,6 +154,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applySettings() {
         statusItems.update(visible: settings.cpuItemVisible, interval: settings.cpuInterval)
         throttle.automatic = settings.autoThrottle
+        let configuration = HistoryRecorder.Configuration(
+            recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled)
+        Task { [history] in await history?.setConfiguration(configuration) }
+    }
+
+    /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）。
+    private static func makeHistory(
+        engine: SamplingEngine, appSampler: AppSampler?, factoryDefaults: Bool, settings: AppSettings
+    ) -> HistoryRecorder? {
+        let url: URL?
+        if factoryDefaults {
+            url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SysInfo-factory-\(getpid())", isDirectory: true)
+                .appendingPathComponent("History.sqlite")
+        } else {
+            url = HistoryStore.defaultURL(bundleIdentifier: BuildInfo.bundleIdentifier)
+        }
+        guard let url else { return nil }
+        do {
+            let store = try HistoryStore(url: url)
+            let recorder = HistoryRecorder(
+                store: store, engine: engine, appSampler: appSampler,
+                configuration: .init(recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled))
+            Task { await recorder.start() }
+            return recorder
+        } catch {
+            Log.app.error("打开历史库失败，本次不记录历史：\(String(describing: error), privacy: .public)")
+            return nil
+        }
     }
 
     /// K19：记录系统 build 号；与上次运行不同时写日志（启动自检已覆盖复检）。

@@ -9,7 +9,7 @@
 // - 诊断页的手动开关（测试用）。
 // 汇总规则见 `ThrottlePolicy`；结果交给引擎的 `setThrottle(factor:reasons:)`。每次信号变化都写日志。
 //
-// 另外：系统唤醒时回调 `onWake`，由 app 让引擎重新自检（K19）。
+// 另外：系统唤醒时回调 `onWake`，由 app 让引擎重新自检（K19）；即将睡眠时回调 `onSleep`（历史提交，D30）。
 //
 // 通知只报告变化，所以 start() 时主动读一次各信号的当前值，包括锁屏和显示器睡眠（见 SessionState）：
 // 在锁屏或显示器已睡眠时启动，也能立即暂停。
@@ -50,6 +50,8 @@ final class ThrottleMonitor {
 
     /// 系统唤醒后调用（K19：唤醒时复检）。
     @ObservationIgnored var onWake: (() -> Void)?
+    /// 系统即将睡眠时回调（历史记录器借此立即提交，D30）。
+    @ObservationIgnored var onSleep: (() -> Void)?
 
     @ObservationIgnored private let engine: SamplingEngine
     @ObservationIgnored private var observers: [(center: NotificationCenter, token: any NSObjectProtocol)] = []
@@ -96,6 +98,10 @@ final class ThrottleMonitor {
         }
         observe(workspace, NSWorkspace.screensDidWakeNotification) { monitor in
             monitor.update(\.displayAsleep, to: false, source: "显示器唤醒")
+        }
+        observe(workspace, NSWorkspace.willSleepNotification) { monitor in
+            Log.throttle.info("系统即将睡眠")
+            monitor.onSleep?()
         }
         observe(workspace, NSWorkspace.didWakeNotification) { monitor in
             Log.throttle.info("系统唤醒")

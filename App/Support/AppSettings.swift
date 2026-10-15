@@ -26,6 +26,8 @@ final class AppSettings {
         static let autoThrottle = "general.autoThrottle"
         static let cpuInterval = "cpu.interval"
         static let cpuItemVisible = "menubar.cpu.visible"
+        static let historyCPU = "history.cpu.enabled"
+        static let historyApps = "history.apps.enabled"
     }
 
     /// nil：不读写持久化存储，只用出厂默认值（`--factory-defaults`）。
@@ -53,6 +55,16 @@ final class AppSettings {
         didSet { persist(autoThrottle, Key.autoThrottle) }
     }
 
+    /// 是否记录 CPU 历史（D30：默认开）。
+    var historyCPUEnabled: Bool {
+        didSet { persist(historyCPUEnabled, Key.historyCPU) }
+    }
+
+    /// 是否记录每应用 CPU（D30：默认开）。
+    var historyAppsEnabled: Bool {
+        didSet { persist(historyAppsEnabled, Key.historyApps) }
+    }
+
     /// CPU 模块实际使用的间隔。
     var cpuInterval: SamplingInterval { cpuIntervalOverride ?? globalInterval }
 
@@ -62,6 +74,8 @@ final class AppSettings {
         cpuIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.cpuInterval)) }
         cpuItemVisible = defaults?.object(forKey: Key.cpuItemVisible) as? Bool ?? true
         autoThrottle = defaults?.object(forKey: Key.autoThrottle) as? Bool ?? true
+        historyCPUEnabled = defaults?.object(forKey: Key.historyCPU) as? Bool ?? true
+        historyAppsEnabled = defaults?.object(forKey: Key.historyApps) as? Bool ?? true
     }
 
     private func persist(_ value: Any, _ key: String) {

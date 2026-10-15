@@ -38,7 +38,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 
 # 私有 C 层隔离检查的范围（D05、D23）：能经依赖闭包看到 CSysPrivate、但不允许 import 它的源码目录。
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
-PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli
+PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
 .PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test release measure strings install notarize clean check-private-imports test-scripts
 
@@ -55,7 +55,7 @@ help:
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
-	@echo "  check-private-imports  检查 app 与 sysinfo-cli 没有引用 CSysPrivate（test、cli 会先跑它）"
+	@echo "  check-private-imports  检查 app、sysinfo-cli 与 SysStore 没有引用 CSysPrivate（test、cli 会先跑它）"
 	@echo "  test-scripts  运行 check-private-imports 的回归样例（test、test-hw 会先跑它）"
 	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
 

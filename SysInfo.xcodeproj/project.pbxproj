@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		5E1F00000000000000000017 /* SysModel in Frameworks */ = {isa = PBXBuildFile; productRef = 5E1F00000000000000000015 /* SysModel */; };
 		5E1F00000000000000000018 /* SysCollectors in Frameworks */ = {isa = PBXBuildFile; productRef = 5E1F00000000000000000016 /* SysCollectors */; };
+		5E1F0000000000000000001B /* SysStore in Frameworks */ = {isa = PBXBuildFile; productRef = 5E1F0000000000000000001A /* SysStore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 			files = (
 				5E1F00000000000000000017 /* SysModel in Frameworks */,
 				5E1F00000000000000000018 /* SysCollectors in Frameworks */,
+				5E1F0000000000000000001B /* SysStore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -89,6 +91,7 @@
 			packageProductDependencies = (
 				5E1F00000000000000000015 /* SysModel */,
 				5E1F00000000000000000016 /* SysCollectors */,
+				5E1F0000000000000000001A /* SysStore */,
 			);
 			productName = SysInfo;
 			productReference = 5E1F00000000000000000009 /* SysInfo.app */;
@@ -351,6 +354,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5E1F00000000000000000014 /* XCLocalSwiftPackageReference "Packages/SysKit" */;
 			productName = SysCollectors;
+		};
+		5E1F0000000000000000001A /* SysStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5E1F00000000000000000014 /* XCLocalSwiftPackageReference "Packages/SysKit" */;
+			productName = SysStore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

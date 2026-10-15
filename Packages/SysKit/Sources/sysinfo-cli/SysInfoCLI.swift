@@ -4,6 +4,7 @@
 // - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用、用户/系统、每档、每簇和每核占用；
 // - topo：打印拓扑发现的结果和三种档次依据（CPU 模块设计 §8）；
 // - freq、verify freq：每簇频率，以及按档与内核计数对照（Freq.swift）；
+// - history：历史库的统计、导出与实录（History.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
 // 输出里只有机型标识（如 Mac17,16）和系统 build 号，不含序列号等设备唯一标识。
@@ -74,6 +75,8 @@ struct SysInfoCLI {
             case "topo":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runTopo(json: options.flag("--json")))
+            case "history":
+                exit(try await runHistory(arguments))
             case "engine":
                 let options = try Options(arguments, flags: [], values: ["--demand", "--idle"])
                 let demand = try options.double("--demand", default: 3, range: 1...600)
@@ -115,6 +118,12 @@ struct SysInfoCLI {
               verify passive [--seconds 30] [--yes]   经调度器跑拓扑与频率的被动核对；--yes 在本进程内施加负载
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
+              history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）
+              history export --out PATH [--format csv|jsonl] [--granularity minute|hour] [--hours 24]
+                             [--metrics cpu.usage.,cpu.temp.] [--no-apps] [--db PATH]
+                                                      导出历史：csv 为文件夹（system.csv、apps.csv、metadata.json）
+              history record --db PATH [--seconds 180] [--menubar] [--no-apps]
+                                                      经调度器记录若干秒并打印写入结果；--menubar 加一个 1 s 的占用需求
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，
                                                       检查 tick 计数不再增长、定时器已停
               version                                 打印版本信息

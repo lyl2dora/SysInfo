@@ -181,3 +181,31 @@ struct AppActivityHardwareTests {
         #expect(result.hiddenCount > 0, "root 进程读不到")
     }
 }
+
+@Suite struct CoalitionDeltaTests {
+    func usage(cpuTicks: UInt64) -> CoalitionUsage {
+        var slots = [UInt64](repeating: 0, count: CoalitionUsage.bufferSlots)
+        slots[24] = cpuTicks
+        return CoalitionUsage(slots: slots)
+    }
+
+    let timebase = MachTimebase(numer: 1, denom: 1)
+
+    @Test func trulyNewCoalitionCountsItsWholeUsage() {
+        let deltas = AppSampler.deltas(
+            previous: [5: usage(cpuTicks: 100)], current: [5: usage(cpuTicks: 150), 9: usage(cpuTicks: 40)],
+            tasks: [5: 1, 9: 1], previousMaxID: 8, timebase: timebase)
+        let byID = Dictionary(uniqueKeysWithValues: deltas.map { ($0.id, $0) })
+        #expect(byID[5]?.cpuNanos == 50)
+        #expect(byID[9]?.cpuNanos == 40)
+        #expect(byID[9]?.isNew == true)
+    }
+
+    @Test func reactivatedOldCoalitionOnlySetsBaseline() {
+        // id 7 不大于上次见过的最大 id 8，上次却没扫描它（当时没有成员）：累计值含开机以来的用量，不算进窗口
+        let deltas = AppSampler.deltas(
+            previous: [:], current: [7: usage(cpuTicks: 800_000_000_000)], tasks: [7: 1], previousMaxID: 8,
+            timebase: timebase)
+        #expect(deltas.isEmpty)
+    }
+}

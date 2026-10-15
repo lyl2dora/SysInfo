@@ -487,3 +487,44 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
   - 两台实测（5 s 窗口）：前 10 名最大差 M5 0.39 pp、M4 0.06 pp。
 - **2026-10-15 · §5.5 补充：刚上电的瞬态读数**
   - M4 的 P 核键刚上电时会读出 1–5 °C。这类低于有效下限的读数和占位值一样按「此刻没有读数」处理：簇温度显示「—」，自检不判为异常。原先自检会把它判成不合理，M4 的硬件测试因此偶发失败。
+- **2026-10-15 · §5.6 `cpu.misc` 在第 6 步补上**
+  - §11 的实施顺序漏了这个采集器，历史库要用负载均值和热状态，所以在第 6 步一起实现，登记在 `StandardCollectors` 里（排在 `cpu.freq` 之后）。
+  - 指标：`cpu.loadavg.1/5/15`、`cpu.tasks`、`cpu.threads`、`cpu.irq.ipi/timer/other`（每秒，全部核之和）、`cpu.thermal.state`（`ProcessInfo.thermalState` 原始值）、`cpu.thermal.pressure`（notify 热压力等级）。
+  - 中断「其余」= irq − IPI − 定时器；余量为负或任一计数回退时按复位处理，丢弃这一段。
+  - 热压力用 `notify_register_check` + `notify_get_state` 读共享内存，不经 IPC，采样时直接读，不另做通知回调。
+  - 两台 `selftest` 均通过（M5：tasks≈980、threads≈4400）。
+- **2026-10-15 · §6 SysStore 的落地**
+  - 新 target `SysStore`（依赖 SysModel、SysCollectors，不依赖私有层），已加进 `check-private-imports` 的检查范围；app 链接它。
+  - 入库指标由 `HistoryCatalog` 按前缀判定：总占用、用户/系统、每档占用、每簇频率、每簇温度、CPU 最高温、每簇与总功耗、1 分钟负载均值、热状态、热压力。比边界稿 §5.5 多了功耗（C1 改定为 B 之后）和热压力。
+  - 两类聚合：
+    - 区间量（占用、频率）按墙钟拆到所跨的分钟，按重叠秒数加权；
+    - 瞬时量（温度、功耗、负载均值、热状态）整份记到所在分钟，覆盖秒数取距上次采样的间隔，上限 60 s。
+  - 样本覆盖的区间 = 距同一采集器上一次运行的单调时钟差（采集器建立基线的那次也算一次运行）。唤醒后清空，丢弃第一个样本。
+  - 峰值规则落成：区间量只有区间 ≤10 s 的样本才有峰值，这一分钟混进更长的样本，max 记为空。菜单栏 1 s、面板 5 s 有峰值，后台 60 s 没有。小时汇总同理：每行都有峰值时才给。
+  - 提交：每 5 分钟一次，在分钟号 ≡ 0 (mod 5) 的整分之后 62 s（:01、:06…），只写已结束的分钟。`flush()`（睡眠、退出、导出、面板读历史前）连当前分钟一起写；之后到达的数据按 UPSERT 合并，n 加权。
+  - 退出时 `applicationWillTerminate` 同步等记录器 `stop()`，最多 2 s。
+  - `--factory-defaults` 时历史库放在临时目录 `SysInfo-factory-<pid>`。
+  - 每应用：
+    - 应用身份键取代表成员所在最外层 .app 的 bundle id，没有 .app 时取可执行文件路径，pid 0 为 `kernel_task`；代表成员的选法与 Top N 一致。
+    - coalition 退出后就解析不到，所以每个窗口到达时就为前 16 个 coalition 解析身份，按 coalition id 缓存。
+    - Top N 只读 `latestWindow`，面板和历史共用扫描时会漏掉中间窗口，所以 AppSampler 增加了窗口留存（`setRetainsWindows` / `drainRetainedWindows`，上限 64 个），只在记录每应用数据时打开。
+    - 某一分钟里任一窗口的能耗槽不可信时，该分钟能耗记为空。
+  - 设置键 `history.cpu.enabled`、`history.apps.enabled`（默认开）已加进 `AppSettings`，界面留到第 7 步。
+  - CLI：`history stats`、`history export`（默认读 `.dev` 数据目录）、`history record --db …`（必须显式给路径，对照机只写 `/tmp/sysinfo-remote`）。
+- **2026-10-15 · §5.7 修正：重新有成员的旧 coalition 被当成新的**
+  - 现象：第一次 `history record`（本机 200 s）里 `biomesyncd` 记了 810 CPU·s，远超可能值。
+  - 原因：AppSampler 不扫描成员为 0 的 coalition。launchd 周期拉起的服务，每次有了成员，就被当成「新出现」，把开机以来的累计用量整份算进窗口。Top N 也会因此偶尔冒出假尖峰。
+  - 做法：coalition id 单调递增。只有 id 大于上次扫描见过的最大 id（含成员为 0 的）才算真正新出现；不大于、上次却没扫描到的，这一轮只建基线。单测 `CoalitionDeltaTests` 覆盖。
+- **2026-10-15 · §6 两台实测（`history record --seconds 200 --menubar`，修正后，Stats 均未运行）**
+  - M5 Pro：
+    - 写入分钟行 73、每应用行 40，指标 19 个；
+    - 本进程 0.171% 单核（含 CLI 自身与 1 s 菜单栏需求）；
+    - 每应用合计 353 CPU·s，整机按 `cpu.usage.total` 积分 372 CPU·s。
+  - M4 Pro：
+    - 分钟行 49、每应用行 40，指标 13 个；
+    - 0.254% 单核；
+    - 每应用合计 30.6 CPU·s，整机 35.6 CPU·s。
+    - 空闲时 P 核断电，`cpu.temp.max` 没有行（D33 的「—」）。
+  - 每分钟只留前 10 个应用，合计略低于整机，符合预期。修正前，本机的应用合计远超整机（`biomesyncd` 一项就 810 CPU·s）。
+  - 导出：CSV 文件夹与 JSON Lines 都核对过，不含设备唯一标识。
+  - 正式的开销测量按 §10 在第 8 步用 `make measure` 做。这里的数字含 CLI 与 Swift 运行时，只作参考。

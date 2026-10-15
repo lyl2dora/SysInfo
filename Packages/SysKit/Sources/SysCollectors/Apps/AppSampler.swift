@@ -3,7 +3,9 @@
 // - 每次全量扫描 resource coalition，按 coalition 记录两次扫描之间的增量（CPU、perflevel0 时间、cycles、能耗、成员起止数）；
 // - coalition 在最后一个成员退出的同一轮就从列表里消失（边界稿 §2.5 复核），所以按 tick 累加增量：
 //   消失的 coalition 只保留它消失前最后一次的增量，不补推；
-// - 两次扫描之间新出现的 coalition，它的全部用量都发生在窗口内，增量取当前累计值；
+// - 两次扫描之间新出现的 coalition（id 大于上次扫描见过的最大 id），它的全部用量都发生在窗口内，增量取当前累计值。
+//   coalition id 单调递增；id 不大于上次最大值、上次却不在列表里的，是重新有了成员的旧 coalition
+//   （launchd 周期拉起的服务，成员为 0 时不扫描）：它的累计值包含开机以来的用量，这一轮只建基线；
 // - 输出的样本只有整机汇总（全体进程的 CPU、perflevel0 占比与按档频率），供被动核对使用（§5.4、§5.2）；
 //   每个 coalition 的增量留在 `latestWindow`，Top N 与每应用历史从这里取。
 //
@@ -41,6 +43,8 @@ public struct AppActivityWindow: Hashable, Sendable {
     public var elapsedNanos: UInt64
     /// 按 CPU 时间降序。
     public var coalitions: [CoalitionDelta]
+    /// 扫描时能耗、perflevel0 等辅助槽是否可信（自检 S4）。
+    public var slotsTrusted: Bool = true
 
     public var totalCPUNanos: UInt64 { coalitions.reduce(0) { $0 &+ $1.cpuNanos } }
 }
@@ -54,13 +58,21 @@ public final class AppSampler: Collector {
 
     private struct State {
         var previous: [UInt64: CoalitionUsage] = [:]
+        /// 上次扫描见过的最大 coalition id（含成员为 0 的）。
+        var previousMaxID: UInt64?
         var previousTime: SampleTime?
         var latest: AppActivityWindow?
         var usable: Bool?
         var warnings = false
         /// S4 不过：能耗、perflevel0 槽不可信。
         var slotsTrusted = true
+        /// 是否为历史记录留存窗口（`setRetainsWindows`）。
+        var retainsWindows = false
+        var retained: [AppActivityWindow] = []
     }
+
+    /// 留存窗口的上限：取走的一方跟不上时丢弃最旧的。10 s 一次时约 10 分钟。
+    static let retainedWindowLimit = 64
 
     private let state = Mutex(State())
 
@@ -71,6 +83,25 @@ public final class AppSampler: Collector {
 
     /// 能耗、perflevel0 等辅助槽是否可信（自检 S4）。
     public var auxiliarySlotsTrusted: Bool { state.withLock { $0.slotsTrusted } }
+
+    /// 打开后每个窗口都留存下来，由历史记录用 `drainRetainedWindows()` 取走（CPU 模块设计 §6 的每应用分钟数据）。
+    /// Top N 只看 `latestWindow`；面板和历史共用同一次扫描时，有效间隔取两者较短的那个，
+    /// 只读 `latestWindow` 会漏掉中间的窗口，所以历史要逐个取。关闭时清空。
+    public func setRetainsWindows(_ retains: Bool) {
+        state.withLock {
+            $0.retainsWindows = retains
+            if !retains { $0.retained = [] }
+        }
+    }
+
+    /// 取走留存的窗口（按时间先后）。
+    public func drainRetainedWindows() -> [AppActivityWindow] {
+        state.withLock {
+            let out = $0.retained
+            $0.retained = []
+            return out
+        }
+    }
 
     // MARK: - Collector
 
@@ -113,7 +144,7 @@ public final class AppSampler: Collector {
     private func finish(_ checks: [SelfTestCheck], slotsTrusted: Bool) -> SelfTestResult {
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
         state.withLock {
-            if $0.usable == false, result.isUsable { $0.previous = [:]; $0.previousTime = nil }
+            if $0.usable == false, result.isUsable { $0.previous = [:]; $0.previousMaxID = nil; $0.previousTime = nil }
             $0.usable = result.isUsable
             $0.warnings = !result.warnings.isEmpty
             $0.slotsTrusted = slotsTrusted
@@ -133,42 +164,35 @@ public final class AppSampler: Collector {
         var current: [UInt64: CoalitionUsage] = [:]
         current.reserveCapacity(entries.count)
         var tasks: [UInt64: UInt32] = [:]
+        let maxID = entries.map(\.id).max()
         for entry in entries where entry.tasks > 0 {
             guard let usage = CoalitionReader.usage(of: entry.id) else { continue }
             current[entry.id] = usage
             tasks[entry.id] = entry.tasks
         }
         return state.withLock { s in
+            let previousMaxID = s.previousMaxID
             defer {
                 s.previous = current
+                s.previousMaxID = maxID
                 s.previousTime = time
             }
-            guard let previousTime = s.previousTime, time.monotonicNanos > previousTime.monotonicNanos else {
+            guard let previousTime = s.previousTime, time.monotonicNanos > previousTime.monotonicNanos,
+                let previousMaxID
+            else {
                 return CollectorOutput(samples: [], status: .ok, dataPath: Self.dataPath)  // 建立基线
             }
             let elapsed = time.monotonicNanos - previousTime.monotonicNanos
-            var deltas: [CoalitionDelta] = []
-            deltas.reserveCapacity(current.count)
-            for (id, now) in current {
-                let before = s.previous[id]
-                // 计数器回退（不应发生；cid 被复用时可能）：按复位处理，丢弃这一段。
-                if let before, now.cpuTicks < before.cpuTicks { continue }
-                func d(_ a: UInt64, _ b: UInt64?) -> UInt64 { a >= (b ?? 0) ? a - (b ?? 0) : 0 }
-                deltas.append(
-                    CoalitionDelta(
-                        id: id, tasks: tasks[id] ?? 0,
-                        cpuNanos: timebase.nanoseconds(fromTicks: d(now.cpuTicks, before?.cpuTicks)),
-                        perfLevel0Nanos: timebase.nanoseconds(fromTicks: d(now.perfLevel0Ticks, before?.perfLevel0Ticks)),
-                        cycles: d(now.cycles, before?.cycles), perfLevel0Cycles: d(now.perfLevel0Cycles, before?.perfLevel0Cycles),
-                        energyNanojoules: d(now.energyNanojoules, before?.energyNanojoules),
-                        membershipChanged: before.map {
-                            $0.tasksStarted != now.tasksStarted || $0.tasksExited != now.tasksExited
-                        } ?? true,
-                        isNew: before == nil))
-            }
+            var deltas = Self.deltas(
+                previous: s.previous, current: current, tasks: tasks, previousMaxID: previousMaxID, timebase: timebase)
             deltas.sort { $0.cpuNanos > $1.cpuNanos }
-            let window = AppActivityWindow(time: time, elapsedNanos: elapsed, coalitions: deltas)
+            let window = AppActivityWindow(
+                time: time, elapsedNanos: elapsed, coalitions: deltas, slotsTrusted: s.slotsTrusted)
             s.latest = window
+            if s.retainsWindows {
+                s.retained.append(window)
+                if s.retained.count > Self.retainedWindowLimit { s.retained.removeFirst(s.retained.count - Self.retainedWindowLimit) }
+            }
             return CollectorOutput(
                 samples: Self.summarySamples(window, slotsTrusted: s.slotsTrusted, at: time),
                 status: s.warnings ? .degraded : .ok, dataPath: Self.dataPath)
@@ -178,8 +202,38 @@ public final class AppSampler: Collector {
     public func resetBaseline() {
         state.withLock {
             $0.previous = [:]
+            $0.previousMaxID = nil
             $0.previousTime = nil
         }
+    }
+
+    /// 两次扫描之间每个 coalition 的增量（纯函数，便于单测）。
+    static func deltas(
+        previous: [UInt64: CoalitionUsage], current: [UInt64: CoalitionUsage], tasks: [UInt64: UInt32],
+        previousMaxID: UInt64, timebase: MachTimebase
+    ) -> [CoalitionDelta] {
+        var deltas: [CoalitionDelta] = []
+        deltas.reserveCapacity(current.count)
+        for (id, now) in current {
+            let before = previous[id]
+            // 重新有了成员的旧 coalition：累计值含开机以来的用量，这一轮只建基线（见文件头）。
+            if before == nil, id <= previousMaxID { continue }
+            // 计数器回退（不应发生；cid 被复用时可能）：按复位处理，丢弃这一段。
+            if let before, now.cpuTicks < before.cpuTicks { continue }
+            func d(_ a: UInt64, _ b: UInt64?) -> UInt64 { a >= (b ?? 0) ? a - (b ?? 0) : 0 }
+            deltas.append(
+                CoalitionDelta(
+                    id: id, tasks: tasks[id] ?? 0,
+                    cpuNanos: timebase.nanoseconds(fromTicks: d(now.cpuTicks, before?.cpuTicks)),
+                    perfLevel0Nanos: timebase.nanoseconds(fromTicks: d(now.perfLevel0Ticks, before?.perfLevel0Ticks)),
+                    cycles: d(now.cycles, before?.cycles), perfLevel0Cycles: d(now.perfLevel0Cycles, before?.perfLevel0Cycles),
+                    energyNanojoules: d(now.energyNanojoules, before?.energyNanojoules),
+                    membershipChanged: before.map {
+                        $0.tasksStarted != now.tasksStarted || $0.tasksExited != now.tasksExited
+                    } ?? true,
+                    isNew: before == nil))
+        }
+        return deltas
     }
 
     // MARK: - 汇总
