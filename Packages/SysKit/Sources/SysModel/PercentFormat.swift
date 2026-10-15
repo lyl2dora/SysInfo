@@ -13,17 +13,12 @@ public enum PercentFormat: Sendable {
     public static let placeholder = "—"
 
     public static func string(fromRatio ratio: Double, fractionDigits: Int = 0) -> String {
-        guard let rounded = displayedPercent(fromRatio: ratio, fractionDigits: fractionDigits) else { return placeholder }
-        return String(format: "%.\(min(max(fractionDigits, 0), 6))f%%", rounded)
-    }
-
-    /// 显示出来的百分数（已按上面的规则取整），非有限值为 nil。菜单栏着色按它判定（D42），保证颜色与数字一致。
-    public static func displayedPercent(fromRatio ratio: Double, fractionDigits: Int = 0) -> Double? {
-        guard ratio.isFinite else { return nil }
+        guard ratio.isFinite else { return placeholder }
         let digits = min(max(fractionDigits, 0), 6)
         var percent = ratio * 100
         if !(percent > 0) { percent = 0 }  // 负数和 -0 都归零
         let scale = pow(10.0, Double(digits))
-        return (percent * scale).rounded(.toNearestOrAwayFromZero) / scale
+        let rounded = (percent * scale).rounded(.toNearestOrAwayFromZero) / scale
+        return String(format: "%.\(digits)f%%", rounded)
     }
 }

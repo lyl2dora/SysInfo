@@ -1,9 +1,8 @@
-// 设置的 CPU 页（CPU 模块设计 §7.3，D19、D29、D32、D41）。
+// 设置的 CPU 页（CPU 模块设计 §7.3，D19、D29、D41、D43）。
 //
-// 按 D41 的模块页结构分节：
-// - 菜单栏：四个 widget 的开关；打开后就地展开该 widget 的配置（呈现形式、着色、开销、预览）。
+// 按 D41 的模块页结构分节（D43 去掉了「阈值」）：
+// - 菜单栏：四个 widget 的开关；打开后就地展开该 widget 的配置（呈现形式、颜色、开销、预览）。
 //   排版与小标签是全局设置，在「菜单栏」页；
-// - 阈值：始终显示（P2 的提醒复用）；
 // - 采集：模块间隔覆盖；面板内频率、温度与功耗、Top N 的间隔（1/2/5 s），旁边标注开销；
 // - 面板：图表默认跨度、用户/系统拆分、Top N 行数与分组；
 // - 历史：是否记录 CPU 与每应用历史、后台高精度历史。
@@ -28,25 +27,15 @@ struct CPUSettingsView: View {
             } header: {
                 Text("菜单栏")
             } footer: {
-                HStack(spacing: 4) {
-                    Text("排版和小标签对所有模块统一生效。")
-                    Button("在「菜单栏」页设置") { openPage(.menuBar) }
-                        .buttonStyle(.link)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("自定义颜色不随浅色 / 深色菜单栏切换，在部分壁纸上可读性较差。")
+                    HStack(spacing: 4) {
+                        Text("排版和小标签对所有模块统一生效。")
+                        Button("在「菜单栏」页设置") { openPage(.menuBar) }
+                            .buttonStyle(.link)
+                    }
                 }
                 .font(.callout)
-            }
-
-            Section {
-                Stepper(value: $settings.menuBarCPUWarningPercent, in: 50...99) {
-                    LabeledContent("橙色阈值", value: "\(settings.menuBarCPUWarningPercent)%")
-                }
-                Stepper(value: $settings.menuBarCPUCriticalPercent, in: settings.menuBarCPUWarningPercent...100) {
-                    LabeledContent("红色阈值", value: "\(settings.menuBarCPUCriticalPercent)%")
-                }
-            } header: {
-                Text("阈值")
-            } footer: {
-                Text("占用 widget 的颜色跟随显示的数值：达到阈值立即变色，低于阈值立即恢复。以后的提醒也会使用这组阈值，另按持续时间判定。")
             }
 
             Section("采集") {
@@ -134,7 +123,15 @@ struct CPUSettingsView: View {
                             Text(Self.presentationName(presentation)).tag(presentation)
                         }
                     }
-                    Toggle("占用高时着色", isOn: $settings.menuBarCPUColoring)
+                }
+                Toggle("自定义颜色", isOn: Binding(
+                    get: { settings.color(for: widget) != .system },
+                    set: { settings.setColor($0 ? (WidgetColor(.systemBlue) ?? .system) : .system, for: widget) }))
+                if settings.color(for: widget) != .system {
+                    ColorPicker("颜色", selection: Binding(
+                        get: { Color(nsColor: settings.color(for: widget).nsColor) },
+                        set: { if let color = WidgetColor(NSColor($0)) { settings.setColor(color, for: widget) } }),
+                        supportsOpacity: false)
                 }
                 LabeledContent("预览") {
                     StatusItemPreview(store: store, configuration: CPUStatusItemConfiguration(widget: widget, settings: settings))

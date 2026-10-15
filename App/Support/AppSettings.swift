@@ -9,7 +9,8 @@
 // - menubar.cpu.freq.visible / .temp.visible / .power.visible   频率、温度、功耗 widget 是否显示（D38，默认关）
 // - menubar.layout / menubar.label   所有 widget 共用的排版（stacked / inline）与小标签开关（D41）
 // - menubar.cpu.usage.presentation   占用 widget 的呈现形式（number / sparkline / barsTotal / barsLevels / barsCores，D41）
-// - menubar.cpu.coloring / .warningPercent / .criticalPercent   占用着色与阈值（D32）
+// - menubar.cpu.<widget>.color   各 widget 的颜色：system（跟随系统）或 #RRGGBB（D43）；<widget> 为 usage / frequency / temperature / power
+// - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
 // - cpu.panel.topNRows / .grouping / .chartSpan / .splitUserSystem   面板显示
@@ -47,9 +48,7 @@ final class AppSettings {
         /// D41 之前的键，只读不写。
         static let legacyCPUStyle = "menubar.cpu.style"
         static let legacyCPULabel = "menubar.cpu.label"
-        static let menuBarCPUColoring = "menubar.cpu.coloring"
-        static let menuBarCPUWarning = "menubar.cpu.warningPercent"
-        static let menuBarCPUCritical = "menubar.cpu.criticalPercent"
+        static func widgetColor(_ widget: CPUMenuWidget) -> String { "menubar.cpu.\(widget.rawValue).color" }
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -156,26 +155,19 @@ final class AppSettings {
         return menuBarLayout == .inline ? .inline : .stacked
     }
 
-    /// 是否按占用着色（D32：默认开）。
-    var menuBarCPUColoring: Bool {
-        didSet { persist(menuBarCPUColoring, Key.menuBarCPUColoring) }
+    /// 各 widget 的颜色（D43：默认跟随系统）。
+    private(set) var widgetColors: [CPUMenuWidget: WidgetColor]
+
+    func color(for widget: CPUMenuWidget) -> WidgetColor {
+        widgetColors[widget] ?? .system
     }
 
-    /// 着色阈值，百分数（D32：85 / 95）。
-    var menuBarCPUWarningPercent: Int {
-        didSet { persist(menuBarCPUWarningPercent, Key.menuBarCPUWarning) }
-    }
-
-    var menuBarCPUCriticalPercent: Int {
-        didSet { persist(menuBarCPUCriticalPercent, Key.menuBarCPUCritical) }
-    }
-
-    /// 着色阈值（菜单栏即时判定，D42；持续时间与滞回量取 D32 的出厂值，留给 P2 的提醒）。
-    var cpuColorThresholds: ColorThresholds {
-        var t = ColorThresholds.cpuDefault
-        t.warning = Double(menuBarCPUWarningPercent) / 100
-        t.critical = Double(max(menuBarCPUCriticalPercent, menuBarCPUWarningPercent)) / 100
-        return t
+    func setColor(_ color: WidgetColor, for widget: CPUMenuWidget) {
+        // 按持久化的精度（8 位）取整，内存里的值与重启后读回的一致。
+        let stored = WidgetColor(storageValue: color.storageValue) ?? .system
+        guard widgetColors[widget] != stored else { return }
+        widgetColors[widget] = stored
+        persist(stored.storageValue, Key.widgetColor(widget))
     }
 
     /// 面板 CPU tab 的频率采样间隔，秒（D29：默认 5 s，可选 1/2/5）。
@@ -242,9 +234,10 @@ final class AppSettings {
         cpuUsagePresentation =
             defaults?.string(forKey: Key.cpuUsagePresentation).flatMap(CPUUsagePresentation.init(rawValue:))
             ?? legacyStyle.flatMap(CPUUsagePresentation.init(graphicStyle:)) ?? .number
-        menuBarCPUColoring = defaults?.object(forKey: Key.menuBarCPUColoring) as? Bool ?? true
-        menuBarCPUWarningPercent = Self.int(defaults, Key.menuBarCPUWarning, in: 50...100) ?? 85
-        menuBarCPUCriticalPercent = Self.int(defaults, Key.menuBarCPUCritical, in: 50...100) ?? 95
+        widgetColors = Dictionary(
+            uniqueKeysWithValues: CPUMenuWidget.allCases.map { widget in
+                (widget, defaults?.string(forKey: Key.widgetColor(widget)).flatMap(WidgetColor.init(storageValue:)) ?? .system)
+            })
         panelFreqInterval = Self.int(defaults, Key.panelFreqInterval, choices: Self.panelIntervals) ?? 5
         panelSensorInterval = Self.int(defaults, Key.panelSensorInterval, choices: Self.panelIntervals) ?? 2
         panelTopNInterval = Self.int(defaults, Key.panelTopNInterval, choices: Self.panelIntervals) ?? 2

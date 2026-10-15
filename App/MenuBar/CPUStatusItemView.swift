@@ -3,7 +3,7 @@
 // - 宽度按样式的最坏情况算好，运行中不改（改宽会让 MenuBarAgent 多占 4–5% 的核）。只有用户改样式、
 //   标签开关，或拓扑决定的柱数变化时才重新定宽；
 // - 数字用 monospacedDigitSystemFont，文字用语义色（菜单栏在 27 上是透明的，颜色不能按深浅色写死）；
-// - 着色（D32、D42）：平时 labelColor；显示的数值达到阈值时，数值（或柱、折线）即时变 systemOrange / systemRed；
+// - 颜色（D43）：数值和图形用该 widget 设置的颜色，默认 labelColor；小标签始终 labelColor。不按数值着色；
 // - 在 draw(_:) 里直接读 MetricStore，AppKit 会自动跟踪 @Observable 并在数值变化时重绘。
 
 import AppKit
@@ -16,7 +16,8 @@ struct CPUStatusItemConfiguration: Equatable {
     /// 占用 widget 的样式；其余 widget 只用上下或左右布局（图形样式按上下布局画）。
     var style: MenuBarCPUStyle = .stacked
     var showsLabel = true
-    var coloring = true
+    /// 数值与图形的颜色（D43）。
+    var color: WidgetColor = .system
     /// 每档柱的个数（拓扑的档数）。
     var levelCount = 2
     /// 每核柱的个数（逻辑核数）。
@@ -114,16 +115,6 @@ final class CPUStatusItemView: NSView {
 
     override var isFlipped: Bool { false }
 
-    /// 数值与图形的颜色：着色关闭或正常时用 labelColor（D32）。
-    private func accentColor(_ level: UsageLevel) -> NSColor {
-        guard configuration.coloring else { return .labelColor }
-        switch level {
-        case .normal: return .labelColor
-        case .warning: return .systemOrange
-        case .critical: return .systemRed
-        }
-    }
-
     /// 非占用 widget 的数值文字；没有数据时为 nil。
     private func valueText(_ widget: CPUMenuWidget) -> String? {
         switch widget {
@@ -144,8 +135,7 @@ final class CPUStatusItemView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let widget = configuration.widget
         let label = Self.label(widget)
-        // 只有占用 widget 参与着色（D32、D38）。
-        let color = widget == .usage ? accentColor(store.menuBarLevel) : NSColor.labelColor
+        let color = configuration.color.nsColor
         let text = valueText(widget)  // 自动跟踪：数值变化时 AppKit 重绘
         let valueText = text ?? PercentFormat.placeholder
         let valueColor = text != nil ? color : NSColor.secondaryLabelColor
