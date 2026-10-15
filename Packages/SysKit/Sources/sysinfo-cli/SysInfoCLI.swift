@@ -38,12 +38,26 @@ struct SysInfoCLI {
                 let count = try options.int("--count", default: 3, range: 1...1_000_000)
                 exit(runFreq(interval: interval, count: count, json: options.flag("--json")))
             case "verify":
-                guard let what = arguments.first else { throw UsageError("verify 需要指定对象：freq") }
-                let options = try Options(Array(arguments.dropFirst()), flags: ["--yes"], values: [])
+                guard let what = arguments.first else { throw UsageError("verify 需要指定对象：freq、topn、passive") }
+                let options = try Options(Array(arguments.dropFirst()), flags: ["--yes"], values: ["--seconds"])
                 switch what {
                 case "freq": exit(runVerifyFreq(confirmed: options.flag("--yes")))
+                case "topn": exit(runVerifyTopN(seconds: try options.double("--seconds", default: 5, range: 1...60)))
+                case "passive":
+                    exit(await runVerifyPassive(seconds: try options.double("--seconds", default: 30, range: 10...60), load: options.flag("--yes")))
                 default: throw UsageError("未知的 verify 对象：\(what)")
                 }
+            case "topn":
+                let options = try Options(
+                    arguments, flags: ["--json", "--by-process", "--fallback", "--refresh-all"],
+                    values: ["--interval", "--count", "--rows"])
+                exit(
+                    runTopN(
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        count: try options.int("--count", default: 3, range: 1...1_000_000),
+                        rows: try options.int("--rows", default: 10, range: 1...100),
+                        grouping: options.flag("--by-process") ? .byProcess : .byApp, fallback: options.flag("--fallback"),
+                        refreshAll: options.flag("--refresh-all"), json: options.flag("--json")))
             case "sensors":
                 let options = try Options(arguments, flags: ["--json", "--raw"], values: ["--interval", "--count"])
                 let interval = try options.double("--interval", default: 2, range: 0.5...3600)
@@ -94,6 +108,11 @@ struct SysInfoCLI {
               calibrate [--yes] [--save-recording r.json] [--from-recording r.json] [--emit-profile p.json] [--verbose]
                                                       传感器校准：约 58 s（CPU 负载 30 s、GPU 负载 12 s），生成芯片档案并与内置档案比对；
                                                       不带 --yes 只打印计划；--from-recording 离线重新分析，不施加负载
+              topn [--interval 2] [--count 3] [--rows 10] [--by-process] [--fallback] [--refresh-all] [--json]
+                                                      Top N：默认按应用（coalition）；--fallback 为同 uid 回退，
+                                                      --refresh-all 为手动 setuid ps 刷新全部
+              verify topn [--seconds 5]               与 setuid /bin/ps 的 TIME 差分对照前 10 名
+              verify passive [--seconds 30] [--yes]   经调度器跑拓扑与频率的被动核对；--yes 在本进程内施加负载
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，

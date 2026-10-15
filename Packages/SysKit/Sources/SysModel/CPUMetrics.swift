@@ -74,4 +74,13 @@ extension MetricID {
         guard rawValue.hasPrefix(Self.clusterPowerPrefix) else { return nil }
         return ClusterKey(string: String(rawValue.dropFirst(Self.clusterPowerPrefix.count)))
     }
+
+    /// 全体进程的 CPU（resource coalition 槽 24–30 之和），按单核比例。只用于被动核对与诊断。
+    public static let appCoalitionCPU: MetricID = "app.coalition.cpu"
+    /// 全体进程在 perflevel0 上的 CPU 时间占比，0…1（被动核对拓扑映射用）。
+    public static let appCoalitionPerfLevel0Share: MetricID = "app.coalition.perflevel0.share"
+    /// 全体进程在 perflevel0 上的平均频率，Hz（Σ pcycles / Σ ptime，被动核对频率用）。
+    public static let appCoalitionPerfLevel0Frequency: MetricID = "app.coalition.perflevel0.hz"
+    /// 全体进程在 perflevel0 以外的平均频率，Hz（两档芯片上即另一档）。
+    public static let appCoalitionOtherLevelFrequency: MetricID = "app.coalition.otherlevels.hz"
 }

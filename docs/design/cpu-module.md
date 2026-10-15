@@ -462,3 +462,28 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
 - **已定（2026-10-15，D37）**：
   - ① 有内置档案的芯片，校准只出核对报告，不覆盖内置档案；没有内置档案的芯片才启用校准结果（`ChipProfileStore.resolve` 已改为内置优先）。
   - ② 几个簇共用同一组温度键时，温度只显示在档的组标题里，簇行留空（第 7 步实现）。
+- **2026-10-15 · §5.7 AppSampler 与 Top N 的落地**
+  - AppSampler 只扫描有成员的 coalition（`tasks > 0`）。常驻的空 launchd job 没有 CPU 增量，不读。
+  - 新出现的 coalition 取当前累计值作增量：它的全部用量都发生在窗口内。
+  - AppSampler 本身只输出整机汇总样本：全体进程 CPU、perflevel0 时间占比、两档的内核平均频率，供被动核对使用。每个 coalition 的增量留在 `latestWindow` 里。Top N 由 `TopNBuilder` 在消费者需要时（面板可见）另外组装。
+  - 自检 S5（自旋比对）只在本进程独占自己的 coalition 时判定：CLI 在终端里运行时，coalition 里还有别的进程，记为跳过。
+  - 行名不用 AppKit：
+    - 有 .app 时取最外层 .app 的 CFBundleDisplayName / CFBundleName；
+    - 否则取可执行文件名；pid 0 显示 kernel_task；
+    - 图标与 `NSRunningApplication` 的激活策略留给 app 层（第 7 步）。
+  - 「结束」用信号（SIGTERM / SIGKILL），GUI app 的优雅退出由 app 层用 `NSRunningApplication` 处理。资格判断在发信号前完成：root、其他用户、pid ≤1、本进程一律拒绝。
+  - 开销（`topn`，第二轮起）：扫描加组装每次 M5 约 10.8 ms、M4 约 14 ms，2 s 一次约 0.5–0.7% 单核，高于边界稿的 0.33–0.39% 估算。多出来的主要是成员的 rusage 与名称查询，第 8 步测开销时优化。
+- **2026-10-15 · §5.2、§5.4 被动核对的落地（第 2、3 步推迟到这里）**
+  - `PassiveValidator` 吃引擎的 tick 结果。三个采集器的间隔不同，所以在「三者同一 tick 都有样本」的公共边界之间，各自累加自己的窗口再比较。
+  - 频率按各频率窗口内本簇的忙碌核·秒加权：只按时长平均时，M5 的 perflevel1 实测偏 −12.8%，因为簇大半时间空闲的窗口占满了权重。
+  - 两台实测（`verify passive --yes`：前 15 s 为 perflevel0 核数个 UI 线程，后 15 s 为全核 utility 线程，Stats 均未运行）：
+    - M5：拓扑占比 74.1% 对 74.0%、35.3% 对 35.3%；频率 perflevel0 +0.0%，perflevel1 −1.7%；
+    - M4：拓扑 90.4% 对 90.4%、71.5% 对 71.5%；频率两档都是 ±0.0%。
+  - 「每核 tick 忙碌与逐核通道活跃的相关」这一项需要订阅逐核通道，留到第 7 步与诊断页的逐核频率一起做。
+  - 被动核对的结果目前只在 CLI 输出。接进诊断页，以及失败时触发复检，在第 7 步做。
+- **2026-10-15 · §8 `verify topn` 的对照口径**
+  - 两次 `ps` 各要跑几十毫秒，TIME 的取样时刻按运行区间的中点算，AppSampler 的两次扫描紧挨着两次 `ps`。原先按起止时刻算，稳定在 134% 的进程会差 1.9 pp。
+  - 不含 kernel_task 所在的 coalition（pid 0 不在 `ps` 里），也不含本命令所在的 coalition（`ps` 子进程会算进去）。
+  - 两台实测（5 s 窗口）：前 10 名最大差 M5 0.39 pp、M4 0.06 pp。
+- **2026-10-15 · §5.5 补充：刚上电的瞬态读数**
+  - M4 的 P 核键刚上电时会读出 1–5 °C。这类低于有效下限的读数和占位值一样按「此刻没有读数」处理：簇温度显示「—」，自检不判为异常。原先自检会把它判成不合理，M4 的硬件测试因此偶发失败。

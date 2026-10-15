@@ -5,7 +5,9 @@
 // - 11：能耗，nJ；
 // - 22：在 perflevel0 上的 CPU 时间（mach tick）；
 // - 23：cpu_time_eqos_len，必须等于 7（自检 S3）；
-// - 24–30：按 QoS 拆分的 CPU 时间（mach tick），之和就是总 CPU 时间。不用 slot 3。
+// - 24–30：按 QoS 拆分的 CPU 时间（mach tick），之和就是总 CPU 时间。不用 slot 3；
+// - 31 / 32：instructions / cycles；35 / 36：perflevel0 上的 instructions / cycles；
+// - 40：phys_footprint；49：pageins（与成员 rusage_info_v6 逐位相等，自检 S4，processes/coal_check.c）。
 // 结构体以后可能在尾部追加字段，所以缓冲给 512 字节，自检只要求「写出 ≥400 字节」，不做等值判断。
 
 internal import CSysPrivate
@@ -38,6 +40,12 @@ public struct CoalitionUsage: Hashable, Sendable {
     public var tasksExited: UInt64 { slot(1) }
     public var energyNanojoules: UInt64 { slot(11) }
     public var perfLevel0Ticks: UInt64 { slot(22) }
+    public var instructions: UInt64 { slot(31) }
+    public var cycles: UInt64 { slot(32) }
+    /// perflevel0 上的 cycles（与 22 号槽的 perflevel0 CPU 时间配对，得到 perflevel0 的平均频率）。
+    public var perfLevel0Cycles: UInt64 { slot(36) }
+    public var physFootprint: UInt64 { slot(40) }
+    public var pageins: UInt64 { slot(49) }
     public var eqosLength: UInt64 { slot(23) }
     /// 总 CPU 时间（mach tick）：槽 24–30 之和，溢出时饱和。
     public var cpuTicks: UInt64 {

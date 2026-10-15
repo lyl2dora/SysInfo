@@ -86,6 +86,11 @@ public struct TemperatureProfile: Codable, Hashable, Sendable {
         self.validRange = validRange
     }
 
+    /// 断电占位值，或刚上电时低于下限的瞬态读数（M4 实测 1–5 °C）：都按「此刻没有读数」处理，不算异常。
+    public func isPowerGatedOrTransient(_ value: Double) -> Bool {
+        sentinels.contains(value) || (validRange.count == 2 && value >= 0 && value < validRange[0])
+    }
+
     /// 读数是否有效（不是占位值、在合理范围内）。
     public func isValid(_ value: Double) -> Bool {
         guard !sentinels.contains(value), validRange.count == 2 else { return false }

@@ -80,6 +80,12 @@ private func m4Topology() -> CPUTopology {
         #expect(value(samples, .cpuPowerTotal)?.quality.isUnavailable == true, "有簇没有专用轨时不拿部分和充数")
     }
 
+    @Test func powerUpTransientCountsAsNoReading() throws {
+        let values = ["Tp01": 2.3, "Tp05": 40.0, "RP05": 0, "RP06": 0, "RP00": 0, "RP07": 0]
+        let (samples, _) = SensorMath.evaluate(profile: profile, values: values, clusters: [key(1)], at: time)
+        #expect(samples.first { $0.id == .cpuTemperatureCluster(key(1)) }?.quality == .unavailable(.sensorPowerGated()))
+    }
+
     @Test func missingRailReadingMakesClusterUnavailable() {
         let (samples, _) = SensorMath.evaluate(
             profile: profile, values: ["RP05": 1], clusters: [key(1)], at: time)

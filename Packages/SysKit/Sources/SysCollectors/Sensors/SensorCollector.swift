@@ -72,7 +72,7 @@ public enum SensorMath {
                 samples.append(Sample(id: id, value: max, time: time))
                 clusterMax.append(max)
                 allGated = false
-            } else if mine.contains(where: { $0.raw.map(temperature.sentinels.contains) ?? false }) {
+            } else if mine.contains(where: { $0.raw.map(temperature.isPowerGatedOrTransient) ?? false }) {
                 samples.append(.unavailable(id, reason: .sensorPowerGated(), at: time))
             } else {
                 samples.append(.unavailable(id, reason: .readFailed("no valid key"), at: time))
@@ -224,7 +224,7 @@ public final class SensorCollector: Collector {
         let roles = Dictionary(SensorMath.keyPlan(resolved.profile).map { ($0.key, $0.role) }, uniquingKeysWith: { a, _ in a })
         let implausible = values.filter { key, value in
             guard let role = roles[key], role == .cluster || role == .peak || role == .nearby else { return false }
-            return !temperature.isValid(value) && !temperature.sentinels.contains(value)
+            return !temperature.isValid(value) && !temperature.isPowerGatedOrTransient(value)
         }.keys.sorted()
         checks.append(
             SelfTestCheck(
