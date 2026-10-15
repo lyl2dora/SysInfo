@@ -1,6 +1,9 @@
-// 占用着色的阈值与持续判定（D32，CPU 模块设计 §7.1）。放在共享模型里，P2 的提醒直接复用。
+// 占用着色的阈值与判定（D32、D42，CPU 模块设计 §7.1）。放在共享模型里，P2 的提醒直接复用。
 //
-// - 输入是平滑后的值（菜单栏用 τ = 1.5 s 的 EMA）；
+// 菜单栏着色（D42）：按 widget 显示的整数即时判定，不设持续时间和滞回，见 `ColorThresholds.displayedLevel`。
+//
+// 持续判定（`SustainedLevelTracker`，原 D32 的菜单栏规则，现留给 P2 的提醒）：
+// - 输入是平滑后的值；
 // - 升级：持续 `sustainSeconds` 秒不低于某级阈值才升到这一级；
 // - 降级：低于当前级阈值减去滞回量时立即降到与当前值相符的级别（同样按滞回判断）；
 // - 不可用或长时间没有新值（睡眠）时回到正常，计时清零。
@@ -30,8 +33,16 @@ public struct ColorThresholds: Sendable, Hashable, Codable {
         self.hysteresis = hysteresis
     }
 
-    /// D32 的出厂值：持续 10 s ≥85% 为橙，≥95% 为红，回落留 5 个百分点。
+    /// D32 的出厂值：≥85% 为橙，≥95% 为红；持续判定另需持续 10 s，回落留 5 个百分点。
     public static let cpuDefault = ColorThresholds()
+
+    /// 菜单栏着色（D42）：按显示出来的整数百分比即时判定，颜色与数字始终一致。nil（不可用）为正常。
+    public func displayedLevel(forRatio ratio: Double?) -> UsageLevel {
+        guard let ratio, let shown = PercentFormat.displayedPercent(fromRatio: ratio) else { return .normal }
+        if shown >= (critical * 100).rounded() { return .critical }
+        if shown >= (warning * 100).rounded() { return .warning }
+        return .normal
+    }
 
     func threshold(_ level: UsageLevel) -> Double? {
         switch level {

@@ -170,7 +170,7 @@ final class AppSettings {
         didSet { persist(menuBarCPUCriticalPercent, Key.menuBarCPUCritical) }
     }
 
-    /// 着色阈值（持续时间与滞回量取 D32 的出厂值）。
+    /// 着色阈值（菜单栏即时判定，D42；持续时间与滞回量取 D32 的出厂值，留给 P2 的提醒）。
     var cpuColorThresholds: ColorThresholds {
         var t = ColorThresholds.cpuDefault
         t.warning = Double(menuBarCPUWarningPercent) / 100

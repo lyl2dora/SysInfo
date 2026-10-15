@@ -59,7 +59,7 @@ final class MetricStore {
     }
     /// 菜单栏显示用的 CPU 总占用。
     private(set) var menuBarCPU: MenuBarReading = .noData
-    /// 菜单栏的着色级别（D32：对平滑后的总占用做持续判定）。
+    /// 菜单栏的着色级别（D42：按显示出来的整数即时判定）。
     private(set) var menuBarLevel: UsageLevel = .normal
     /// 调度器状态（tick 数、需求、降频、各采集器健康信息）。
     var engineStatus: EngineStatus? {
@@ -71,12 +71,9 @@ final class MetricStore {
 
     @ObservationIgnored private var smoother = ExponentialSmoother(timeConstant: MetricStore.menuBarTimeConstant)
     @ObservationIgnored private var ticksSinceLog = 0
-    @ObservationIgnored private var levelTracker = SustainedLevelTracker(thresholds: .cpuDefault)
-
-    /// 着色阈值（来自设置）。
-    var colorThresholds: ColorThresholds {
-        get { levelTracker.thresholds }
-        set { levelTracker.thresholds = newValue }
+    /// 着色阈值（来自设置）。改了立即按当前显示值重判，不等下一个 tick。
+    @ObservationIgnored var colorThresholds: ColorThresholds = .cpuDefault {
+        didSet { updateMenuBarLevel() }
     }
 
     func apply(_ event: EngineEvent) {
@@ -156,7 +153,12 @@ final class MetricStore {
         if reading != menuBarCPU {
             menuBarCPU = reading
         }
-        let level = levelTracker.update(smoothed, at: Double(sample.time.continuousNanos) / 1e9)
+        updateMenuBarLevel()
+    }
+
+    private func updateMenuBarLevel() {
+        let ratio: Double? = if case .value(let r, _) = menuBarCPU { r } else { nil }
+        let level = colorThresholds.displayedLevel(forRatio: ratio)
         if level != menuBarLevel {
             menuBarLevel = level
         }

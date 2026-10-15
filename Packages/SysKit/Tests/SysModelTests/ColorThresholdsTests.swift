@@ -1,7 +1,39 @@
-// 占用着色的持续判定（D32）：持续 10 s 才升级、滞回降级、不可用与长间隔清零。
+// 菜单栏即时着色（D42）：按显示出来的整数判定。
+// 持续判定（D32，留给 P2 的提醒）：持续 10 s 才升级、滞回降级、不可用与长间隔清零。
 
 import Testing
 import SysModel
+
+@Suite struct DisplayedLevelTests {
+    @Test func followsTheDisplayedInteger() {
+        let t = ColorThresholds.cpuDefault
+        #expect(t.displayedLevel(forRatio: 0.8449) == .normal)  // 显示 84%
+        #expect(t.displayedLevel(forRatio: 0.8451) == .warning)  // 显示 85%
+        #expect(t.displayedLevel(forRatio: 0.9449) == .warning)  // 显示 94%
+        #expect(t.displayedLevel(forRatio: 0.9451) == .critical)  // 显示 95%
+        #expect(t.displayedLevel(forRatio: 1.0) == .critical)
+    }
+
+    @Test func noSustainNoHysteresis() {
+        let t = ColorThresholds.cpuDefault
+        // 无状态：同一个值无论前后是什么，结果都一样。
+        #expect(t.displayedLevel(forRatio: 0.97) == .critical)
+        #expect(t.displayedLevel(forRatio: 0.84) == .normal)
+        #expect(t.displayedLevel(forRatio: 0.86) == .warning)
+    }
+
+    @Test func unavailableIsNormal() {
+        let t = ColorThresholds.cpuDefault
+        #expect(t.displayedLevel(forRatio: nil) == .normal)
+        #expect(t.displayedLevel(forRatio: .nan) == .normal)
+    }
+
+    @Test func customThresholds() {
+        let t = ColorThresholds(warning: 0.70, critical: 0.70)
+        #expect(t.displayedLevel(forRatio: 0.6951) == .critical)  // 显示 70%，两级同值时取高
+        #expect(t.displayedLevel(forRatio: 0.6949) == .normal)
+    }
+}
 
 @Suite struct SustainedLevelTrackerTests {
     @Test func upgradesOnlyAfterSustain() {

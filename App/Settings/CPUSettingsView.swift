@@ -46,7 +46,7 @@ struct CPUSettingsView: View {
             } header: {
                 Text("阈值")
             } footer: {
-                Text("总占用平滑后持续 10 秒达到阈值才算越界，回落时留 5 个百分点。占用 widget 的着色使用这组阈值，以后的提醒也会使用。")
+                Text("占用 widget 的颜色跟随显示的数值：达到阈值立即变色，低于阈值立即恢复。以后的提醒也会使用这组阈值，另按持续时间判定。")
             }
 
             Section("采集") {

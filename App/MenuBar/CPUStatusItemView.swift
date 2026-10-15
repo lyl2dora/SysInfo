@@ -3,7 +3,7 @@
 // - 宽度按样式的最坏情况算好，运行中不改（改宽会让 MenuBarAgent 多占 4–5% 的核）。只有用户改样式、
 //   标签开关，或拓扑决定的柱数变化时才重新定宽；
 // - 数字用 monospacedDigitSystemFont，文字用语义色（菜单栏在 27 上是透明的，颜色不能按深浅色写死）；
-// - 着色（D32）：平时 labelColor；持续高占用时数值（或柱、折线）变 systemOrange / systemRed；
+// - 着色（D32、D42）：平时 labelColor；显示的数值达到阈值时，数值（或柱、折线）即时变 systemOrange / systemRed；
 // - 在 draw(_:) 里直接读 MetricStore，AppKit 会自动跟踪 @Observable 并在数值变化时重绘。
 
 import AppKit
