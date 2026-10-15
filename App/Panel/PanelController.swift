@@ -201,6 +201,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
 
     /// 按面板状态与设置登记或注销需求（设置变化、切换 tab 时也调用）。
     func updateDemands() {
+        requestFit()  // Top N 行数等设置可能变了
         let cpuVisible = presentation != .hidden && state.selectedTab == .cpu
         guard cpuVisible else {
             [usageDemand, frequencyDemand, sensorDemand, topNDemand].forEach { $0.set(nil) }
@@ -299,21 +300,40 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。
             openSettings: { [weak self] in self?.onOpenSettings?() },
             quit: { NSApp.terminate(nil) })
-        let hosting = PanelHostingView(
-            rootView: PanelRootView(store: store, state: state, actions: actions, services: services, settings: settings))
-        hosting.onContentSizeChange = { [weak self] in self?.fitToContent() }
-        let fitting = hosting.fittingSize
-        let size = NSSize(width: Self.width, height: ceil(max(fitting.height, 200)))
+        let hosting = NSHostingView(
+            rootView: PanelRootView(
+                store: store, state: state, actions: actions, services: services, settings: settings,
+                onLayoutChange: { [weak self] in self?.requestFit() }))
+        // 面板尺寸由 fitToContent 控制，不让 hosting view 平时维护固有尺寸约束（省掉每次更新后的约束求解）。
+        hosting.sizingOptions = []
+        let size = NSSize(width: Self.width, height: ceil(max(Self.idealHeight(of: hosting), 200)))
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.autoresizingMask = [.width, .height]
         glass?.contentView = hosting
         return size
     }
 
-    /// 内容高度变化后改面板高度：锚定时保持顶边，浮窗时也保持顶边（向下长）。
+    private var fitScheduled = false
+
+    /// 内容结构变了（展开或收起、Top N 行数变化）：下一轮量一次高度。平时的数值更新不量，
+    /// 免得每个 tick 对整个面板做一次理想尺寸测量（2026-10-15 实测是面板开销的大头之一）。
+    func requestFit() {
+        guard !fitScheduled else { return }
+        fitScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.fitScheduled = false
+                self.fitToContent()
+            }
+        }
+    }
+
+    /// 按内容的理想高度改面板高度：锚定时保持顶边，浮窗时也保持顶边（向下长）。
     private func fitToContent() {
-        guard let panel, presentation != .hidden, let hosting = glass?.contentView else { return }
-        let height = ceil(max(hosting.fittingSize.height, 200))
+        guard let panel, presentation != .hidden, let hosting = glass?.contentView as? NSHostingView<PanelRootView>
+        else { return }
+        let height = ceil(max(Self.idealHeight(of: hosting), 200))
         guard abs(panel.frame.height - height) >= 1 else { return }
         var frame = panel.frame
         frame.origin.y += frame.height - height
@@ -322,6 +342,13 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             frame = anchoredFrame(for: frame.size)
         }
         panel.setFrame(frame, display: true)
+    }
+
+    /// 量一次内容的理想高度：临时打开固有尺寸，量完关掉（平时不维护，见 installContent）。
+    static func idealHeight(of hosting: NSHostingView<PanelRootView>) -> CGFloat {
+        hosting.sizingOptions = [.intrinsicContentSize]
+        defer { hosting.sizingOptions = [] }
+        return hosting.fittingSize.height
     }
 
     /// item 所在菜单栏窗口的 frame；窗口还没摆到菜单栏上（启动初期在原点）时为 nil。
@@ -432,16 +459,5 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 Log.panel.error("打开活动监视器失败：\(error.localizedDescription, privacy: .public)")
             }
         }
-    }
-}
-
-/// 内容的固有尺寸变化时通知面板改高。
-final class PanelHostingView<Content: View>: NSHostingView<Content> {
-    var onContentSizeChange: (() -> Void)?
-
-    override func invalidateIntrinsicContentSize() {
-        super.invalidateIntrinsicContentSize()
-        let callback = onContentSizeChange
-        DispatchQueue.main.async { callback?() }
     }
 }

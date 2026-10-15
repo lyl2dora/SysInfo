@@ -17,7 +17,7 @@
 #   并带 --factory-defaults 启动（不读写偏好）：测量不碰日用版 zone.lyl.sysinfo 的 defaults 域。
 #
 # 环境变量：WARMUP（默认 30）、DURATION（默认 120）、BASELINE（默认 1；0 表示不测基线）、
-#          OUTPUT（默认 docs/perf/cpu.md）。
+#          OUTPUT（默认 docs/perf/cpu.md）、TIERS（默认 "default panel details"，可只测其中几档）。
 # 对照机（make remote-measure，D39）另设：REMOTE_MODE=1（ad-hoc 签名；用 `open` 启动，ssh 会话里直接 exec 的
 #          GUI app 连不上窗口服务器）、DERIVED_DATA、GIT_COMMIT、BUILD_NUMBER（远端没有 .git）、APP_TMPDIR。
 set -euo pipefail
@@ -182,9 +182,15 @@ echo "测量期间尽量不要操作鼠标和键盘（会抬高 WindowServer 等
 if [ "${BASELINE}" != "0" ]; then
     measure baseline
 fi
-measure default --factory-defaults
-measure panel --factory-defaults --open-panel --pin-panel
-measure details --factory-defaults --open-panel --pin-panel --expand-details
+TIERS="${TIERS:-default panel details}"
+for tier in ${TIERS}; do
+    case "${tier}" in
+        default) measure default --factory-defaults ;;
+        panel) measure panel --factory-defaults --open-panel --pin-panel ;;
+        details) measure details --factory-defaults --open-panel --pin-panel --expand-details ;;
+        *) echo "未知档位：${tier}" >&2; exit 64 ;;
+    esac
+done
 
 # ---------------------------------------------------------------- 写结果
 

@@ -43,7 +43,6 @@ private struct CPUOverview: View {
                     Text(total?.value.map { PercentFormat.string(fromRatio: $0) } ?? PercentFormat.placeholder)
                         .font(.system(size: 34, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .contentTransition(.numericText())
                     if total?.quality == .estimated {
                         Text("估算")
                             .font(.caption)
@@ -130,6 +129,7 @@ private struct UserSystemBar: View {
 struct CPUCoresSection: View {
     let store: MetricStore
     let sensors: SensorCollector?
+    @Environment(\.panelLayoutChanged) private var layoutChanged
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -156,6 +156,8 @@ struct CPUCoresSection: View {
                 coreBars(Array(store.cpuCores.indices), color: .accentColor)
             }
         }
+        // 第一次采样之后才按拓扑分组显示，行数会变
+        .onChange(of: store.cpuCores.count) { layoutChanged() }
     }
 
     /// 档内各簇是否共用同一组温度键（D37：共用时温度只显示在组标题里）。
@@ -216,34 +218,30 @@ struct CPUCoresSection: View {
         return "—"
     }
 
+    /// 一组核的小柱：一个 Canvas 画完（原先每核一个 GeometryReader，每秒重算十几个视图，开销实测后改掉）。
+    /// 不可用时画成空槽，不画成 0。
     private func coreBars(_ cores: [Int], color: Color) -> some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            ForEach(cores, id: \.self) { index in
-                CoreBar(index: index, value: index < store.cpuCores.count ? store.cpuCores[index].value : nil, color: color)
-            }
-        }
-        .frame(height: 18)
-    }
-}
-
-/// 一个核的小柱。不可用时画成空槽，不画成 0。
-private struct CoreBar: View {
-    let index: Int
-    let value: Double?
-    let color: Color
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 1.5).fill(.quaternary)
+        let all = store.cpuCores
+        let values = cores.map { $0 < all.count ? all[$0].value : nil }
+        return Canvas { context, size in
+            let gap: CGFloat = 2
+            let count = CGFloat(max(values.count, 1))
+            let width = (size.width - gap * (count - 1)) / count
+            for (i, value) in values.enumerated() {
+                let x = CGFloat(i) * (width + gap)
+                let slot = CGRect(x: x, y: 0, width: width, height: size.height)
+                context.fill(Path(roundedRect: slot, cornerRadius: 1.5), with: .color(.secondary.opacity(0.25)))
                 if let value {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(color)
-                        .frame(height: max(proxy.size.height * min(max(value, 0), 1), 1))
+                    let h = max(size.height * CGFloat(min(max(value, 0), 1)), 1)
+                    let bar = CGRect(x: x, y: size.height - h, width: width, height: h)
+                    context.fill(Path(roundedRect: bar, cornerRadius: 1.5), with: .color(color))
                 }
             }
         }
-        .help(String(localized: "核 \(index)：\(value.map { PercentFormat.string(fromRatio: $0) } ?? String(localized: "不可用"))"))
+        .frame(height: 18)
+        .help(
+            zip(cores, values).map { cpu, value in "\(cpu)：\(value.map { PercentFormat.string(fromRatio: $0) } ?? "—")" }
+                .joined(separator: "  "))
     }
 }
 
@@ -254,6 +252,7 @@ private struct CPUDetailsSection: View {
     let services: CPUServices
     @State private var expanded: Bool
     @State private var sourcesExpanded: Bool
+    @Environment(\.panelLayoutChanged) private var layoutChanged
 
     init(store: MetricStore, services: CPUServices, expandInitially: Bool) {
         self.store = store
@@ -282,6 +281,8 @@ private struct CPUDetailsSection: View {
         } label: {
             Text("详情").font(.caption.weight(.semibold))
         }
+        .onChange(of: expanded) { layoutChanged() }
+        .onChange(of: sourcesExpanded) { layoutChanged() }
     }
 
     /// 按设备的中断次数（IOReport，展开时每 5 秒更新一次）。
@@ -302,6 +303,7 @@ private struct CPUDetailsSection: View {
                 .foregroundStyle(.secondary)
             }
         }
+        .onChange(of: min(sources.count, 8)) { layoutChanged() }
         .onAppear { services.setInterruptSourcesVisible(true) }
         .onDisappear { services.setInterruptSourcesVisible(false) }
     }

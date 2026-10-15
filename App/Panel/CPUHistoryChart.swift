@@ -4,7 +4,6 @@
 //   5 分钟一桶（288 点），7 天用小时表。画成均值线加峰值带（有峰值时），空洞处断开；
 // - 历史库的数据在 tab 可见期间每 60 s 重读一次（读之前记录器会先提交内存里的分钟）。
 
-import Charts
 import SwiftUI
 import SysCollectors
 import SysModel
@@ -40,14 +39,9 @@ struct CPUHistoryChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Picker("跨度", selection: Binding(get: { current }, set: { span = $0 })) {
-                ForEach(ChartSpan.allCases) { s in
-                    Text(Self.title(s)).tag(s)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
+            SegmentedButtons(
+                selection: Binding(get: { current }, set: { span = $0 }),
+                options: ChartSpan.allCases.map { ($0, Self.title($0)) })
 
             chart
                 .frame(height: 110)
@@ -124,51 +118,80 @@ struct CPUHistoryChart: View {
 
     // MARK: - 图
 
+    /// 用 Canvas 自绘（均值线 + 面积 / 峰值带、网格、刻度）。原先用 Swift Charts，每秒重新布局整张图，
+    /// 是面板开销的大头之一（CPU 模块偏离记录 2026-10-15）。
     private var chart: some View {
         let points = points
         let span = current.seconds
-        return Chart {
-            ForEach(points.filter { $0.peak != nil }) { p in
-                AreaMark(
-                    x: .value("时间", p.x), yStart: .value("均值", p.y), yEnd: .value("峰值", p.peak ?? p.y),
-                    series: .value("段", "peak\(p.segment)")
-                )
-                .foregroundStyle(Color.accentColor.opacity(0.15))
-            }
-            if !current.usesHistory {
-                AreaPlot(
-                    points, x: .value("时间", \.x), y: .value("占用", \.y), series: .value("段", \.segment),
-                    stacking: .unstacked
-                )
-                .foregroundStyle(Color.accentColor.opacity(0.18))
-            }
-            LinePlot(points, x: .value("时间", \.x), y: .value("占用", \.y), series: .value("段", \.segment))
-                .foregroundStyle(Color.accentColor)
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-        }
-        .chartXScale(domain: -span...0)
-        .chartYScale(domain: 0...1)
-        .chartXAxis {
-            AxisMarks(values: [-span, -span / 2, 0]) { value in
-                AxisGridLine()
-                let anchor: UnitPoint =
-                    value.index == 0 ? .topLeading : (value.index == value.count - 1 ? .topTrailing : .top)
-                AxisValueLabel(anchor: anchor, collisionResolution: .disabled) {
-                    if let seconds = value.as(Double.self) {
-                        Text(Self.axisLabel(-seconds))
+        let showsArea = !current.usesHistory
+        let ticks = [-span, -span / 2, 0]
+        return VStack(spacing: 2) {
+            HStack(alignment: .top, spacing: 4) {
+                Canvas { context, size in
+                    func x(_ v: Double) -> CGFloat { CGFloat((v + span) / span) * size.width }
+                    func y(_ v: Double) -> CGFloat { size.height * (1 - CGFloat(min(max(v, 0), 1))) }
+                    // 网格
+                    var grid = Path()
+                    for level in [0.0, 0.5, 1.0] {
+                        grid.move(to: CGPoint(x: 0, y: y(level)))
+                        grid.addLine(to: CGPoint(x: size.width, y: y(level)))
+                    }
+                    for t in ticks {
+                        grid.move(to: CGPoint(x: x(t), y: 0))
+                        grid.addLine(to: CGPoint(x: x(t), y: size.height))
+                    }
+                    context.stroke(grid, with: .color(.secondary.opacity(0.25)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                    // 按段画：空洞处断开
+                    let segments = Dictionary(grouping: points, by: \.segment).values.map { $0.sorted { $0.x < $1.x } }
+                    for segment in segments where !segment.isEmpty {
+                        var line = Path()
+                        for (i, p) in segment.enumerated() {
+                            let pt = CGPoint(x: x(p.x), y: y(p.y))
+                            if i == 0 { line.move(to: pt) } else { line.addLine(to: pt) }
+                        }
+                        if showsArea, let first = segment.first, let last = segment.last {
+                            var area = line
+                            area.addLine(to: CGPoint(x: x(last.x), y: y(0)))
+                            area.addLine(to: CGPoint(x: x(first.x), y: y(0)))
+                            area.closeSubpath()
+                            context.fill(area, with: .color(.accentColor.opacity(0.18)))
+                        }
+                        // 峰值带：均值到峰值之间
+                        let peaks = segment.filter { $0.peak != nil }
+                        if peaks.count == segment.count, segment.count > 1 {
+                            var band = Path()
+                            for (i, p) in segment.enumerated() {
+                                let pt = CGPoint(x: x(p.x), y: y(p.peak ?? p.y))
+                                if i == 0 { band.move(to: pt) } else { band.addLine(to: pt) }
+                            }
+                            for p in segment.reversed() { band.addLine(to: CGPoint(x: x(p.x), y: y(p.y))) }
+                            band.closeSubpath()
+                            context.fill(band, with: .color(.accentColor.opacity(0.15)))
+                        }
+                        context.stroke(line, with: .color(.accentColor), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
                     }
                 }
-            }
-        }
-        .chartYAxis {
-            AxisMarks(position: .trailing, values: [0, 0.5, 1]) { value in
-                AxisGridLine()
-                AxisValueLabel {
-                    if let ratio = value.as(Double.self) {
-                        Text(PercentFormat.string(fromRatio: ratio))
-                    }
+                VStack(alignment: .leading) {
+                    Text(PercentFormat.string(fromRatio: 1))
+                    Spacer()
+                    Text(PercentFormat.string(fromRatio: 0.5))
+                    Spacer()
+                    Text(PercentFormat.string(fromRatio: 0))
                 }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .leading)
             }
+            HStack {
+                Text(Self.axisLabel(span))
+                Spacer()
+                Text(Self.axisLabel(span / 2))
+                Spacer()
+                Text(Self.axisLabel(0))
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.trailing, 38)
         }
     }
 

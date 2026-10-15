@@ -13,6 +13,7 @@ struct TopNSection: View {
     let model: TopNModel
     let grouping: TopNGrouping
     @State private var expanded: Set<String> = []
+    @Environment(\.panelLayoutChanged) private var layoutChanged
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -49,6 +50,17 @@ struct TopNSection: View {
             }
         }
         .onHover { model.isFrozen = $0 }
+        .onChange(of: layoutSignature) { layoutChanged() }
+    }
+}
+
+extension TopNSection {
+    /// 影响高度的结构：行数、展开的行、各行有无副标题、展开行的成员数。
+    fileprivate var layoutSignature: [Int] {
+        [model.rows.count, model.isFallback ? 1 : 0]
+            + model.rows.map { row in
+                (row.topMember == nil ? 0 : 1) + (expanded.contains(row.id) ? 2 + row.members.count * 4 : 0)
+            }
     }
 }
 

@@ -8,8 +8,8 @@
 #   scripts/remote-app.sh shot <本地 png> [滚动位置 0…1]
 #                                               截 SysInfo Dev 的窗口（面板或设置窗口），取回本地
 #   scripts/remote-app.sh clean                 结束 app，取消 LaunchServices 登记，删掉这次运行新留下的家目录痕迹
-#   scripts/remote-app.sh measure               在远端跑 measure-overhead.sh（REMOTE_MODE），结果段追加到本地 docs/perf/cpu.md，
-#                                               之后清场
+#   scripts/remote-app.sh measure               在远端跑 measure-overhead.sh（REMOTE_MODE），结果段追加到本地 docs/perf/cpu.md
+#                                               （PERF_OUT 可改；TIERS、BASELINE、WARMUP、DURATION 透传），之后清场
 #
 # 远端只结束自己启动的 SysInfo Dev（按可执行文件路径匹配，D18）。清场只删「启动前不存在」的路径（启动时记一份清单）。
 set -euo pipefail
@@ -46,8 +46,9 @@ measure)
     for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
     remote "for p in $list; do [ -e \"\$p\" ] && echo \"\$p\"; done > $dir/preexisting.txt; rm -f $dir/perf.md; true"
     remote "cd $dir/repo && $env_vars REMOTE_MODE=1 DERIVED_DATA=$dir/measure-dd OUTPUT=$dir/perf.md APP_TMPDIR=$dir/tmp \
-        GIT_COMMIT=$commit BUILD_NUMBER=$number WARMUP=${WARMUP:-30} DURATION=${DURATION:-120} scripts/measure-overhead.sh"
-    out="$repo_root/docs/perf/cpu.md"
+        GIT_COMMIT=$commit BUILD_NUMBER=$number WARMUP=${WARMUP:-30} DURATION=${DURATION:-120} BASELINE=${BASELINE:-1} \
+        TIERS='${TIERS:-default panel details}' scripts/measure-overhead.sh"
+    out="${PERF_OUT:-$repo_root/docs/perf/cpu.md}"
     remote "sed -n '/^## /,\$p' $dir/perf.md" >"$dir.section.tmp" 2>/dev/null || true
     if [ -s "$dir.section.tmp" ]; then
         { echo ""; cat "$dir.section.tmp"; } >>"$out"
