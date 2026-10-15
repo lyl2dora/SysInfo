@@ -21,7 +21,7 @@ extension SysInfoCLI {
     }
 
     static func runHistory(_ arguments: [String]) async throws -> Int32 {
-        guard let what = arguments.first else { throw UsageError("history 需要指定动作：stats、export、record") }
+        guard let what = arguments.first else { throw UsageError("history 需要指定动作：stats、export、record、energy") }
         let rest = Array(arguments.dropFirst())
         switch what {
         case "stats":
@@ -60,6 +60,15 @@ extension SysInfoCLI {
                 let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
                 print("写出 \(file.path)（\(size) 字节）")
             }
+            return 0
+        case "energy":
+            let options = try Options(rest, flags: [], values: ["--db"])
+            let url = try historyURL(options.value("--db"))
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                printError("历史库不存在：\(url.path)")
+                return 1
+            }
+            printEnergy(try HistoryStore(url: url))
             return 0
         case "record":
             let options = try Options(rest, flags: ["--menubar", "--no-apps"], values: ["--db", "--seconds"])
@@ -104,6 +113,8 @@ extension SysInfoCLI {
         print(machineLine())
         let collectors = StandardCollectors.make()
         let appSampler = collectors.compactMap { $0 as? AppSampler }.first
+        let rail = collectors.compactMap { $0 as? PowerRailCollector }.first
+        let pmgr = collectors.compactMap { $0 as? PMGRBatchCollector }.first
         let engine = SamplingEngine(collectors: collectors)
         _ = await engine.runSelfTests()
         let store: HistoryStore
@@ -115,7 +126,7 @@ extension SysInfoCLI {
         }
         let recorder = HistoryRecorder(
             store: store, engine: engine, appSampler: appSampler,
-            configuration: .init(recordSystem: true, recordApps: apps))
+            power: .init(ledger: rail?.ledger, pmgr: pmgr), configuration: .init(recordSystem: true, recordApps: apps))
         let cpu0 = processCPUSeconds()
         let started = Date()
         await recorder.start()
@@ -140,7 +151,10 @@ extension SysInfoCLI {
             let stats = try await recorder.stats()
             printStats(stats)
             let now = Date()
-            for metric in [MetricID.cpuUsageTotal, .cpuTemperatureMax, .cpuPowerTotal, .cpuLoadAverage1] {
+            for metric in [
+                MetricID.cpuUsageTotal, .cpuTemperatureMax, .cpuPowerTotal, .cpuLoadAverage1, .powerSystem, .powerSoC,
+                .powerGPU, .thermalSoCHotspot,
+            ] {
                 let points = try await recorder.series(
                     metric, from: now.addingTimeInterval(-seconds - 120), to: now, granularity: .minute)
                 let text = points.map { p in
@@ -160,10 +174,35 @@ extension SysInfoCLI {
             let machine = total.reduce(0) { $0 + $1.avg * Double($1.n) } * cores
             let appSum = apps.reduce(0.0) { $0 + Double($1.cpuNanos) / 1e9 }
             print(String(format: "  核对：整机（按 cpu.usage.total）%.1f CPU·s，应用合计 %.1f CPU·s", machine, appSum))
+            let energy = try await recorder.energySummary(from: started.addingTimeInterval(-60), to: Date())
+            let mean = try await recorder.series(.powerSystem, from: started.addingTimeInterval(-60), to: Date(), granularity: .minute)
+            let viaMean = mean.reduce(0) { $0 + $1.avg * Double($1.n) }
+            print(
+                String(
+                    format: "  能耗：积分 %.1f J（覆盖 %.0f s）、补数 %.1f J；按 power.system 分钟均值×n 为 %.1f J",
+                    energy.integrated, energy.covered, energy.filled, viaMean))
         } catch {
             printError("读取失败：\(error)")
             return 1
         }
         return rows > 0 ? 0 : 1
+    }
+}
+
+extension SysInfoCLI {
+    /// 能耗汇总：今天、昨天、近 7 天（本地时区的自然日），以及最近 24 小时的逐小时值。
+    static func printEnergy(_ store: HistoryStore) {
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+        let week = calendar.date(byAdding: .day, value: -6, to: today)!
+        for (title, from, to) in [("今天", today, now), ("昨天", yesterday, today), ("近 7 天", week, now)] {
+            guard let s = try? store.energySummary(from: from, to: to) else { continue }
+            print(
+                String(
+                    format: "%@：%.3f kWh（积分 %.3f，系统累计补数 %.3f；积分覆盖 %.1f h）", title, s.kilowattHours,
+                    s.integrated / 3.6e6, s.filled / 3.6e6, s.covered / 3600))
+        }
     }
 }

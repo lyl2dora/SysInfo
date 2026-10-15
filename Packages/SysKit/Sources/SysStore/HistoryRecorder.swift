@@ -27,13 +27,39 @@ public actor HistoryRecorder {
         public var recordApps: Bool
         /// 后台高精度：频率、温度与功耗改为每 5 s（用户开启的高开销项，D19、CPU 模块设计 §7.3）。
         public var highPrecision: Bool
+        /// 记录功耗与散热指标（设置「记录功耗与散热历史」）：SoC/GPU 功率、最热点、风扇每 10 s，PMGR 批次每 60 s。
+        public var recordPower: Bool
+        /// 记录能耗（D46）：PDTR 每 1 s 积分。
+        public var recordEnergy: Bool
 
-        public init(recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false) {
+        public init(
+            recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false, recordPower: Bool = true,
+            recordEnergy: Bool = true
+        ) {
             self.recordSystem = recordSystem
             self.recordApps = recordApps
             self.highPrecision = highPrecision
+            self.recordPower = recordPower
+            self.recordEnergy = recordEnergy
         }
     }
+
+    /// 功耗与散热的状态来源：能耗补数要读遥测，PMGR 批次状态要持久化（功耗与散热模块设计 §5、§6）。
+    public struct PowerSources: Sendable {
+        public var ledger: PowerLedger?
+        public var pmgr: PMGRBatchCollector?
+
+        public init(ledger: PowerLedger?, pmgr: PMGRBatchCollector?) {
+            self.ledger = ledger
+            self.pmgr = pmgr
+        }
+    }
+
+    /// PDTR 积分的间隔（D46：1 s）、PMGR 批次检查的间隔。
+    public static let energyInterval = 1
+    public static let pmgrInterval = 60
+    static let anchorKey = "energy.anchor"
+    static let pmgrKey = "pmgr.state"
 
     /// 后台采样间隔（D30），基础 tick 数。
     public static let slowInterval = 60
@@ -51,6 +77,11 @@ public actor HistoryRecorder {
     private let store: HistoryStore
     private let engine: SamplingEngine
     private let appSampler: AppSampler?
+    private let power: PowerSources
+    private var energy = EnergyIntegrator()
+    /// 本次运行是否已经处理过「app 没运行的时段」的补数。
+    private var gapHandled = false
+    private var savedPMGR: PMGRState?
     private let resolver = AppIdentityResolver()
     /// 当前机器的 epoch 信息（起始分钟由记录器填）。
     private let epoch: @Sendable (Int64) -> HistoryEpoch?
@@ -76,12 +107,13 @@ public actor HistoryRecorder {
     ///   - epoch: 返回当前机器的 epoch（参数是起始分钟）；默认按 `HistoryRecorder.currentEpoch` 读取。
     public init(
         store: sending HistoryStore, engine: SamplingEngine, appSampler: AppSampler?,
-        configuration: Configuration = Configuration(),
+        power: PowerSources = PowerSources(ledger: nil, pmgr: nil), configuration: Configuration = Configuration(),
         epoch: @escaping @Sendable (Int64) -> HistoryEpoch? = { HistoryRecorder.currentEpoch(startMinute: $0) }
     ) {
         self.store = store
         self.engine = engine
         self.appSampler = appSampler
+        self.power = power
         self.configuration = configuration
         self.epoch = epoch
     }
@@ -103,6 +135,11 @@ public actor HistoryRecorder {
     /// 开始记录：订阅引擎事件、登记后台需求、排定提交。重复调用没有副作用。
     public func start() async {
         guard pump == nil else { return }
+        // PMGR：恢复上一次运行的批次状态，重启后能立即显示上一批（功耗与散热模块设计 §4.4）。
+        if let pmgr = power.pmgr, let saved = try? store.decoded(PMGRState.self, forKey: Self.pmgrKey) {
+            pmgr.restore(saved)
+            savedPMGR = saved
+        }
         let stream = await engine.events()
         pump = Task { [weak self] in
             for await event in stream {
@@ -159,6 +196,24 @@ public actor HistoryRecorder {
             demands.append(
                 Demand(collectors: [AppSampler.collectorID], interval: Self.appInterval, source: .history, tier: .background))
         }
+        if configuration.recordPower {
+            demands.append(
+                Demand(
+                    collectors: [PowerSensorCollector.collectorID, GPUPowerCollector.collectorID], interval: Self.sensorInterval,
+                    source: .history, tier: .background))
+            if power.pmgr != nil {
+                demands.append(
+                    Demand(
+                        collectors: [PMGRBatchCollector.collectorID], interval: Self.pmgrInterval, source: .history,
+                        tier: .background))
+            }
+        }
+        if configuration.recordEnergy {
+            demands.append(
+                Demand(
+                    collectors: [PowerRailCollector.collectorID], interval: Self.energyInterval, source: .history,
+                    tier: .background))
+        }
         appSampler?.setRetainsWindows(recordApps)
         for demand in demands {
             tokens.append(await engine.addDemand(demand))
@@ -168,6 +223,7 @@ public actor HistoryRecorder {
     /// 唤醒：各采集器唤醒后的第一个样本丢弃。
     public func noteWake() {
         aggregator.noteWake()
+        energy.noteWake()
         scheduleFlush()
     }
 
@@ -175,7 +231,14 @@ public actor HistoryRecorder {
 
     private func handle(_ event: EngineEvent) {
         guard case .tick(let result) = event else { return }
-        if configuration.recordSystem { aggregator.ingest(result) }
+        var modules: Set<HistoryModule> = []
+        if configuration.recordSystem { modules.insert(.cpu) }
+        if configuration.recordPower { modules.insert(.power) }
+        if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
+        if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
+            energy.ingest(watts: watts, at: sample.time)
+            fillGapIfNeeded()
+        }
         if result.collectors.contains(AppSampler.collectorID), configuration.recordApps, let appSampler {
             for window in appSampler.drainRetainedWindows() {
                 let top = window.coalitions.prefix(Self.identitiesPerWindow).filter { $0.cpuNanos > 0 }
@@ -225,7 +288,10 @@ public actor HistoryRecorder {
                 }
             }
             try store.write(rows: taken.rows, apps: taken.apps)
+            try store.writeEnergy(energy.take(before: includeCurrent ? nil : current))
             try store.rollUpHours(through: HistoryStore.floorDiv(current, 60) - 1)
+            try store.rollUpEnergyHours(through: HistoryStore.floorDiv(current, 60) - 1)
+            try saveAnchorAndPMGR()
             if lastPrune.map({ now.timeIntervalSince($0) >= 86_400 }) ?? true {
                 try store.prune(before: current - Int64(HistoryStore.minuteRetention / 60))
                 lastPrune = now
@@ -238,6 +304,40 @@ public actor HistoryRecorder {
             lastError = "\(error)"
             logger.error("历史提交失败：\(String(describing: error), privacy: .public)")
         }
+    }
+
+    // MARK: - 能耗与 PMGR（功耗与散热模块设计 §5）
+
+    /// app 没运行的时段用累加器补上（D46）。只在本次运行拿到第一个遥测读数后做一次。
+    private func fillGapIfNeeded() {
+        guard !gapHandled, let reading = power.ledger?.latestTelemetry, let boot = SystemInfo.bootTime else { return }
+        gapHandled = true
+        let anchor = try? store.decoded(EnergyAnchor.self, forKey: Self.anchorKey)
+        guard let gap = EnergyGap.fill(anchor: anchor, now: reading, bootTime: boot) else { return }
+        do {
+            try store.writeEnergyFill(EnergyGap.perMinute(start: gap.start, end: gap.end, joules: gap.joules))
+            logger.info(
+                "能耗补数：\(Int(gap.end.timeIntervalSince(gap.start))) s，\(String(format: "%.1f", gap.joules / 3600)) Wh（系统累计）")
+        } catch {
+            logger.error("能耗补数失败：\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// 提交时更新能耗锚点与 PMGR 批次状态。
+    private func saveAnchorAndPMGR() throws {
+        if configuration.recordEnergy, gapHandled, let reading = power.ledger?.latestTelemetry, let boot = SystemInfo.bootTime {
+            try store.setEncoded(EnergyAnchor(telemetry: reading, bootTime: boot), forKey: Self.anchorKey)
+        }
+        if let state = power.pmgr?.persistentState, state != savedPMGR {
+            try store.setEncoded(state, forKey: Self.pmgrKey)
+            savedPMGR = state
+        }
+    }
+
+    /// 一段时间内的能耗（先提交内存里的数据）。
+    public func energySummary(from: Date, to: Date) throws -> EnergySummary {
+        flush()
+        return try store.energySummary(from: from, to: to)
     }
 
     // MARK: - 读取与维护

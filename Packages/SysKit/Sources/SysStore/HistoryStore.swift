@@ -112,7 +112,8 @@ public struct HistoryStats: Hashable, Sendable {
 
 public final class HistoryStore {
     /// 当前表结构版本。
-    public static let schemaVersion: Int64 = 1
+    /// 1：CPU 模块（D30）；2：能耗与 kv 表（功耗与散热模块设计 §6，D46）。
+    public static let schemaVersion: Int64 = 2
     /// 分钟级与每应用数据的保留期（D30）。
     public static let minuteRetention: TimeInterval = 30 * 86_400
 
@@ -178,6 +179,17 @@ public final class HistoryStore {
                     CREATE TABLE app_minute(
                         t INTEGER NOT NULL, app INTEGER NOT NULL, cpu_ns INTEGER NOT NULL, energy_nj INTEGER,
                         PRIMARY KEY(t, app)) WITHOUT ROWID;
+                    """)
+            }
+            if version < 2 {
+                try db.execute(
+                    """
+                    CREATE TABLE energy_minute(t INTEGER PRIMARY KEY, joules REAL NOT NULL, covered_s REAL NOT NULL);
+                    CREATE TABLE energy_fill_minute(t INTEGER PRIMARY KEY, joules REAL NOT NULL, covered_s REAL NOT NULL);
+                    CREATE TABLE energy_hour(
+                        t INTEGER NOT NULL, source INTEGER NOT NULL, joules REAL NOT NULL, covered_s REAL NOT NULL,
+                        PRIMARY KEY(t, source)) WITHOUT ROWID;
+                    CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
                     """)
             }
             try db.execute("PRAGMA user_version = \(Self.schemaVersion)")
@@ -291,6 +303,8 @@ public final class HistoryStore {
         try db.transaction { () throws(SQLiteError) in
             try db.statement("DELETE FROM sample_minute WHERE t < ?").run([.int(minute)])
             try db.statement("DELETE FROM app_minute WHERE t < ?").run([.int(minute)])
+            try db.statement("DELETE FROM energy_minute WHERE t < ?").run([.int(minute)])
+            try db.statement("DELETE FROM energy_fill_minute WHERE t < ?").run([.int(minute)])
             try db.execute("DELETE FROM app WHERE id NOT IN (SELECT DISTINCT app FROM app_minute)")
         }
         try reloadApps()

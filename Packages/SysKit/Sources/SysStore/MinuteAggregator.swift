@@ -75,9 +75,9 @@ public struct MinuteAggregator: Sendable {
     // MARK: - 写入
 
     /// 吃一个 tick 结果：入库的样本按区间记账，并更新本结果里跑过的采集器的运行时刻。
-    public mutating func ingest(_ result: TickResult) {
+    public mutating func ingest(_ result: TickResult, modules: Set<HistoryModule> = Set(HistoryModule.allCases)) {
         for sample in result.samples {
-            guard let spec = HistoryCatalog.spec(for: sample.id), let value = sample.value,
+            guard let spec = HistoryCatalog.spec(for: sample.id), modules.contains(spec.module), let value = sample.value,
                 let quality = HistoryQuality(sample.quality), value.isFinite,
                 let previous = lastRun[spec.collector], result.time.monotonicNanos > previous.monotonicNanos
             else { continue }
