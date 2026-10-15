@@ -3,6 +3,7 @@
 import AppKit
 import SwiftUI
 import SysCollectors
+import SysStore
 
 struct SettingsRootView: View {
     let context: SettingsContext
@@ -46,9 +47,9 @@ private struct SettingsSplitView: View {
         case .menuBar:
             MenuBarSettingsView(settings: context.settings)
         case .cpu:
-            CPUSettingsView(settings: context.settings)
+            CPUSettingsView(settings: context.settings, store: context.store)
         case .history:
-            HistorySettingsView()
+            HistorySettingsView(settings: context.settings, history: context.services.history)
         case .privacy:
             PrivacySettingsView()
         case .diagnostics:
@@ -107,46 +108,6 @@ private struct MenuBarSettingsView: View {
     }
 }
 
-private struct CPUSettingsView: View {
-    @Bindable var settings: AppSettings
-
-    var body: some View {
-        Form {
-            Section {
-                Picker("采集间隔", selection: $settings.cpuIntervalOverride) {
-                    Text("跟随默认（\(DisplayNames.interval(settings.globalInterval))）")
-                        .tag(SamplingInterval?.none)
-                    ForEach(SamplingInterval.allCases) { interval in
-                        Text(DisplayNames.interval(interval)).tag(Optional(interval))
-                    }
-                }
-                Text("面板打开期间 CPU 固定按 1 秒采样。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Section("高开销选项") {
-                Text("暂无高开销选项。之后加入的选项会在这里标注大致开销。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
-private struct HistorySettingsView: View {
-    var body: some View {
-        Form {
-            Section {
-                Text("历史记录的持久化与导出尚未实现。目前只在内存中保留最近 15 分钟的数据。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
 /// D22：列出所有可能的出站连接与授权申请。目前两者都没有；以后加入联网或需授权的功能时，在这里逐项列出目标与用途（D27）。
 private struct PrivacySettingsView: View {
     var body: some View {
@@ -165,6 +126,15 @@ private struct PrivacySettingsView: View {
             }
             Section("数据存放") {
                 Text("采集到的数据只保存在本机。诊断信息和日志也只写在本机。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if let url = HistoryStore.defaultURL(bundleIdentifier: BuildInfo.bundleIdentifier) {
+                    PathRow(title: String(localized: "历史库"), url: url)
+                }
+                if let url = ChipProfileStore.calibrationDirectory() {
+                    PathRow(title: String(localized: "传感器校准缓存"), url: url)
+                }
+                Text("历史库和导出文件不含序列号、硬件 UUID、MAC 地址等设备唯一标识。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -192,6 +162,32 @@ private struct AboutView: View {
 }
 
 // MARK: - 工具
+
+/// 一个本机路径，可以在访达中显示。
+struct PathRow: View {
+    let title: String
+    let url: URL
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 6) {
+                Text(url.path(percentEncoded: false).replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    .font(.caption)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Button {
+                    let target = FileManager.default.fileExists(atPath: url.path) ? url : url.deletingLastPathComponent()
+                    NSWorkspace.shared.activateFileViewerSelecting([target])
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .buttonStyle(.borderless)
+                .help("在访达中显示")
+            }
+        }
+    }
+}
 
 /// 取得 SwiftUI 内容所在的 NSWindow（设置窗口关闭时要切回 accessory）。
 private struct WindowReader: NSViewRepresentable {

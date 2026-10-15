@@ -90,7 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panel = panel
         self.statusItems = statusItems
 
-        let settingsWindow = SettingsController(settings: settings, store: store, throttle: throttle, engine: engine)
+        let settingsWindow = SettingsController(
+            settings: settings, store: store, throttle: throttle, engine: engine, services: services)
         settingsWindow.install()
         panel.onOpenSettings = { [weak self] in self?.openSettings() }
         self.settingsWindow = settingsWindow
@@ -107,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.showWithoutSession()
         }
         if options.openSettings || !settings.cpuItemVisible {
-            settingsWindow.open()
+            settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
         }
     }
 

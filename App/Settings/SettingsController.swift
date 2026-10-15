@@ -64,24 +64,28 @@ final class SettingsController {
     private let store: MetricStore
     private let throttle: ThrottleMonitor
     private let engine: SamplingEngine
+    private let services: CPUServices
     private let diagnosticsDemand: DemandSlot
 
     private var openSettingsAction: (() -> Void)?
     private weak var window: NSWindow?
     private var windowObservers: [any NSObjectProtocol] = []
 
-    init(settings: AppSettings, store: MetricStore, throttle: ThrottleMonitor, engine: SamplingEngine) {
+    init(
+        settings: AppSettings, store: MetricStore, throttle: ThrottleMonitor, engine: SamplingEngine, services: CPUServices
+    ) {
         self.settings = settings
         self.store = store
         self.throttle = throttle
         self.engine = engine
+        self.services = services
         self.diagnosticsDemand = DemandSlot(engine: engine)
     }
 
     /// 把 Settings 场景挂到 NSApplication 上（启动时调用一次）。
     func install() {
         let context = SettingsContext(
-            settings: settings, store: store, throttle: throttle, state: state,
+            settings: settings, store: store, throttle: throttle, state: state, services: services, engine: engine,
             windowAttached: { [weak self] window in self?.attach(window) },
             diagnosticsVisibilityChanged: { [weak self] visible in self?.setDiagnosticsVisible(visible) },
             runSelfTests: { [engine] in
@@ -165,6 +169,8 @@ struct SettingsContext {
     let store: MetricStore
     let throttle: ThrottleMonitor
     let state: SettingsState
+    let services: CPUServices
+    let engine: SamplingEngine
     let windowAttached: (NSWindow) -> Void
     let diagnosticsVisibilityChanged: (Bool) -> Void
     let runSelfTests: () -> Void
