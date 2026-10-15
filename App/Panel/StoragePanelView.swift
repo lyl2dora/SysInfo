@@ -687,7 +687,7 @@ final class SMARTDrawView: LiveDrawView {
         Self.draw(Self.text(note, Self.caption2, .secondaryLabelColor), x: 0, y: y)
         if record?.powerOnHoursUnreliable == true {
             Self.draw(
-                Self.text(String(localized: "Apple 控制器的通电时间严重低报（实测远少于实际使用时长），仅供参考。"), Self.caption2, .secondaryLabelColor),
+                Self.text(String(localized: "Apple 控制器的通电时间严重低报，仅供参考。"), Self.caption2, .secondaryLabelColor),
                 x: 0, y: y + 13)
         }
         setAccessibilityLabel(String(localized: "SMART"))

@@ -362,7 +362,7 @@ final class AppSettings {
         didSet { persist(storageSMARTInterval, Key.storageSMARTInterval) }
     }
 
-    /// 面板磁盘 Top N 的间隔（默认 2 s）。
+    /// 面板磁盘 Top N 的间隔（默认 5 s：coalition 全量扫描一次约 10–14 ms；磁盘计数在 2 s 窗口里常常没有变化，存储模块设计 §11）。
     var storageTopNInterval: Int {
         didSet { persist(storageTopNInterval, Key.storageTopNInterval) }
     }
@@ -468,7 +468,7 @@ final class AppSettings {
             defaults?.string(forKey: Key.diskThroughputTarget).flatMap(StorageTarget.init(storageValue:)) ?? .primary
         diskFreeTarget = defaults?.string(forKey: Key.diskFreeTarget).flatMap(StorageTarget.init(storageValue:)) ?? .primary
         storageSMARTInterval = Self.int(defaults, Key.storageSMARTInterval, choices: Self.panelIntervals) ?? 2
-        storageTopNInterval = Self.int(defaults, Key.storageTopNInterval, choices: Self.panelIntervals) ?? 2
+        storageTopNInterval = Self.int(defaults, Key.storageTopNInterval, choices: Self.panelIntervals) ?? 5
         storageTopNRows = Self.int(defaults, Key.storageTopNRows, choices: Self.topNRowChoices) ?? 5
         storageGrouping = defaults?.string(forKey: Key.storageGrouping).flatMap(TopNGrouping.init(rawValue:)) ?? .byApp
         storageChartSpan = defaults?.string(forKey: Key.storageChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes

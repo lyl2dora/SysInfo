@@ -118,7 +118,7 @@
 | 盘温 widget | `storage.smart`（焦点 = 绑定的盘，「最高温」时为全部） | 存储模块常驻间隔（跟随全局，默认 1 s） |
 | 读写 widget | `storage.io` | 同上 |
 | 可用空间 widget | `storage.capacity` | 60 s |
-| 面板存储 tab | `storage.io` 1 s、`storage.smart` 按设置（默认 2 s，焦点 = 全部）、`storage.capacity` 10 s、Top N 按设置（默认 2 s） | — |
+| 面板存储 tab | `storage.io` 1 s、`storage.smart` 按设置（默认 2 s，焦点 = 全部）、`storage.capacity` 10 s、Top N 按设置（默认 5 s） | — |
 | 历史（background） | `storage.io` 60 s、`storage.smart` 60 s、`storage.capacity` 60 s | — |
 | 诊断页 | 同面板，另加节流计数（展开时） | — |
 
@@ -187,3 +187,13 @@
 M4 只有内置盘：外置盘、RAID、雷电 SMART 只在 M5 上验收（D54）。
 
 ## 11. 偏离记录
+
+- 2026-10-16：SMART 连接由常驻改为每次打开 → 读 → 关闭（D56）。实现后跑硬件测试时发现：SysInfo Dev 开着常驻连接，测试进程打开同一块盘返回 `kIOReturnExclusiveAccess`。
+- 2026-10-16：导出里存储指标的列名保留加盐键，`metadata.json` 新增 `storageDevices`，把键对应到「型号 + 位置」（例如 `INTEL SSDPF2NV153TZ · RAID Media member 3`），不在列名里换成标签：标签里有空格和中点，作 CSV 列名不便处理。§3.1「导出时盘的键换成型号 + 位置」按此理解。
+- 2026-10-16：容量组区分主组与辅助组（`isAuxiliary`）。内置盘上只有 Recovery、预启动等系统卷的 APFS 容器（iSCPreboot 约 0.5 GB）不进组标题与历史，只在诊断页与详情页列出；没有任何已挂载卷的容器（内置盘的 Recovery 容器）不成组。
+- 2026-10-16：概览行的容量条改用 3 位有效数字（「141 GB / 995 GB」），可清除空间只放进详情页的卷构成：内置盘那一行放不下「已用 / 可用（另可清除）」两段长文字，自查时发现重叠。
+- 2026-10-16：coalition 的 6/7 号槽在空闲时 2 s 窗口里常常没有变化（同 uid 回退用的 `ri_diskio_*` 却有几十 KB/s），持续写入时每秒都能看到（`dd` 每秒 20 MB 准确计入）。磁盘 Top N 默认 2 s，空闲时可能只有零星几行，属于数据源本身的粒度。
+- 2026-10-16：详情页放进限高滚动区（屏幕可见高度 − 150 pt）。内置盘详情（SMART 全字段 + 两个容量组的卷构成）比 1080 p 屏幕的可见高度还高。
+- 2026-10-16：新增启动参数 `--storage-detail=<n>`（直接打开第 n 块盘的详情页），截图自查与 `make measure` 的 `storage-detail` 档用。
+- 2026-10-16：`IOReportChannelDelta` 加 `driverName`（诊断页的 NVMe 节流计数要按驱动区分同名通道，再按驱动名里的 registry ID 对应到盘）。
+- 2026-10-16：磁盘 Top N 默认间隔由 2 s 改为 5 s（同内存）。M5 实测存储概览档 1.85%，其中 coalition 每 2 s 全量扫描约占 0.7%；而 coalition 的磁盘计数在 2 s 窗口里常常没有变化，5 s 窗口的排名反而更稳定。
