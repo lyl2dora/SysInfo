@@ -69,10 +69,13 @@ public struct TickResult: Hashable, Sendable {
     public var cost: SampleCost
     /// tick 结束时的调度器状态。
     public var status: EngineStatus
+    /// 本结果来自哪条通道：主 tick 的结果为 `.inline`；阻塞通道的每个采集器各交付一个 `.blocking` 结果，
+    /// tick 序号和 `time` 与同一个 tick 的主结果相同。
+    public var lane: CollectorLane
 
     public init(
         tick: Int64, time: SampleTime, collectors: [CollectorID], samples: [Sample], cost: SampleCost,
-        status: EngineStatus
+        status: EngineStatus, lane: CollectorLane = .inline
     ) {
         self.tick = tick
         self.time = time
@@ -80,6 +83,7 @@ public struct TickResult: Hashable, Sendable {
         self.samples = samples
         self.cost = cost
         self.status = status
+        self.lane = lane
     }
 }
 

@@ -129,6 +129,8 @@ public struct CollectorHealth: Sendable, Hashable, Codable {
     public var sampleCount: UInt64
     /// 至今读到陈旧数据而跳过的次数。
     public var staleCount: UInt64
+    /// 阻塞通道的采集器：到期时上一次采样还没结束、因而跳过的次数（CPU 模块设计 §5.1）。
+    public var skippedBusyCount: UInt64 = 0
 
     public init(
         id: CollectorID,

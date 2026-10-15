@@ -1,13 +1,21 @@
 // 采集层稳定代码到界面文案的映射（D23：文案统一走 String Catalog），以及诊断页用到的格式化。
 
 import Foundation
+import SwiftUI
 import SysCollectors
 import SysModel
+import SysStore
 
 enum DisplayNames {
     static func collector(_ id: CollectorID) -> String {
         switch id.rawValue {
         case "cpu.load": String(localized: "CPU 负载")
+        case "cpu.freq": String(localized: "CPU 频率")
+        case "cpu.misc": String(localized: "负载均值与中断")
+        case "cpu.sensors": String(localized: "温度与功耗")
+        case "app.coalition": String(localized: "应用活动")
+        case "cpu.irq.devices": String(localized: "中断来源")
+        case "cpu.freq.cores": String(localized: "逐核频率")
         case "app.self": String(localized: "本进程开销")
         default: id.rawValue
         }
@@ -42,6 +50,7 @@ enum DisplayNames {
         case .panel: String(localized: "面板")
         case .diagnostics: String(localized: "诊断页")
         case .cli: String(localized: "命令行")
+        case .history: String(localized: "历史记录")
         default: source.rawValue
         }
     }
@@ -68,6 +77,36 @@ enum DisplayNames {
     static func interval(_ interval: SamplingInterval) -> String {
         String(localized: "\(interval.rawValue) 秒")
     }
+
+    /// 核档名：取内核给的名字并本地化，不认识的原样显示（D29）。
+    static func perfLevel(_ name: String) -> String {
+        switch name {
+        case "Super": String(localized: "超级核")
+        case "Performance": String(localized: "性能核")
+        case "Efficiency": String(localized: "能效核")
+        default: name
+        }
+    }
+
+    /// 核档颜色：按名字取，不认识的按序号取备用色（D29）。
+    static func perfLevelColor(_ name: String, index: Int) -> Color {
+        switch name {
+        case "Super": .purple
+        case "Performance": .blue
+        case "Efficiency": .green
+        default: [Color.orange, .teal, .pink][index % 3]
+        }
+    }
+
+    /// 热状态徽标（只做徽标，不参与着色，D29）；nominal 时为 nil。
+    static func thermalState(_ value: Double) -> (text: String, color: Color)? {
+        switch Int(value) {
+        case 1: (String(localized: "偏热"), .yellow)
+        case 2: (String(localized: "过热"), .orange)
+        case 3: (String(localized: "严重过热"), .red)
+        default: nil
+        }
+    }
 }
 
 enum Formatting {
@@ -83,5 +122,30 @@ enum Formatting {
 
     static func time(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .standard)
+    }
+
+    /// 频率：Hz → 「3.12 GHz」或「980 MHz」。
+    static func frequency(_ hertz: Double) -> String {
+        hertz >= 1e9 ? String(format: "%.2f GHz", hertz / 1e9) : String(format: "%.0f MHz", hertz / 1e6)
+    }
+
+    static func temperature(_ celsius: Double) -> String {
+        String(format: "%.0f °C", celsius)
+    }
+
+    static func watts(_ watts: Double) -> String {
+        watts < 10 ? String(format: "%.2f W", watts) : String(format: "%.1f W", watts)
+    }
+
+    /// 每秒次数：「1.2k/s」。
+    static func rate(_ perSecond: Double) -> String {
+        perSecond >= 1000 ? String(format: "%.1fk/s", perSecond / 1000) : String(format: "%.0f/s", perSecond)
+    }
+
+    static func duration(_ seconds: TimeInterval) -> String {
+        let f = DateComponentsFormatter()
+        f.allowedUnits = seconds >= 86_400 ? [.day, .hour] : [.hour, .minute]
+        f.unitsStyle = .abbreviated
+        return f.string(from: seconds) ?? "—"
     }
 }

@@ -15,13 +15,13 @@ DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
 RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
 DEV_BUNDLE_ID  := zone.lyl.sysinfo.dev
 
-# Mac Studio（M2 Max，D25）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
+# 远端对照机（M4 Pro Mac mini，D28）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
 REMOTE_HOST    ?= user@remote-host
 REMOTE_DIR     := /tmp/sysinfo-remote
 # SwiftPM 默认往家目录写 manifest 缓存、配置和安全目录（~/Library/Caches/org.swift.swiftpm、
 # ~/Library/org.swift.swiftpm、~/.swiftpm 下的链接）。显式指定 --cache-path 等之后它仍会重建
 # ~/.swiftpm/security 链接，改 HOME 也没用（它按 NSHomeDirectory 取家目录），所以另设 CFFIXED_USER_HOME
-# 把家目录整个换到 REMOTE_DIR/home（2026-09-29 在 Mac Studio 上实测：真实家目录下不再有任何改动）。
+# 把家目录整个换到 REMOTE_DIR/home（2026-09-29 在当时的对照机 Mac Studio 上实测：真实家目录下不再有任何改动）。
 # 构建目录本来就在 REMOTE_DIR/SysKit/.build；TMPDIR 也指过去，xcrun 等工具按它写临时缓存。
 REMOTE_SWIFTPM := --cache-path $(REMOTE_DIR)/swiftpm/cache --config-path $(REMOTE_DIR)/swiftpm/config \
 	--security-path $(REMOTE_DIR)/swiftpm/security --manifest-cache local
@@ -38,9 +38,9 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 
 # 私有 C 层隔离检查的范围（D05、D23）：能经依赖闭包看到 CSysPrivate、但不允许 import 它的源码目录。
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
-PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli
+PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -50,12 +50,15 @@ help:
 	@echo "  test        运行 SysKit 单元测试（跳过 .hardware 标签）"
 	@echo "  test-hw     运行 SysKit 单元测试，包括硬件测试"
 	@echo "  cli         构建并运行 sysinfo-cli，ARGS 为子命令与选项"
-	@echo "  remote-cli  在 Mac Studio（$(REMOTE_HOST)）上构建并运行 sysinfo-cli（只写远端 $(REMOTE_DIR)）"
-	@echo "  remote-test 在 Mac Studio 上运行 SysKit 单元测试，包括硬件测试（只写远端 $(REMOTE_DIR)）"
+	@echo "  remote-cli  在对照机（$(REMOTE_HOST)）上构建并运行 sysinfo-cli（只写远端 $(REMOTE_DIR)）"
+	@echo "  remote-test 在对照机上运行 SysKit 单元测试，包括硬件测试（只写远端 $(REMOTE_DIR)）"
+	@echo "  remote-measure  在对照机上做同样的开销测量，结果追加到 docs/perf/cpu.md，之后清场（D39）"
+	@echo "  remote-app-build / remote-app-run / remote-app-shot / remote-app-clean"
+	@echo "              在对照机上构建、启动、截图、清场 Debug 版 app（D39；run 的 ARGS 传给 app，shot 用 OUT= 与 POS=）"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
-	@echo "  check-private-imports  检查 app 与 sysinfo-cli 没有引用 CSysPrivate（test、cli 会先跑它）"
+	@echo "  check-private-imports  检查 app、sysinfo-cli 与 SysStore 没有引用 CSysPrivate（test、cli 会先跑它）"
 	@echo "  test-scripts  运行 check-private-imports 的回归样例（test、test-hw 会先跑它）"
 	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
 
@@ -100,6 +103,23 @@ remote-cli: remote-sync
 # 在远端跑单元测试，包括硬件测试（D25：每个模块验收要附两台机器的结果）。
 remote-test: test-scripts remote-sync
 	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && $(REMOTE_ENV) SYSINFO_HW_TESTS=1 swift test $(REMOTE_SWIFTPM)'
+
+# D39：对照机上的截图自查。启动总是带 --factory-defaults；用完 remote-app-clean 清场。
+remote-app-build: check-private-imports
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh build
+
+remote-app-run:
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh run $(ARGS)
+
+remote-app-shot:
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh shot "$(OUT)" $(POS)
+
+remote-app-clean:
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh clean
+
+# CPU 模块设计 §10：在对照机上做同样的四档测量（远端检测到 Stats 时同样拒绝执行），结果追加到 docs/perf/cpu.md，之后清场（D39）。
+remote-measure: check-private-imports
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh measure
 
 measure:
 	@if [ ! -x scripts/measure-overhead.sh ]; then \

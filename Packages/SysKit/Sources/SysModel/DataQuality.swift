@@ -50,4 +50,14 @@ public struct UnavailableReason: Sendable, Hashable, Codable, CustomStringConver
     public static func counterReset(_ detail: String? = nil) -> Self { Self(code: "counterReset", detail: detail) }
     /// 两次读数之间计数器没有前进，无法算出比例。
     public static func noElapsedTicks(_ detail: String? = nil) -> Self { Self(code: "noElapsedTicks", detail: detail) }
+    /// 簇几乎不活跃，频率没有意义（UI 显示「空闲」）。
+    public static func clusterIdle(_ detail: String? = nil) -> Self { Self(code: "clusterIdle", detail: detail) }
+    /// 本芯片没有专用功耗轨，按 D29 不估算。
+    public static func noDedicatedRail(_ detail: String? = nil) -> Self { Self(code: "noDedicatedRail", detail: detail) }
+    /// 传感器所在区域断电，读到的是占位值（M4 的 40.0、-4.0 等）。
+    public static func sensorPowerGated(_ detail: String? = nil) -> Self { Self(code: "sensorPowerGated", detail: detail) }
+    /// 温度键归簇还在学习中。
+    public static func learning(_ detail: String? = nil) -> Self { Self(code: "learning", detail: detail) }
+    /// 没有归到任何簇的数据。
+    public static func notAttributed(_ detail: String? = nil) -> Self { Self(code: "notAttributed", detail: detail) }
 }

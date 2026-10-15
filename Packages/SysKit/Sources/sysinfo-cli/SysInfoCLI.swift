@@ -1,7 +1,10 @@
 // sysinfo-cli：跨机对照用的命令行（M0 设计 §7，D25）。
 //
 // - selftest：运行所有采集器的自检并打印结果；
-// - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用和每核占用；
+// - cpu：直接用 CPU 负载采集器（不经调度器）逐次打印总占用、用户/系统、每档、每簇和每核占用；
+// - topo：打印拓扑发现的结果和三种档次依据（CPU 模块设计 §8）；
+// - freq、verify freq：每簇频率，以及按档与内核计数对照（Freq.swift）；
+// - history：历史库的统计、导出与实录（History.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
 // 输出里只有机型标识（如 Mac17,16）和系统 build 号，不含序列号等设备唯一标识。
@@ -30,6 +33,67 @@ struct SysInfoCLI {
                 let interval = try options.double("--interval", default: 1, range: 0.1...3600)
                 let count = try options.int("--count", default: 5, range: 1...1_000_000)
                 exit(runCPU(interval: interval, count: count, json: options.flag("--json")))
+            case "freq":
+                let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count"])
+                let interval = try options.double("--interval", default: 5, range: 0.1...3600)
+                let count = try options.int("--count", default: 3, range: 1...1_000_000)
+                exit(runFreq(interval: interval, count: count, json: options.flag("--json")))
+            case "verify":
+                guard let what = arguments.first else { throw UsageError("verify 需要指定对象：freq、topn、passive") }
+                let options = try Options(Array(arguments.dropFirst()), flags: ["--yes"], values: ["--seconds"])
+                switch what {
+                case "freq": exit(runVerifyFreq(confirmed: options.flag("--yes")))
+                case "topn": exit(runVerifyTopN(seconds: try options.double("--seconds", default: 5, range: 1...60)))
+                case "passive":
+                    exit(await runVerifyPassive(seconds: try options.double("--seconds", default: 30, range: 10...60), load: options.flag("--yes")))
+                default: throw UsageError("未知的 verify 对象：\(what)")
+                }
+            case "topn":
+                let options = try Options(
+                    arguments, flags: ["--json", "--by-process", "--fallback", "--refresh-all"],
+                    values: ["--interval", "--count", "--rows"])
+                exit(
+                    runTopN(
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        count: try options.int("--count", default: 3, range: 1...1_000_000),
+                        rows: try options.int("--rows", default: 10, range: 1...100),
+                        grouping: options.flag("--by-process") ? .byProcess : .byApp, fallback: options.flag("--fallback"),
+                        refreshAll: options.flag("--refresh-all"), json: options.flag("--json")))
+            case "sensors":
+                let options = try Options(arguments, flags: ["--json", "--raw"], values: ["--interval", "--count"])
+                let interval = try options.double("--interval", default: 2, range: 0.5...3600)
+                let count = try options.int("--count", default: 3, range: 1...1_000_000)
+                exit(runSensors(interval: interval, count: count, raw: options.flag("--raw"), json: options.flag("--json")))
+            case "calibrate":
+                let options = try Options(
+                    arguments, flags: ["--yes", "--verbose"], values: ["--save-recording", "--from-recording", "--emit-profile"])
+                exit(
+                    runCalibrate(
+                        confirmed: options.flag("--yes"), saveRecording: options.value("--save-recording"),
+                        fromRecording: options.value("--from-recording"), emitProfile: options.value("--emit-profile"),
+                        verbose: options.flag("--verbose")))
+            case "topo":
+                let options = try Options(arguments, flags: ["--json"], values: [])
+                exit(runTopo(json: options.flag("--json")))
+            case "rusage":
+                let options = try Options(arguments, flags: [], values: ["--pid"])
+                guard let raw = options.value("--pid"), let pid = Int32(raw) else { throw UsageError("rusage 需要 --pid") }
+                exit(runRusage(pid: pid))
+            case "cores":
+                let options = try Options(arguments, flags: [], values: ["--interval", "--count"])
+                exit(
+                    runCoreFrequency(
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        count: try options.int("--count", default: 3, range: 1...100)))
+            case "irq":
+                let options = try Options(arguments, flags: [], values: ["--interval", "--count", "--rows"])
+                exit(
+                    runInterruptSources(
+                        interval: try options.double("--interval", default: 5, range: 1...60),
+                        count: try options.int("--count", default: 2, range: 1...100),
+                        rows: try options.int("--rows", default: 10, range: 1...100)))
+            case "history":
+                exit(try await runHistory(arguments))
             case "engine":
                 let options = try Options(arguments, flags: [], values: ["--demand", "--idle"])
                 let demand = try options.double("--demand", default: 3, range: 1...600)
@@ -54,7 +118,33 @@ struct SysInfoCLI {
 
             子命令：
               selftest [--json]                       运行所有采集器的自检并打印结果；全部通过时退出码为 0
-              cpu [--interval 1] [--count 5] [--json] 直接用采集器逐次打印总占用和每核占用（--json 为每行一个 JSON）
+              cpu [--interval 1] [--count 5] [--json] 直接用采集器逐次打印总占用、用户/系统、每档、每簇和每核占用
+                                                      （--json 为每行一个 JSON）
+              topo [--json]                           打印 CPU 拓扑：簇、核档、三种档次依据及其是否一致
+              freq [--interval 5] [--count 3] [--json]
+                                                      逐次打印每簇实际频率（另附请求频率作对照）
+              sensors [--interval 2] [--count 3] [--raw] [--json]
+                                                      簇温度、CPU 最高温、簇功耗；--raw 打出每个键的原始值并标出占位值
+              calibrate [--yes] [--save-recording r.json] [--from-recording r.json] [--emit-profile p.json] [--verbose]
+                                                      传感器校准：约 58 s（CPU 负载 30 s、GPU 负载 12 s），生成芯片档案并与内置档案比对；
+                                                      不带 --yes 只打印计划；--from-recording 离线重新分析，不施加负载
+              topn [--interval 2] [--count 3] [--rows 10] [--by-process] [--fallback] [--refresh-all] [--json]
+                                                      Top N：默认按应用（coalition）；--fallback 为同 uid 回退，
+                                                      --refresh-all 为手动 setuid ps 刷新全部
+              verify topn [--seconds 5]               与 setuid /bin/ps 的 TIME 差分对照前 10 名
+              verify passive [--seconds 30] [--yes]   经调度器跑拓扑与频率的被动核对；--yes 在本进程内施加负载
+              verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
+                                                      不带 --yes 只打印将要做什么
+              rusage --pid PID                        打印进程的 rusage_info_v6 按档计数（一行 JSON，开销测量按 D40 折算用）
+              cores [--interval 2] [--count 3]       逐核频率（诊断用），以及每核 tick 忙碌与逐核通道活跃的相关系数（要求 ≥0.99）
+              irq [--interval 5] [--count 2] [--rows 10]
+                                                      中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
+              history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）
+              history export --out PATH [--format csv|jsonl] [--granularity minute|hour] [--hours 24]
+                             [--metrics cpu.usage.,cpu.temp.] [--no-apps] [--db PATH]
+                                                      导出历史：csv 为文件夹（system.csv、apps.csv、metadata.json）
+              history record --db PATH [--seconds 180] [--menubar] [--no-apps]
+                                                      经调度器记录若干秒并打印写入结果；--menubar 加一个 1 s 的占用需求
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，
                                                       检查 tick 计数不再增长、定时器已停
               version                                 打印版本信息
@@ -154,6 +244,12 @@ struct SysInfoCLI {
         var totalQuality: String
         /// 每核占用 0…1，顺序与 host_processor_info 一致；不可用的核为 null。
         var cores: [Double?]
+        var user: Double?
+        var system: Double?
+        /// 每档占用，键为档序号；拓扑降级时为空。
+        var perfLevels: [String: Double?]
+        /// 每簇占用，键为簇键（如 d0c1）。
+        var clusters: [String: Double?]
     }
 
     static func runCPU(interval: Double, count: Int, json: Bool) -> Int32 {
@@ -202,10 +298,20 @@ struct SysInfoCLI {
 
     static func cpuRecord(from output: CollectorOutput, index: Int, time: SampleTime, interval: Double) -> CPURecord? {
         guard let total = output.samples.first(where: { $0.id == .cpuUsageTotal }) else { return nil }
-        let cores = output.samples.filter { $0.id != .cpuUsageTotal }.map(\.value)
+        let cores = output.samples.compactMap { s in s.id.cpuCoreIndex.map { ($0, s.value) } }
+            .sorted { $0.0 < $1.0 }.map(\.1)
+        var levels: [String: Double?] = [:]
+        var clusters: [String: Double?] = [:]
+        for sample in output.samples {
+            if let level = sample.id.cpuUsagePerfLevelIndex { levels[String(level)] = sample.value }
+            if let key = sample.id.cpuUsageClusterKey { clusters[key.description] = sample.value }
+        }
         return CPURecord(
             index: index, time: time.wallClock, intervalSeconds: interval, total: total.value,
-            totalQuality: qualityName(total.quality), cores: cores)
+            totalQuality: qualityName(total.quality), cores: cores,
+            user: output.samples.first { $0.id == .cpuUsageUser }?.value,
+            system: output.samples.first { $0.id == .cpuUsageSystem }?.value,
+            perfLevels: levels, clusters: clusters)
     }
 
     static func textLine(_ record: CPURecord) -> String {
@@ -215,7 +321,14 @@ struct SysInfoCLI {
             "\(index):\(value.map { PercentFormat.string(fromRatio: $0) } ?? "—")"
         }
         let clock = record.time.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute().second())
-        return "#\(record.index) \(clock)  总占用 \(total)\(quality)  每核 \(cores.joined(separator: " "))"
+        func pct(_ value: Double??) -> String {
+            (value ?? nil).map { PercentFormat.string(fromRatio: $0) } ?? "—"
+        }
+        let split = "用户 \(pct(record.user)) 系统 \(pct(record.system))"
+        let levels = record.perfLevels.keys.sorted().map { "档\($0):\(pct(record.perfLevels[$0]))" }
+        let clusters = record.clusters.keys.sorted().map { "\($0):\(pct(record.clusters[$0]))" }
+        return "#\(record.index) \(clock)  总占用 \(total)\(quality)  \(split)  \(levels.joined(separator: " "))  "
+            + "簇 \(clusters.joined(separator: " "))  每核 \(cores.joined(separator: " "))"
     }
 
     static func qualityName(_ quality: DataQuality) -> String {
@@ -238,6 +351,89 @@ struct SysInfoCLI {
         while nanosleep(&request, &remaining) != 0, errno == EINTR {
             request = remaining
         }
+    }
+
+    // MARK: - rusage
+
+    /// 进程的按档计数（D40）：时间换算成纳秒；只对同 uid 的进程可读。
+    static func runRusage(pid: pid_t) -> Int32 {
+        guard let r = ProcessInfoReader.rusage(of: pid) else {
+            printError("读不到 pid \(pid) 的 rusage")
+            return 1
+        }
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        func ns(_ ticks: UInt64) -> UInt64 { ticks * UInt64(tb.numer) / UInt64(max(tb.denom, 1)) }
+        // 最快档的顶档频率（DVFS 表顶，运行时发现，D20）：最快档时间太少时按周期数折算用（D40）。
+        let topology = CPUTopologyService.shared.refresh()
+        let tops = FrequencyPlan.discover(clusters: topology.clusters, logicalCPUCount: topology.logicalCPUCount).tableTops
+        let fastest = topology.perfLevels.first.map { level in level.clusters.compactMap { tops[$0] }.max() ?? 0 } ?? 0
+        print(
+            "{\"cpu_ns\":\(ns(r.ri_user_time + r.ri_system_time)),\"p0_ns\":\(ns(r.ri_user_ptime + r.ri_system_ptime)),"
+                + "\"instructions\":\(r.ri_instructions),\"p0_instructions\":\(r.ri_pinstructions),"
+                + "\"cycles\":\(r.ri_cycles),\"p0_cycles\":\(r.ri_pcycles),\"energy_nj\":\(r.ri_energy_nj),"
+                + "\"p0_top_hz\":\(Int(fastest))}")
+        return 0
+    }
+
+    // MARK: - cores
+
+    static func runCoreFrequency(interval: Double, count: Int) -> Int32 {
+        print(machineLine())
+        _ = CPUTopologyService.shared.refresh()
+        let frequency = CPUFrequencyCollector()
+        guard frequency.selfTest().isUsable else {
+            printError("频率采集器自检未通过")
+            return 1
+        }
+        let cores = CoreFrequencyCollector(frequency: frequency)
+        _ = cores.sample(at: .now())
+        var failed = false
+        for index in 1...count {
+            sleep(untilUptimeNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + UInt64(interval * 1e9))
+            let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            _ = cores.sample(at: .now())
+            let cost = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started) / 1e6
+            guard let snapshot = cores.latest else { continue }
+            let r = snapshot.correlation.map { String(format: "%.4f", $0) } ?? "不确定（各核差异太小）"
+            print(String(format: "#%d  相关系数 %@，本次采样 %.2f ms CPU", index, r, cost))
+            for c in snapshot.cores {
+                let f: String
+                switch c.reading {
+                case .active(let hz, let a)?: f = String(format: "%5.0f MHz 活跃 %5.1f%%", hz / 1e6, a * 100)
+                case .idle(let a)?: f = String(format: "   空闲   活跃 %5.1f%%", a * 100)
+                case .invalid(let why)?: f = "✗ \(why)"
+                case nil: f = "—"
+                }
+                print("  cpu\(c.cpu) \(c.cluster)  \(f)  忙碌 \(c.busy.map { String(format: "%5.1f%%", $0 * 100) } ?? "—")")
+            }
+            if snapshot.correlationPassed == false { failed = true }
+        }
+        return failed ? 1 : 0
+    }
+
+    // MARK: - irq
+
+    static func runInterruptSources(interval: Double, count: Int, rows: Int) -> Int32 {
+        print(machineLine())
+        let collector = InterruptDeviceCollector()
+        let test = collector.selfTest()
+        print("自检：\(test.checks.map { "\($0.name) \($0.passed ? "✓" : "✗") \($0.detail)" }.joined(separator: "；"))")
+        guard test.isUsable else { return 1 }
+        _ = collector.sample(at: .now())
+        for index in 1...count {
+            sleep(untilUptimeNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + UInt64(interval * 1e9))
+            let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            _ = collector.sample(at: .now())
+            let cost = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started) / 1e6
+            let sources = collector.latestSources
+            let total = sources.reduce(0) { $0 + $1.perSecond }
+            print(String(format: "#%d  %d 个设备，共 %.0f/s，本次采样 %.2f ms CPU", index, sources.count, total, cost))
+            for s in sources.prefix(rows) {
+                print(String(format: "  %8.0f/s  %@", s.perSecond, s.device))
+            }
+        }
+        return 0
     }
 
     // MARK: - engine
@@ -335,6 +531,10 @@ struct Options {
 
     func flag(_ name: String) -> Bool {
         flags.contains(name)
+    }
+
+    func value(_ name: String) -> String? {
+        values[name]
     }
 
     func double(_ name: String, default defaultValue: Double, range: ClosedRange<Double>) throws -> Double {

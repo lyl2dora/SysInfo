@@ -5,6 +5,10 @@
 // - 采集器健康信息与调度状态（诊断页，K19）；
 // - 菜单栏显示用的 CPU 总占用：EMA 平滑，τ = 1.5 s（K24）；面板图表用原始值。
 // 「距今多久」（保留期、图表时间轴、均值窗口、EMA 的间隔判断）一律按包含睡眠的连续时钟（SampleTime.continuousNanos）。
+//
+// 发布节流（CPU 模块偏离记录 2026-10-15，开销实测后加）：最新样本、环形缓冲、每核、调度状态的写入不直接触发观察，
+// 而是攒到 `publishDelay` 之后统一把 `revision` 加一，读这些数据的视图只失效一次。同一个 tick 的主结果和阻塞结果
+// （SMC、coalition 晚到 10–70 ms）因此合并成一次重绘。菜单栏的平滑占用和着色级别不经节流，照常立即更新。
 
 import Foundation
 import Observation
@@ -27,21 +31,53 @@ final class MetricStore {
     static let historyRetentionSeconds: Double = 15 * 60
     static let menuBarTimeConstant: Double = 1.5
 
+    /// 发布序号：节流后的数据每发布一次加一。下面几个读取器都先读它，以便视图被观察系统跟踪。
+    private(set) var revision = 0
+
+    @ObservationIgnored private var latestStorage: [MetricID: Sample] = [:]
+    @ObservationIgnored private var historyStorage: [MetricID: TimeSeries] = [:]
+    @ObservationIgnored private var coresStorage: [Sample] = []
+    @ObservationIgnored private var statusStorage: EngineStatus?
+    @ObservationIgnored private var publishScheduled = false
+    /// 攒批的窗口：盖住同一个 tick 里阻塞通道晚到的结果。
+    static let publishDelay: TimeInterval = 0.15
+
     /// 每个指标的最新样本。
-    private(set) var latest: [MetricID: Sample] = [:]
+    var latest: [MetricID: Sample] {
+        _ = revision
+        return latestStorage
+    }
     /// 每个指标的环形缓冲。
-    private(set) var history: [MetricID: TimeSeries] = [:]
+    var history: [MetricID: TimeSeries] {
+        _ = revision
+        return historyStorage
+    }
     /// 最近一次 CPU 采样的每核占用，按核序号排列。
-    private(set) var cpuCores: [Sample] = []
+    var cpuCores: [Sample] {
+        _ = revision
+        return coresStorage
+    }
     /// 菜单栏显示用的 CPU 总占用。
     private(set) var menuBarCPU: MenuBarReading = .noData
+    /// 菜单栏的着色级别（D32：对平滑后的总占用做持续判定）。
+    private(set) var menuBarLevel: UsageLevel = .normal
     /// 调度器状态（tick 数、需求、降频、各采集器健康信息）。
-    private(set) var engineStatus: EngineStatus?
+    var engineStatus: EngineStatus? {
+        _ = revision
+        return statusStorage
+    }
     /// 最近一个 tick 的整体耗时。
     private(set) var lastTickCost: SampleCost?
 
     @ObservationIgnored private var smoother = ExponentialSmoother(timeConstant: MetricStore.menuBarTimeConstant)
     @ObservationIgnored private var ticksSinceLog = 0
+    @ObservationIgnored private var levelTracker = SustainedLevelTracker(thresholds: .cpuDefault)
+
+    /// 着色阈值（来自设置）。
+    var colorThresholds: ColorThresholds {
+        get { levelTracker.thresholds }
+        set { levelTracker.thresholds = newValue }
+    }
 
     func apply(_ event: EngineEvent) {
         switch event {
@@ -55,13 +91,15 @@ final class MetricStore {
 
     /// 最近 `seconds` 秒内的点（以该指标最新的点为「现在」）。
     func recentPoints(_ id: MetricID, seconds: Double) -> ArraySlice<TimeSeriesPoint> {
-        guard let series = history[id] else { return [] }
+        _ = revision
+        guard let series = historyStorage[id] else { return [] }
         return series.points(inLast: UInt64(max(seconds, 0) * 1e9))
     }
 
     /// 最近 `seconds` 秒内可用值的平均；没有可用值时为 nil。
     func mean(_ id: MetricID, seconds: Double) -> Double? {
-        history[id]?.mean(inLast: UInt64(max(seconds, 0) * 1e9))
+        _ = revision
+        return historyStorage[id]?.mean(inLast: UInt64(max(seconds, 0) * 1e9))
     }
 
     /// 图表上相邻两点允许的最大间隔，纳秒：超过就断开折线（暂停、系统睡眠、没有消费者的空档）。
@@ -77,13 +115,14 @@ final class MetricStore {
     // MARK: - 私有
 
     private func ingest(_ result: TickResult) {
-        lastTickCost = result.cost
+        // 阻塞通道的结果单独交付（CPU 模块设计 §5.1），它的耗时不是整个 tick 的耗时。
+        if result.lane == .inline { lastTickCost = result.cost }
         guard !result.samples.isEmpty else { return }
 
         var cores: [(index: Int, sample: Sample)] = []
         for sample in result.samples {
-            latest[sample.id] = sample
-            history[sample.id, default: TimeSeries(retentionSeconds: Self.historyRetentionSeconds)].append(sample)
+            latestStorage[sample.id] = sample
+            historyStorage[sample.id, default: TimeSeries(retentionSeconds: Self.historyRetentionSeconds)].append(sample)
             if let index = sample.id.cpuCoreIndex {
                 cores.append((index, sample))
             }
@@ -92,8 +131,9 @@ final class MetricStore {
             }
         }
         if !cores.isEmpty {
-            cpuCores = cores.sorted { $0.index < $1.index }.map(\.sample)
+            coresStorage = cores.sorted { $0.index < $1.index }.map(\.sample)
         }
+        schedulePublish()
 
         ticksSinceLog += 1
         if ticksSinceLog >= 60 {
@@ -116,11 +156,29 @@ final class MetricStore {
         if reading != menuBarCPU {
             menuBarCPU = reading
         }
+        let level = levelTracker.update(smoothed, at: Double(sample.time.continuousNanos) / 1e9)
+        if level != menuBarLevel {
+            menuBarLevel = level
+        }
+    }
+
+    /// 攒批后统一发布一次。
+    private func schedulePublish() {
+        guard !publishScheduled else { return }
+        publishScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.publishDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.publishScheduled = false
+                self.revision &+= 1
+            }
+        }
     }
 
     private func updateStatus(_ status: EngineStatus) {
-        let previous = engineStatus
-        engineStatus = status
+        let previous = statusStorage
+        statusStorage = status
+        schedulePublish()
 
         // 调度状态的变化写 info 日志：验收第 5 条（无需求时不再唤醒）靠它核对。
         if (previous?.isTimerArmed ?? false) != status.isTimerArmed {

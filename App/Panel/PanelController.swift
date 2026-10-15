@@ -6,7 +6,9 @@
 // - 单个可复用的 `NSPanel` + `NSGlassEffectView`，内部放 `NSHostingView`；锚在 item 所在窗口下方，限制在屏幕 visibleFrame 内；
 // - session 期间 item 的高亮由系统绘制（27 实测），这里不再自绘；
 // - 「固定」：结束 session，把同一个面板改成可拖动的浮窗（level = .floating），显示关闭按钮；
-// - 面板可见期间登记「面板」需求（cpu.load，1 s），隐藏时注销；隐藏时拆掉 SwiftUI 内容，关闭后不再随数据刷新。
+// - 面板可见且在 CPU tab 时登记「面板」需求（D29，CPU 模块设计 §5.8）：占用与杂项 1 s，频率、温度与功耗、Top N
+//   按设置的间隔；隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
+// - 内容高度会变（展开详情、Top N 行数），面板跟着内容改高，锚定时保持顶边不动。
 
 import AppKit
 import Observation
@@ -33,6 +35,8 @@ enum PanelTab: String, CaseIterable, Identifiable {
 final class PanelState {
     var selectedTab: PanelTab = .cpu
     var isPinned = false
+    /// 「详情」与「中断来源」一开始是否展开（`--expand-details`）。
+    var expandDetailsInitially = false
 }
 
 /// 面板顶栏按钮的动作。
@@ -59,7 +63,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         case pinned
     }
 
-    static let width: CGFloat = 340
+    static let width: CGFloat = 360
     static let cornerRadius: CGFloat = 18
     /// 面板与菜单栏之间的间距。
     static let gap: CGFloat = 6
@@ -75,7 +79,13 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     weak var statusItems: StatusItemController?
 
     private let store: MetricStore
-    private let demand: DemandSlot
+    private let services: CPUServices
+    private let settings: AppSettings
+    /// 面板的几条需求：间隔不同，各占一个槽。
+    private let usageDemand: DemandSlot
+    private let frequencyDemand: DemandSlot
+    private let sensorDemand: DemandSlot
+    private let topNDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -91,9 +101,14 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     /// 上面两件事之间允许的最大间隔，秒（实测约 20 ms）。
     static let itemClickSessionWindow: TimeInterval = 0.5
 
-    init(store: MetricStore, engine: SamplingEngine) {
+    init(store: MetricStore, engine: SamplingEngine, services: CPUServices, settings: AppSettings) {
         self.store = store
-        self.demand = DemandSlot(engine: engine)
+        self.services = services
+        self.settings = settings
+        self.usageDemand = DemandSlot(engine: engine)
+        self.frequencyDemand = DemandSlot(engine: engine)
+        self.sensorDemand = DemandSlot(engine: engine)
+        self.topNDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -119,6 +134,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
 
         Log.panel.info("expanded interface session 开始")
         sessionItem = statusItem
+        statusItems?.activeItem = statusItem
         showAnchored()
     }
 
@@ -147,6 +163,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         Log.panel.info("--open-panel：不经 session 显示面板")
         sessionItem = nil
         showAnchored()
+        if LaunchOptions.current.pinPanel {
+            pin()
+        }
     }
 
     /// 只关闭锚在 item 下方的面板（打开设置窗口前调用）；固定的浮窗保留。
@@ -180,6 +199,41 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         Log.panel.info("面板已固定为浮窗")
     }
 
+    /// 按面板状态与设置登记或注销需求（设置变化、切换 tab 时也调用）。
+    func updateDemands() {
+        requestFit()  // Top N 行数等设置可能变了
+        let cpuVisible = presentation != .hidden && state.selectedTab == .cpu
+        guard cpuVisible else {
+            [usageDemand, frequencyDemand, sensorDemand, topNDemand].forEach { $0.set(nil) }
+            services.topN.setActive(false, coalitionUsable: true)
+            return
+        }
+        usageDemand.set(
+            Demand(collectors: [CPULoadCollector.collectorID, CPUMiscCollector.collectorID], interval: 1, source: .panel))
+        frequencyDemand.set(
+            Demand(collectors: [CPUFrequencyCollector.collectorID], interval: settings.panelFreqInterval, source: .panel))
+        sensorDemand.set(
+            Demand(collectors: [SensorCollector.collectorID], interval: settings.panelSensorInterval, source: .panel))
+        let topN = services.topN
+        topN.rowCount = settings.panelTopNRows
+        topN.grouping = settings.panelGrouping
+        topN.interval = settings.panelTopNInterval
+        let topology = CPUTopologyService.shared.current
+        topN.showsPerfLevel0 = topology?.quality.isOK == true && topology?.perfLevels.count == 2
+        let coalitionUsable =
+            store.engineStatus?.health.first { $0.id == AppSampler.collectorID }?.status != .unavailable
+        if settings.panelTopNRows > 0 {
+            topNDemand.set(
+                coalitionUsable
+                    ? Demand(collectors: [AppSampler.collectorID], interval: settings.panelTopNInterval, source: .panel)
+                    : nil)
+            topN.setActive(true, coalitionUsable: coalitionUsable)
+        } else {
+            topNDemand.set(nil)
+            topN.setActive(false, coalitionUsable: coalitionUsable)
+        }
+    }
+
     // MARK: - 私有
 
     private func showAnchored() {
@@ -196,7 +250,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         state.isPinned = false
         shownAt = ProcessInfo.processInfo.systemUptime
         installMonitors()
-        demand.set(Demand(collectors: [CPULoadCollector.collectorID], interval: 1, source: .panel))
+        updateDemands()
         Log.panel.info("面板已显示：\(NSStringFromRect(panel.frame), privacy: .public)")
     }
 
@@ -209,7 +263,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         panel?.orderOut(nil)
         // 拆掉 SwiftUI 内容：面板关闭后不再随每个 tick 重算视图。
         glass?.contentView = nil
-        demand.set(nil)
+        updateDemands()
         Log.panel.info("面板已隐藏")
     }
 
@@ -246,13 +300,61 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。
             openSettings: { [weak self] in self?.onOpenSettings?() },
             quit: { NSApp.terminate(nil) })
-        let hosting = NSHostingView(rootView: PanelRootView(store: store, state: state, actions: actions))
-        let fitting = hosting.fittingSize
-        let size = NSSize(width: Self.width, height: ceil(max(fitting.height, 200)))
+        let hosting = NSHostingView(
+            rootView: PanelRootView(
+                store: store, state: state, actions: actions, services: services, settings: settings,
+                onLayoutChange: { [weak self] in self?.requestFit() }))
+        // 面板尺寸由 fitToContent 控制，不让 hosting view 平时维护固有尺寸约束（省掉每次更新后的约束求解）。
+        hosting.sizingOptions = []
+        let size = NSSize(width: Self.width, height: ceil(max(Self.idealHeight(of: hosting), 200)))
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.autoresizingMask = [.width, .height]
         glass?.contentView = hosting
         return size
+    }
+
+    private var fitScheduled = false
+
+    /// 内容结构变了（展开或收起、Top N 行数变化）：下一轮量一次高度。平时的数值更新不量，
+    /// 免得每个 tick 对整个面板做一次理想尺寸测量（2026-10-15 实测是面板开销的大头之一）。
+    func requestFit() {
+        guard !fitScheduled else { return }
+        fitScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.fitScheduled = false
+                self.fitToContent()
+            }
+        }
+    }
+
+    /// 按内容的理想高度改面板高度：锚定时保持顶边，浮窗时也保持顶边（向下长）。
+    private func fitToContent() {
+        guard let panel, presentation != .hidden, let hosting = glass?.contentView as? NSHostingView<PanelRootView>
+        else { return }
+        let height = ceil(max(Self.idealHeight(of: hosting), 200))
+        guard abs(panel.frame.height - height) >= 1 else { return }
+        var frame = panel.frame
+        frame.origin.y += frame.height - height
+        frame.size.height = height
+        if presentation == .anchored {
+            frame = anchoredFrame(for: frame.size)
+        } else if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+            // 浮窗向下长到屏幕可见区域以外（被程序坞挡住）时，整体往上挪，但顶边不超出可见区域。
+            let margin = Self.screenMargin
+            if frame.minY < visible.minY + margin {
+                frame.origin.y = min(visible.minY + margin, visible.maxY - margin - frame.height)
+            }
+        }
+        panel.setFrame(frame, display: true)
+    }
+
+    /// 量一次内容的理想高度：临时打开固有尺寸，量完关掉（平时不维护，见 installContent）。
+    static func idealHeight(of hosting: NSHostingView<PanelRootView>) -> CGFloat {
+        hosting.sizingOptions = [.intrinsicContentSize]
+        defer { hosting.sizingOptions = [] }
+        return hosting.fittingSize.height
     }
 
     /// item 所在菜单栏窗口的 frame；窗口还没摆到菜单栏上（启动初期在原点）时为 nil。

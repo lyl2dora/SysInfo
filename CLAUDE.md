@@ -4,10 +4,11 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 
 - Release 版 Bundle ID 是 `zone.lyl.sysinfo`。
 - Debug 版是 `zone.lyl.sysinfo.dev`，显示名「SysInfo Dev」，不注册登录项。开发和测试时只读写 `.dev` 的 defaults 域和数据目录，不动用户日用版（D16）。
-- 目标设备是用户的多台 Apple 芯片 Mac，不只是开发机 M5 Pro（D20）。当前清单见 D25：
+- 目标设备是用户的多台 Apple 芯片 Mac，不只是开发机 M5 Pro（D20）。当前清单见 D28（取代 D25 的清单）：
   - 本机：M5 Pro，6 Super + 12 Performance。
-  - Mac Studio：M2 Max，8 Performance + 4 Efficiency，可通过 `ssh user@remote-host` 访问，已装 Xcode 27。
-  - 在 Mac Studio 上构建或运行 CLI 与探针时，同样遵守 D18 的操作边界。每个模块验收时都要附上两台机器的对照结果。
+  - 对照机 Mac mini：M4 Pro，10 Performance + 4 Efficiency，可通过 `ssh user@remote-host` 访问，已装 Xcode 27。原来的 Mac Studio（M2 Max）已被替换，不再是目标设备，它的实测只作旁证。
+  - 在对照机上构建或运行 CLI 与探针时，同样遵守 D18 的操作边界。每个模块验收时都要附上两台机器的对照结果。
+  - 对照机上可以构建并启动 Debug 版 app 做截图自查，用完按 D39 清场。
 
 ## 文档（按需分级读取）
 - **每次必读**：`docs/decisions.md`，即决策档（D01 起）。要改变一条决策时，追加新条目并标注「取代 Dxx」，不改写旧条目。
@@ -38,7 +39,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 ## 产品边界
 - 主 app 不开沙盒（Xcode 27 模板默认开启，要关掉）。只支持 arm64，最低 macOS 27.0（D03）。
 - root 只用于风扇控制；v1 只读取风扇状态，不为其他功能做 root helper（D04）。
-- 菜单栏默认每个模块一个 item，并提供合并选项（D06）。面板用统一的 `NSPanel`（D21）。禁用 `MenuBarExtra(isInserted:)`。
+- 菜单栏每个 mini widget 只显示一项指标，一个 widget 一个 item，并提供合并选项（D38 取代 D06 第一条）。面板用统一的 `NSPanel`（D21）。禁用 `MenuBarExtra(isInserted:)`。
 - 小组件是预留功能：现在只在数据模型里定义 Codable 快照类型，不加 App Group entitlement（D07、K31）。
 - 不做 Remote/SaaS、自动更新器、蓝牙扫描、世界时钟（D13）。
 - 默认不引入第三方依赖，例外只有 Apple 官方的 swift-* 包。文案统一放进 String Catalog（D23）。
@@ -91,7 +92,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
   - `make test-hw`：连硬件测试一起跑（设置 `SYSINFO_HW_TESTS=1`）。
   - 这两个目标都会先跑 `test-scripts` 和 `check-private-imports`。
 - 命令行：`make cli ARGS="selftest"`、`make cli ARGS="cpu --count 5"`。
-- Mac Studio 跨机对照：
+- 对照机（M4 Pro）跨机对照：
   - `make remote-cli ARGS=…`、`make remote-test`。远端只写 `/tmp/sysinfo-remote`。
   - 地址可以用 `REMOTE_HOST=user@host` 覆盖。
 - `make measure`：测量自身开销，结果追加到 `docs/perf/`。Stats 或其他 SysInfo 实例在运行时，脚本会拒绝执行。

@@ -28,6 +28,14 @@ enum CoreUsage: Equatable, Sendable {
     case noElapsedTicks
 }
 
+/// 单个核在一段区间内的 tick 增量（只对有效核给出）。user 含 nice。
+struct CoreTickDelta: Equatable, Sendable {
+    var user: UInt64
+    var system: UInt64
+    var total: UInt64
+    var busy: UInt64 { user + system }
+}
+
 /// 一段区间的 CPU 占用。
 struct CPUUsage: Equatable, Sendable {
     /// 总占用：有效核的忙碌 tick 之和除以总 tick 之和；没有任何有效核时为 nil。
@@ -35,6 +43,29 @@ struct CPUUsage: Equatable, Sendable {
     var perCore: [CoreUsage]
     /// 被丢弃的核数（回退或没有前进）。大于 0 时总占用只是估算。
     var droppedCores: Int
+    /// 每核的 tick 增量，下标与 `perCore` 相同；被丢弃的核为 nil。用于按簇、按档汇总（CPU 模块设计 §5.3）。
+    var perCoreTicks: [CoreTickDelta?] = []
+
+    /// 一组核的汇总：忙碌、用户、系统 tick 之和除以总 tick 之和。
+    /// `cores` 里没有任何有效核时为 nil；有部分核被丢弃时 `partial` 为 true（应标为估算）。
+    func aggregate(cores: some Sequence<Int>) -> (busy: Double, user: Double, system: Double, partial: Bool)? {
+        var user: UInt64 = 0
+        var system: UInt64 = 0
+        var total: UInt64 = 0
+        var partial = false
+        for index in cores {
+            guard index >= 0, index < perCoreTicks.count, let delta = perCoreTicks[index] else {
+                partial = true
+                continue
+            }
+            user += delta.user
+            system += delta.system
+            total += delta.total
+        }
+        guard total > 0 else { return nil }
+        let t = Double(total)
+        return (Double(user + system) / t, Double(user) / t, Double(system) / t, partial)
+    }
 }
 
 /// 两次读数差分的结果。
@@ -57,6 +88,8 @@ enum CPUTickMath {
 
         var perCore: [CoreUsage] = []
         perCore.reserveCapacity(current.count)
+        var perCoreTicks: [CoreTickDelta?] = []
+        perCoreTicks.reserveCapacity(current.count)
         var busySum: UInt64 = 0
         var totalSum: UInt64 = 0
         var dropped = 0
@@ -65,6 +98,7 @@ enum CPUTickMath {
             // 32 位计数器的回绕（单核约 497 天）也会表现为回退，同样按复位处理，只丢这一段。
             guard after.isMonotonic(since: before) else {
                 perCore.append(.counterReset)
+                perCoreTicks.append(nil)
                 dropped += 1
                 continue
             }
@@ -72,15 +106,20 @@ enum CPUTickMath {
             let total = after.total - before.total
             guard total > 0 else {
                 perCore.append(.noElapsedTicks)
+                perCoreTicks.append(nil)
                 dropped += 1
                 continue
             }
             perCore.append(.ratio(Double(busy) / Double(total)))
+            perCoreTicks.append(
+                CoreTickDelta(
+                    user: UInt64(after.user - before.user) + UInt64(after.nice - before.nice),
+                    system: UInt64(after.system - before.system), total: total))
             busySum += busy
             totalSum += total
         }
 
         let total: Double? = totalSum > 0 ? Double(busySum) / Double(totalSum) : nil
-        return .usage(CPUUsage(total: total, perCore: perCore, droppedCores: dropped))
+        return .usage(CPUUsage(total: total, perCore: perCore, droppedCores: dropped, perCoreTicks: perCoreTicks))
     }
 }

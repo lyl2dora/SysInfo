@@ -55,7 +55,9 @@ struct HardwareTests {
         let total = try #require(output.samples.first { $0.id == .cpuUsageTotal })
         let value = try #require(total.value)
         #expect((0...1).contains(value))
-        #expect(output.samples.count == 1 + (SystemInfo.maxLogicalCPUCount ?? -1))
+        // 每核样本数等于核数；另有用户/系统和按拓扑汇总的每簇、每档样本（CPU 模块设计 §5.3）。
+        #expect(output.samples.filter { $0.id.cpuCoreIndex != nil }.count == (SystemInfo.maxLogicalCPUCount ?? -1))
+        #expect(output.samples.contains { $0.id == .cpuUsageUser })
     }
 
     @Test func procPidRusageIsReadable() throws {

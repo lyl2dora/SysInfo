@@ -20,6 +20,22 @@ public protocol Collector: AnyObject, Sendable {
     /// 丢弃差分基线。采集器从「无需求」变为「有需求」时由引擎调用，
     /// 避免第一个样本变成整段空闲期的平均值。
     func resetBaseline()
+
+    /// 在哪条通道上采样（CPU 模块设计 §5.1）。默认 `.inline`。
+    var lane: CollectorLane { get }
+}
+
+/// 采集器的执行通道。
+public enum CollectorLane: String, Hashable, Codable, Sendable {
+    /// 在引擎主队列上随 tick 串行执行。适合几毫秒以内的读取。
+    case inline
+    /// 在引擎的第二条串行队列上执行，和主 tick 并行，结果以同一个 tick 序号单独交付。
+    /// 适合阻塞或较慢的读取：SMC（M5 一次约 12–15 ms 墙钟，M4 全量 60–75 ms）、coalition 全量扫描。
+    case blocking
+}
+
+extension Collector {
+    public var lane: CollectorLane { .inline }
 }
 
 /// 采集器一次采样的输出：样本加上健康信息。耗时由引擎测量后补进 `CollectorHealth`。
@@ -41,8 +57,13 @@ public struct CollectorOutput: Sendable, Hashable {
 
 /// 各处共用的采集器清单：app 交给引擎，sysinfo-cli selftest 逐个自检。
 public enum StandardCollectors: Sendable {
-    /// M0 的全部采集器：CPU 负载（`cpu.load`）与本进程开销（`app.self`）。每次调用返回新实例。
+    /// 全部采集器：CPU 负载（`cpu.load`）、频率（`cpu.freq`）、杂项（`cpu.misc`）、温度与功耗（`cpu.sensors`）、应用活动（`app.coalition`）、
+    /// 本进程开销（`app.self`）。每次调用返回新实例。`cpu.load` 排在最前：它的自检会刷新拓扑，其余采集器按拓扑建方案。
     public static func make() -> [any Collector] {
-        [CPULoadCollector(), SelfUsageCollector()]
+        let frequency = CPUFrequencyCollector()
+        return [
+            CPULoadCollector(), frequency, CPUMiscCollector(), InterruptDeviceCollector(),
+            CoreFrequencyCollector(frequency: frequency), SensorCollector(), AppSampler(), SelfUsageCollector(),
+        ]
     }
 }
