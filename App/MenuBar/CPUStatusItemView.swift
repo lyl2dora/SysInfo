@@ -158,7 +158,7 @@ final class CPUStatusItemView: NSView {
             let value = NSAttributedString(
                 string: valueText, attributes: [.font: Self.stackedValueFont, .foregroundColor: valueColor])
             let size = value.size()
-            value.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: contentRect.minY + Self.stackedValueFont.descender))
+            value.draw(at: NSPoint(x: pixelAligned((bounds.width - size.width) / 2), y: contentRect.minY + Self.stackedValueFont.descender))
         case .sparkline:
             drawSparkline(in: drawStackedLabel(label, graphic: true), color: color)
         case .barsTotal:
@@ -173,6 +173,13 @@ final class CPUStatusItemView: NSView {
         }
 
         setAccessibilityLabel("\(label) \(valueText)")
+    }
+
+    /// 文字起点的横坐标对齐到设备像素。居中算出的起点带小数（如 5.54 pt），在 1x 屏上字形会被抗锯齿摊到相邻像素，
+    /// 低对比的颜色（systemRed）看起来尤其发虚（2026-10-15 验收发现）。纵向的基线已经取整，不用再处理。
+    private func pixelAligned(_ x: CGFloat) -> CGFloat {
+        let scale = window?.backingScaleFactor ?? 2
+        return (x * scale).rounded() / scale
     }
 
     /// 上下布局里两行之间的间距（按大写高度算）。
@@ -190,7 +197,7 @@ final class CPUStatusItemView: NSView {
             let label = NSAttributedString(
                 string: text, attributes: [.font: Self.stackedLabelFont, .foregroundColor: NSColor.labelColor])
             let labelBaseline = valueBaseline + valueCap + Self.stackedGap
-            label.draw(at: NSPoint(x: (bounds.width - label.size().width) / 2, y: labelBaseline + Self.stackedLabelFont.descender))
+            label.draw(at: NSPoint(x: pixelAligned((bounds.width - label.size().width) / 2), y: labelBaseline + Self.stackedLabelFont.descender))
         }
         if graphic {
             let bottom: CGFloat = 3
@@ -211,7 +218,7 @@ final class CPUStatusItemView: NSView {
         let value = NSAttributedString(
             string: valueText, attributes: [.font: Self.inlineValueFont, .foregroundColor: valueColor])
         let valueWidth = value.size().width
-        value.draw(at: NSPoint(x: bounds.width - Self.padding - valueWidth, y: baseline + Self.inlineValueFont.descender))
+        value.draw(at: NSPoint(x: pixelAligned(bounds.width - Self.padding - valueWidth), y: baseline + Self.inlineValueFont.descender))
     }
 
     private func drawSparkline(in rect: NSRect, color: NSColor) {
