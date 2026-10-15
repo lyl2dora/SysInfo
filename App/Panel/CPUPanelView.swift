@@ -11,13 +11,14 @@ struct CPUPanelView: View {
     let store: MetricStore
     let services: CPUServices
     @Bindable var settings: AppSettings
+    var expandDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             PanelCard { CPUOverview(store: store, splitUserSystem: settings.panelSplitUserSystem) }
             PanelCard { CPUHistoryChart(store: store, history: services.history, defaultSpan: settings.panelChartSpan) }
             PanelCard { CPUCoresSection(store: store, sensors: services.collectors.sensors) }
-            PanelCard { CPUDetailsSection(store: store, services: services) }
+            PanelCard { CPUDetailsSection(store: store, services: services, expandInitially: expandDetails) }
             if settings.panelTopNRows > 0 {
                 PanelCard { TopNSection(model: services.topN, grouping: settings.panelGrouping) }
             }
@@ -251,8 +252,15 @@ private struct CoreBar: View {
 private struct CPUDetailsSection: View {
     let store: MetricStore
     let services: CPUServices
-    @State private var expanded = false
-    @State private var sourcesExpanded = false
+    @State private var expanded: Bool
+    @State private var sourcesExpanded: Bool
+
+    init(store: MetricStore, services: CPUServices, expandInitially: Bool) {
+        self.store = store
+        self.services = services
+        _expanded = State(initialValue: expandInitially)
+        _sourcesExpanded = State(initialValue: expandInitially)
+    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {

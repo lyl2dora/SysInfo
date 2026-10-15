@@ -105,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "启动完成：\(BuildInfo.displayName, privacy: .public) \(BuildInfo.version, privacy: .public) (\(BuildInfo.build, privacy: .public))，选项 \(String(describing: self.options), privacy: .public)"
         )
 
+        panel.state.expandDetailsInitially = options.expandDetails
         if options.openPanel {
             panel.showWithoutSession()
         }

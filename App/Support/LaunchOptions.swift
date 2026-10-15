@@ -8,6 +8,10 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
     /// `--open-settings`：启动后直接打开设置窗口；`--open-settings=<页面>`（如 `cpu`、`history`、`diagnostics`）打开指定页面。
     var openSettings = false
     var settingsPage: String?
+    /// `--pin-panel`：与 `--open-panel` 一起用，显示后立即固定为浮窗（点别处不会关，开销测量用）。
+    var pinPanel = false
+    /// `--expand-details`：面板的「详情」与「中断来源」一开始就展开（开销测量的最重一档）。
+    var expandDetails = false
     /// `--factory-defaults`：不读写持久化的设置，只用出厂默认值（开销测量用，不改动用户的偏好）。
     var factoryDefaults = false
 
@@ -17,6 +21,8 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
         openSettings = settingsArgument != nil
         settingsPage = settingsArgument?.split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init)
         factoryDefaults = arguments.contains("--factory-defaults")
+        pinPanel = arguments.contains("--pin-panel")
+        expandDetails = arguments.contains("--expand-details")
     }
 
     static let current = LaunchOptions(arguments: CommandLine.arguments)

@@ -24,7 +24,8 @@ struct PanelRootView: View {
 
             switch state.selectedTab {
             case .cpu:
-                CPUPanelView(store: store, services: services, settings: settings)
+                CPUPanelView(
+                    store: store, services: services, settings: settings, expandDetails: state.expandDetailsInitially)
             }
         }
         .padding(14)

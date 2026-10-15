@@ -8,6 +8,8 @@
 #   scripts/remote-app.sh shot <本地 png> [滚动位置 0…1]
 #                                               截 SysInfo Dev 的窗口（面板或设置窗口），取回本地
 #   scripts/remote-app.sh clean                 结束 app，取消 LaunchServices 登记，删掉这次运行新留下的家目录痕迹
+#   scripts/remote-app.sh measure               在远端跑 measure-overhead.sh（REMOTE_MODE），结果段追加到本地 docs/perf/cpu.md，
+#                                               之后清场
 #
 # 远端只结束自己启动的 SysInfo Dev（按可执行文件路径匹配，D18）。清场只删「启动前不存在」的路径（启动时记一份清单）。
 set -euo pipefail
@@ -30,6 +32,30 @@ traces=(
 remote() { "${ssh_cmd[@]}" "$@"; }
 
 case "${1:-}" in
+sync)
+    remote "mkdir -p $dir/repo $dir/tmp $dir/home"
+    rsync -a --delete --exclude .git --exclude build --exclude .build --exclude .swiftpm -e "ssh -o BatchMode=yes" \
+        "$repo_root/App" "$repo_root/Config" "$repo_root/Packages" "$repo_root/SysInfo.xcodeproj" "$repo_root/scripts" \
+        "$host:$dir/repo/"
+    ;;
+measure)
+    "$0" sync
+    commit="$(cd "$repo_root" && git rev-parse --short HEAD)$(cd "$repo_root" && git diff --quiet HEAD 2>/dev/null || echo -dirty)"
+    number="$(cd "$repo_root" && git rev-list --count HEAD)"
+    list=""
+    for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
+    remote "for p in $list; do [ -e \"\$p\" ] && echo \"\$p\"; done > $dir/preexisting.txt; rm -f $dir/perf.md; true"
+    remote "cd $dir/repo && $env_vars REMOTE_MODE=1 DERIVED_DATA=$dir/measure-dd OUTPUT=$dir/perf.md APP_TMPDIR=$dir/tmp \
+        GIT_COMMIT=$commit BUILD_NUMBER=$number WARMUP=${WARMUP:-30} DURATION=${DURATION:-120} scripts/measure-overhead.sh"
+    out="$repo_root/docs/perf/cpu.md"
+    remote "sed -n '/^## /,\$p' $dir/perf.md" >"$dir.section.tmp" 2>/dev/null || true
+    if [ -s "$dir.section.tmp" ]; then
+        { echo ""; cat "$dir.section.tmp"; } >>"$out"
+        echo "==> 对照机结果已追加到 $out"
+    fi
+    rm -f "$dir.section.tmp"
+    "$0" clean
+    ;;
 build)
     remote "mkdir -p $dir/repo $dir/tmp $dir/home"
     rsync -a --delete --exclude .git --exclude build --exclude .build --exclude .swiftpm -e "ssh -o BatchMode=yes" \

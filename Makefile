@@ -40,7 +40,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -52,6 +52,7 @@ help:
 	@echo "  cli         构建并运行 sysinfo-cli，ARGS 为子命令与选项"
 	@echo "  remote-cli  在对照机（$(REMOTE_HOST)）上构建并运行 sysinfo-cli（只写远端 $(REMOTE_DIR)）"
 	@echo "  remote-test 在对照机上运行 SysKit 单元测试，包括硬件测试（只写远端 $(REMOTE_DIR)）"
+	@echo "  remote-measure  在对照机上做同样的开销测量，结果追加到 docs/perf/cpu.md，之后清场（D39）"
 	@echo "  remote-app-build / remote-app-run / remote-app-shot / remote-app-clean"
 	@echo "              在对照机上构建、启动、截图、清场 Debug 版 app（D39；run 的 ARGS 传给 app，shot 用 OUT= 与 POS=）"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
@@ -115,6 +116,10 @@ remote-app-shot:
 
 remote-app-clean:
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh clean
+
+# CPU 模块设计 §10：在对照机上做同样的四档测量（远端检测到 Stats 时同样拒绝执行），结果追加到 docs/perf/cpu.md，之后清场（D39）。
+remote-measure: check-private-imports
+	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh measure
 
 measure:
 	@if [ ! -x scripts/measure-overhead.sh ]; then \

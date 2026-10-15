@@ -35,6 +35,8 @@ enum PanelTab: String, CaseIterable, Identifiable {
 final class PanelState {
     var selectedTab: PanelTab = .cpu
     var isPinned = false
+    /// 「详情」与「中断来源」一开始是否展开（`--expand-details`）。
+    var expandDetailsInitially = false
 }
 
 /// 面板顶栏按钮的动作。
@@ -161,6 +163,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         Log.panel.info("--open-panel：不经 session 显示面板")
         sessionItem = nil
         showAnchored()
+        if LaunchOptions.current.pinPanel {
+            pin()
+        }
     }
 
     /// 只关闭锚在 item 下方的面板（打开设置窗口前调用）；固定的浮窗保留。
