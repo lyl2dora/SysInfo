@@ -117,7 +117,11 @@ launch_app() {
         app_pid=$!
     fi
 }
-trap cleanup EXIT INT TERM
+# 被中断（Ctrl-C、kill）时立即退出、不写结果；退出时结束本脚本启动的 app。
+trap cleanup EXIT
+trap 'echo "测量被中断，不写结果" >&2; exit 130' INT TERM
+# 前台 sleep 期间 bash 不处理信号，改为后台 sleep + wait，中断能立刻生效。
+nap() { sleep "$1" & wait $!; }
 
 mba_pid="$(system_pid MenuBarAgent)"
 ws_pid="$(system_pid WindowServer)"
@@ -133,7 +137,7 @@ measure() {
     if [ "${label}" != "baseline" ]; then
         launch_app "$@"
         echo "==> [${label}] 启动 pid ${app_pid}，参数：$*；预热 ${WARMUP}s" >&2
-        sleep "${WARMUP}"
+        nap "${WARMUP}"
         kill -0 "${app_pid}" 2>/dev/null || { echo "app 在预热期间退出了" >&2; exit 1; }
     else
         echo "==> [baseline] 不运行 SysInfo" >&2
@@ -145,7 +149,7 @@ measure() {
     m0="$(cpu_seconds "${mba_pid}")"
     w0="$(cpu_seconds "${ws_pid}")"
     echo "    测量 ${DURATION}s …" >&2
-    sleep "${DURATION}"
+    nap "${DURATION}"
     t1="$(now)"
     [ -n "${app_pid}" ] && a1="$(cpu_seconds "${app_pid}")"
     m1="$(cpu_seconds "${mba_pid}")"
