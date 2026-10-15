@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panel = PanelController(store: store, engine: engine, services: services, settings: settings)
         let statusItems = StatusItemController(store: store, engine: engine)
         statusItems.expandedInterfaceDelegate = panel
-        statusItems.onUserRemoved = { [weak settings] in settings?.cpuItemVisible = false }
+        statusItems.onUserRemoved = { [weak settings] widget in settings?.setVisible(widget, false) }
         panel.statusItems = statusItems
         self.panel = panel
         self.statusItems = statusItems
@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if options.openPanel {
             panel.showWithoutSession()
         }
-        if options.openSettings || !settings.cpuItemVisible {
+        if options.openSettings || settings.visibleCPUWidgets.isEmpty {
             settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
         }
     }
@@ -162,11 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.colorThresholds = settings.cpuColorThresholds
         let topology = CPUTopologyService.shared.current
         statusItems.update(
-            visible: settings.cpuItemVisible, interval: settings.cpuInterval,
-            configuration: CPUStatusItemConfiguration(
-                style: settings.menuBarCPUStyle, showsLabel: settings.menuBarCPULabel,
-                coloring: settings.menuBarCPUColoring, levelCount: max(topology?.perfLevels.count ?? 2, 1),
-                coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8))
+            settings.visibleCPUWidgets.map { widget in
+                CPUStatusItemConfiguration(
+                    widget: widget, style: settings.menuBarCPUStyle, showsLabel: settings.menuBarCPULabel,
+                    coloring: settings.menuBarCPUColoring, levelCount: max(topology?.perfLevels.count ?? 2, 1),
+                    coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8)
+            }, interval: settings.cpuInterval)
         throttle.automatic = settings.autoThrottle
         let configuration = HistoryRecorder.Configuration(
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,

@@ -5,7 +5,8 @@
 // - general.interval      全局默认采集间隔，秒：1 / 2 / 5
 // - general.autoThrottle  是否自动降频（K20、D25：默认开）
 // - cpu.interval          CPU 模块的间隔覆盖：0 表示跟随全局，否则 1 / 2 / 5
-// - menubar.cpu.visible   CPU item 是否显示
+// - menubar.cpu.visible   CPU 占用 widget 是否显示
+// - menubar.cpu.freq.visible / .temp.visible / .power.visible   频率、温度、功耗 widget 是否显示（D38，默认关）
 // - menubar.cpu.style / .label / .coloring / .warningPercent / .criticalPercent   菜单栏 CPU item 的样式与着色（D32）
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
 // - cpu.panel.topNRows / .grouping / .chartSpan / .splitUserSystem   面板显示
@@ -31,6 +32,9 @@ final class AppSettings {
         static let autoThrottle = "general.autoThrottle"
         static let cpuInterval = "cpu.interval"
         static let cpuItemVisible = "menubar.cpu.visible"
+        static let cpuFrequencyItemVisible = "menubar.cpu.freq.visible"
+        static let cpuTemperatureItemVisible = "menubar.cpu.temp.visible"
+        static let cpuPowerItemVisible = "menubar.cpu.power.visible"
         static let historyCPU = "history.cpu.enabled"
         static let historyApps = "history.apps.enabled"
         static let historyHighPrecision = "history.cpu.highPrecision"
@@ -66,6 +70,42 @@ final class AppSettings {
     /// CPU item 是否显示（K32：可见性以 app 设置为准）。
     var cpuItemVisible: Bool {
         didSet { persist(cpuItemVisible, Key.cpuItemVisible) }
+    }
+
+    /// 频率、温度、功耗 widget 是否显示（D38：出厂默认关）。
+    var cpuFrequencyItemVisible: Bool {
+        didSet { persist(cpuFrequencyItemVisible, Key.cpuFrequencyItemVisible) }
+    }
+
+    var cpuTemperatureItemVisible: Bool {
+        didSet { persist(cpuTemperatureItemVisible, Key.cpuTemperatureItemVisible) }
+    }
+
+    var cpuPowerItemVisible: Bool {
+        didSet { persist(cpuPowerItemVisible, Key.cpuPowerItemVisible) }
+    }
+
+    /// 当前显示的 CPU widget（D38）。
+    var visibleCPUWidgets: [CPUMenuWidget] {
+        CPUMenuWidget.allCases.filter { isVisible($0) }
+    }
+
+    func isVisible(_ widget: CPUMenuWidget) -> Bool {
+        switch widget {
+        case .usage: cpuItemVisible
+        case .frequency: cpuFrequencyItemVisible
+        case .temperature: cpuTemperatureItemVisible
+        case .power: cpuPowerItemVisible
+        }
+    }
+
+    func setVisible(_ widget: CPUMenuWidget, _ visible: Bool) {
+        switch widget {
+        case .usage: cpuItemVisible = visible
+        case .frequency: cpuFrequencyItemVisible = visible
+        case .temperature: cpuTemperatureItemVisible = visible
+        case .power: cpuPowerItemVisible = visible
+        }
     }
 
     /// 是否自动降频（K20、D25：默认开，可以关闭）。
@@ -167,6 +207,9 @@ final class AppSettings {
         globalInterval = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.globalInterval)) } ?? .oneSecond
         cpuIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.cpuInterval)) }
         cpuItemVisible = defaults?.object(forKey: Key.cpuItemVisible) as? Bool ?? true
+        cpuFrequencyItemVisible = defaults?.object(forKey: Key.cpuFrequencyItemVisible) as? Bool ?? false
+        cpuTemperatureItemVisible = defaults?.object(forKey: Key.cpuTemperatureItemVisible) as? Bool ?? false
+        cpuPowerItemVisible = defaults?.object(forKey: Key.cpuPowerItemVisible) as? Bool ?? false
         autoThrottle = defaults?.object(forKey: Key.autoThrottle) as? Bool ?? true
         historyCPUEnabled = defaults?.object(forKey: Key.historyCPU) as? Bool ?? true
         historyAppsEnabled = defaults?.object(forKey: Key.historyApps) as? Bool ?? true
@@ -241,4 +284,14 @@ enum ChartSpan: String, CaseIterable, Identifiable {
 
     /// 前两档读内存环形缓冲，其余读历史库（CPU 模块设计 §7.2）。
     var usesHistory: Bool { seconds > 900 }
+}
+
+/// CPU 模块的菜单栏 widget：一个 widget 只显示一项指标（D38）。
+enum CPUMenuWidget: String, CaseIterable, Identifiable {
+    case usage
+    case frequency
+    case temperature
+    case power
+
+    var id: String { rawValue }
 }

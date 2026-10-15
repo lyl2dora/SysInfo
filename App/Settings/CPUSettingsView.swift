@@ -50,13 +50,13 @@ struct CPUSettingsView: View {
             }
 
             Section("菜单栏") {
-                Picker("样式", selection: $settings.menuBarCPUStyle) {
+                Picker("占用的样式", selection: $settings.menuBarCPUStyle) {
                     ForEach(MenuBarCPUStyle.allCases) { style in
                         Text(Self.styleName(style)).tag(style)
                     }
                 }
-                Toggle("显示「CPU」标签", isOn: $settings.menuBarCPULabel)
-                Toggle("高占用时着色", isOn: $settings.menuBarCPUColoring)
+                Toggle("显示小标签（CPU、FREQ、TEMP、PWR）", isOn: $settings.menuBarCPULabel)
+                Toggle("占用高时着色", isOn: $settings.menuBarCPUColoring)
                 if settings.menuBarCPUColoring {
                     Stepper(value: $settings.menuBarCPUWarningPercent, in: 50...99) {
                         LabeledContent("橙色阈值", value: "\(settings.menuBarCPUWarningPercent)%")

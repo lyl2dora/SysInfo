@@ -11,6 +11,9 @@ import SysModel
 
 /// 菜单栏 item 的显示配置。
 struct CPUStatusItemConfiguration: Equatable {
+    /// 这个 widget 显示哪一项（D38：一个 widget 一项）。
+    var widget: CPUMenuWidget = .usage
+    /// 占用 widget 的样式；其余 widget 只用上下或左右布局（图形样式按上下布局画）。
     var style: MenuBarCPUStyle = .stacked
     var showsLabel = true
     var coloring = true
@@ -30,8 +33,6 @@ final class CPUStatusItemView: NSView {
     private static let inlineValueFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
     private static let inlineSpacing: CGFloat = 3
     private static let padding: CGFloat = 2
-    /// 最坏情况的数值字符串，用来定宽。
-    private static let widestValue = "100%"
     private static let sparklineWidth: CGFloat = 36
     private static let sparklineSeconds: Double = 60
     private static let coreBarWidth: CGFloat = 3
@@ -39,7 +40,30 @@ final class CPUStatusItemView: NSView {
     private static let totalBarWidth: CGFloat = 6
 
     /// 菜单栏小标签用英文缩写（D23）。
-    private static var label: String { String(localized: "CPU", comment: "菜单栏小标签，保持英文缩写") }
+    private static func label(_ widget: CPUMenuWidget) -> String {
+        switch widget {
+        case .usage: String(localized: "CPU", comment: "菜单栏小标签，保持英文缩写")
+        case .frequency: String(localized: "FREQ", comment: "菜单栏小标签：CPU 频率，保持英文缩写")
+        case .temperature: String(localized: "TEMP", comment: "菜单栏小标签：CPU 温度，保持英文缩写")
+        case .power: String(localized: "PWR", comment: "菜单栏小标签：CPU 功耗，保持英文缩写")
+        }
+    }
+
+    /// 各 widget 数值的最坏情况，用来定宽。
+    private static func widestValue(_ widget: CPUMenuWidget) -> String {
+        switch widget {
+        case .usage: "100%"
+        case .frequency: "9.99G"
+        case .temperature: "125°"
+        case .power: "99.9W"
+        }
+    }
+
+    /// 实际生效的样式：非占用 widget 只有上下、左右两种。
+    static func effectiveStyle(_ c: CPUStatusItemConfiguration) -> MenuBarCPUStyle {
+        guard c.widget != .usage else { return c.style }
+        return c.style == .inline ? .inline : .stacked
+    }
 
     private static func textWidth(_ text: String, _ font: NSFont) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: font]).width
@@ -47,9 +71,11 @@ final class CPUStatusItemView: NSView {
 
     /// 按样式的最坏情况算好的固定宽度。
     static func fixedWidth(for c: CPUStatusItemConfiguration) -> CGFloat {
+        let label = label(c.widget)
+        let widestValue = widestValue(c.widget)
         let stackedLabel = c.showsLabel ? textWidth(label, stackedLabelFont) : 0
         let content: CGFloat
-        switch c.style {
+        switch effectiveStyle(c) {
         case .stacked:
             content = max(stackedLabel, textWidth(widestValue, stackedValueFont))
         case .inline:
@@ -98,45 +124,55 @@ final class CPUStatusItemView: NSView {
         }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let reading = store.menuBarCPU  // 自动跟踪：数值变化时 AppKit 重绘
-        let color = accentColor(store.menuBarLevel)
-
-        let valueText: String
-        let hasValue: Bool
-        switch reading {
-        case .value(let ratio, _):
-            valueText = PercentFormat.string(fromRatio: ratio)
-            hasValue = true
-        case .noData, .unavailable:
-            valueText = PercentFormat.placeholder
-            hasValue = false
+    /// 非占用 widget 的数值文字；没有数据时为 nil。
+    private func valueText(_ widget: CPUMenuWidget) -> String? {
+        switch widget {
+        case .usage:
+            if case .value(let ratio, _) = store.menuBarCPU { return PercentFormat.string(fromRatio: ratio) }
+            return nil
+        case .frequency:
+            // 各簇实际频率的最大值（最忙的簇）；全部空闲时没有数值。
+            let hz = store.latest.compactMap { id, sample in id.cpuFrequencyClusterKey != nil ? sample.value : nil }.max()
+            return hz.map { String(format: "%.2fG", $0 / 1e9) }
+        case .temperature:
+            return store.latest[.cpuTemperatureMax]?.value.map { String(format: "%.0f°", $0) }
+        case .power:
+            return store.latest[.cpuPowerTotal]?.value.map { String(format: $0 < 10 ? "%.1fW" : "%.0fW", $0) }
         }
-        let valueColor = hasValue ? color : NSColor.secondaryLabelColor
+    }
 
-        switch configuration.style {
+    override func draw(_ dirtyRect: NSRect) {
+        let widget = configuration.widget
+        let label = Self.label(widget)
+        // 只有占用 widget 参与着色（D32、D38）。
+        let color = widget == .usage ? accentColor(store.menuBarLevel) : NSColor.labelColor
+        let text = valueText(widget)  // 自动跟踪：数值变化时 AppKit 重绘
+        let valueText = text ?? PercentFormat.placeholder
+        let valueColor = text != nil ? color : NSColor.secondaryLabelColor
+
+        switch Self.effectiveStyle(configuration) {
         case .inline:
-            drawInline(valueText, valueColor)
+            drawInline(label, valueText, valueColor)
         case .stacked:
-            let contentRect = drawStackedLabel()
+            let contentRect = drawStackedLabel(label)
             let value = NSAttributedString(
                 string: valueText, attributes: [.font: Self.stackedValueFont, .foregroundColor: valueColor])
             let size = value.size()
             value.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: contentRect.minY + Self.stackedValueFont.descender))
         case .sparkline:
-            drawSparkline(in: drawStackedLabel(), color: color)
+            drawSparkline(in: drawStackedLabel(label), color: color)
         case .barsTotal:
-            let ratio: Double? = if case .value(let r, _) = reading { r } else { nil }
-            drawBars([ratio], width: Self.totalBarWidth, gap: 0, in: drawStackedLabel(), color: color)
+            let ratio: Double? = if case .value(let r, _) = store.menuBarCPU { r } else { nil }
+            drawBars([ratio], width: Self.totalBarWidth, gap: 0, in: drawStackedLabel(label), color: color)
         case .barsLevels:
             let levels = (0..<max(configuration.levelCount, 1)).map { store.latest[.cpuUsagePerfLevel($0)]?.value }
-            drawBars(levels, width: Self.levelBarWidth, gap: 1, in: drawStackedLabel(), color: color)
+            drawBars(levels, width: Self.levelBarWidth, gap: 1, in: drawStackedLabel(label), color: color)
         case .barsCores:
             let cores = store.cpuCores.map(\.value)
-            drawBars(cores, width: Self.coreBarWidth - 1, gap: 1, in: drawStackedLabel(), color: color)
+            drawBars(cores, width: Self.coreBarWidth - 1, gap: 1, in: drawStackedLabel(label), color: color)
         }
 
-        setAccessibilityLabel("\(Self.label) \(valueText)")
+        setAccessibilityLabel("\(label) \(valueText)")
     }
 
     /// 上下布局里两行之间的间距（按大写高度算）。
@@ -144,25 +180,25 @@ final class CPUStatusItemView: NSView {
 
     /// 上下布局：按「数值大写高度 + 间距 + 标签大写高度」整组垂直居中。画出标签（关闭时不画），
     /// 返回下方内容区（数值的大写高度那一条；折线和柱也画在这里）。
-    private func drawStackedLabel() -> NSRect {
+    private func drawStackedLabel(_ text: String) -> NSRect {
         let valueCap = Self.stackedValueFont.capHeight
         let labelCap = configuration.showsLabel ? Self.stackedLabelFont.capHeight + Self.stackedGap : 0
         let valueBaseline = floor((bounds.height - valueCap - labelCap) / 2)
         if configuration.showsLabel {
             let label = NSAttributedString(
-                string: Self.label, attributes: [.font: Self.stackedLabelFont, .foregroundColor: NSColor.labelColor])
+                string: text, attributes: [.font: Self.stackedLabelFont, .foregroundColor: NSColor.labelColor])
             let labelBaseline = valueBaseline + valueCap + Self.stackedGap
             label.draw(at: NSPoint(x: (bounds.width - label.size().width) / 2, y: labelBaseline + Self.stackedLabelFont.descender))
         }
         return NSRect(x: Self.padding, y: valueBaseline, width: bounds.width - 2 * Self.padding, height: ceil(valueCap))
     }
 
-    private func drawInline(_ valueText: String, _ valueColor: NSColor) {
+    private func drawInline(_ labelText: String, _ valueText: String, _ valueColor: NSColor) {
         // 两种字号共用一条基线：让数字的大写高度在 item 里垂直居中。
         let baseline = floor((bounds.height - Self.inlineValueFont.capHeight) / 2)
         if configuration.showsLabel {
             let label = NSAttributedString(
-                string: Self.label, attributes: [.font: Self.inlineLabelFont, .foregroundColor: NSColor.labelColor])
+                string: labelText, attributes: [.font: Self.inlineLabelFont, .foregroundColor: NSColor.labelColor])
             label.draw(at: NSPoint(x: Self.padding, y: baseline + Self.inlineLabelFont.descender))
         }
         let value = NSAttributedString(

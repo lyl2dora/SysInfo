@@ -557,3 +557,14 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
 - **2026-10-15 · §7.3 高开销选项**
   - 「后台高精度历史」已实现：设置键 `history.cpu.highPrecision`，默认关；打开后，后台的频率、温度与功耗改为每 5 s。
   - 「菜单栏显示频率」的呈现方式待用户定（见验收前的待定项）。
+- **2026-10-15 · §7.1 菜单栏改为一项一个 widget（D38）**
+  - CPU 模块提供四个 widget：占用（默认开）、频率、温度、功耗（默认关）。每个都是独立的 `NSStatusItem`，各自登记需求：
+    - 占用 → `cpu.load`；
+    - 频率 → `cpu.freq`；
+    - 温度、功耗 → `cpu.sensors`。
+  - 小标签用英文缩写：CPU、FREQ、TEMP、PWR（D23）。数值格式为 `23%`、`1.68G`、`47°`、`0.8W`，宽度按 `100%`、`9.99G`、`125°`、`99.9W` 固定。
+  - 频率 widget 显示各簇实际频率的最大值（最忙的簇），全部空闲时显示「—」。面板概览里仍显示最快档的频率。
+  - 占用 widget 保留全部样式（上下、左右、折线、柱）与着色；其余三个只有上下、左右两种，不着色。
+  - 占用 widget 的 autosaveName 沿用 `<bundle id>.cpu`，保住用户拖好的位置；其余为 `<bundle id>.cpu.<项>`。
+  - 点击任一 widget 都打开同一个面板，锚在被点击的 widget 下方（`StatusItemController.activeItem`）。
+  - 实测：四个 widget 一起显示正常；点击 TEMP 后，面板锚在它下方，Esc 可以关闭，修饰键无残留。

@@ -3,6 +3,7 @@
 import AppKit
 import SwiftUI
 import SysCollectors
+import SysModel
 import SysStore
 
 struct SettingsRootView: View {
@@ -45,7 +46,7 @@ private struct SettingsSplitView: View {
         case .general:
             GeneralSettingsView(settings: context.settings)
         case .menuBar:
-            MenuBarSettingsView(settings: context.settings)
+            MenuBarSettingsView(settings: context.settings, store: context.store)
         case .cpu:
             CPUSettingsView(settings: context.settings, store: context.store)
         case .history:
@@ -94,11 +95,25 @@ private struct GeneralSettingsView: View {
 
 private struct MenuBarSettingsView: View {
     @Bindable var settings: AppSettings
+    let store: MetricStore
 
     var body: some View {
         Form {
-            Section("菜单栏项目") {
-                Toggle("CPU", isOn: $settings.cpuItemVisible)
+            Section {
+                ForEach(CPUMenuWidget.allCases) { widget in
+                    Toggle(isOn: Binding(get: { settings.isVisible(widget) }, set: { settings.setVisible(widget, $0) })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Self.title(widget))
+                            if let note = note(widget) {
+                                Text(note).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("CPU")
+            } footer: {
+                Text("每个菜单栏项目只显示一项。想同时看占用和温度，就把两项都打开；各项可以按住 ⌘ 单独拖动位置。样式与着色在「CPU」页设置。")
             }
             Section {
                 Text("菜单栏项目较多时，部分项目可能被系统收进溢出区。可以到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
@@ -107,6 +122,30 @@ private struct MenuBarSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    static func title(_ widget: CPUMenuWidget) -> String {
+        switch widget {
+        case .usage: String(localized: "CPU 占用")
+        case .frequency: String(localized: "CPU 频率")
+        case .temperature: String(localized: "CPU 温度")
+        case .power: String(localized: "CPU 功耗")
+        }
+    }
+
+    /// 开销说明（D19）：按菜单栏采集间隔换算。
+    private func note(_ widget: CPUMenuWidget) -> String? {
+        let interval = settings.cpuInterval.rawValue
+        switch widget {
+        case .usage:
+            return nil
+        case .frequency:
+            return String(localized: "最忙的簇的实际频率。高开销：\(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: interval, store: store))")
+        case .temperature:
+            return String(localized: "CPU 最高温。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
+        case .power:
+            return String(localized: "CPU 各簇功耗之和，不含 GPU；没有专用功耗轨的芯片显示「—」。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
+        }
     }
 }
 

@@ -8,6 +8,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
   - 本机：M5 Pro，6 Super + 12 Performance。
   - 对照机 Mac mini：M4 Pro，10 Performance + 4 Efficiency，可通过 `ssh user@remote-host` 访问，已装 Xcode 27。原来的 Mac Studio（M2 Max）已被替换，不再是目标设备，它的实测只作旁证。
   - 在对照机上构建或运行 CLI 与探针时，同样遵守 D18 的操作边界。每个模块验收时都要附上两台机器的对照结果。
+  - 对照机上可以构建并启动 Debug 版 app 做截图自查，用完按 D39 清场。
 
 ## 文档（按需分级读取）
 - **每次必读**：`docs/decisions.md`，即决策档（D01 起）。要改变一条决策时，追加新条目并标注「取代 Dxx」，不改写旧条目。
@@ -38,7 +39,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 ## 产品边界
 - 主 app 不开沙盒（Xcode 27 模板默认开启，要关掉）。只支持 arm64，最低 macOS 27.0（D03）。
 - root 只用于风扇控制；v1 只读取风扇状态，不为其他功能做 root helper（D04）。
-- 菜单栏默认每个模块一个 item，并提供合并选项（D06）。面板用统一的 `NSPanel`（D21）。禁用 `MenuBarExtra(isInserted:)`。
+- 菜单栏每个 mini widget 只显示一项指标，一个 widget 一个 item，并提供合并选项（D38 取代 D06 第一条）。面板用统一的 `NSPanel`（D21）。禁用 `MenuBarExtra(isInserted:)`。
 - 小组件是预留功能：现在只在数据模型里定义 Codable 快照类型，不加 App Group entitlement（D07、K31）。
 - 不做 Remote/SaaS、自动更新器、蓝牙扫描、世界时钟（D13）。
 - 默认不引入第三方依赖，例外只有 Apple 官方的 swift-* 包。文案统一放进 String Catalog（D23）。

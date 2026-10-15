@@ -132,6 +132,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
 
         Log.panel.info("expanded interface session 开始")
         sessionItem = statusItem
+        statusItems?.activeItem = statusItem
         showAnchored()
     }
 
