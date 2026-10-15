@@ -528,3 +528,8 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
   - 每分钟只留前 10 个应用，合计略低于整机，符合预期。修正前，本机的应用合计远超整机（`biomesyncd` 一项就 810 CPU·s）。
   - 导出：CSV 文件夹与 JSON Lines 都核对过，不含设备唯一标识。
   - 正式的开销测量按 §10 在第 8 步用 `make measure` 做。这里的数字含 CLI 与 Swift 运行时，只作参考。
+- **2026-10-15 · §7.1 菜单栏上下布局的字号**
+  - 原文初始字号是标签 8 pt、数值 12 pt。截图自查后，用户要求上下两行字号一致，改为两行都用 10 pt medium（数值用等宽数字）。宽度按「100%」在 10 pt 下的字宽加左右各 2 pt 算出，约 29 pt。
+  - 垂直方向按「数值大写高度 + 2.5 pt + 标签大写高度」整组居中。原先按行高摆放时两行会重叠。
+  - 迷你折线、柱状样式沿用同一套布局：上行是标签，下行的数值区换成图形；关闭标签后，图形占满整个高度。
+  - 着色状态机 `SustainedLevelTracker` 与阈值 `ColorThresholds` 放在 SysModel（P2 的提醒复用），有单测。

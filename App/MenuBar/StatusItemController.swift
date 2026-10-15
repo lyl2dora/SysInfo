@@ -31,10 +31,11 @@ final class StatusItemController {
         self.demand = DemandSlot(engine: engine)
     }
 
-    /// 按设置显示或移除 item，并同步采样需求。
-    func update(visible: Bool, interval: SamplingInterval) {
+    /// 按设置显示或移除 item，并同步采样需求与显示配置。
+    func update(visible: Bool, interval: SamplingInterval, configuration: CPUStatusItemConfiguration) {
         if visible {
-            installIfNeeded()
+            installIfNeeded(configuration)
+            apply(configuration)
             demand.set(
                 Demand(collectors: [CPULoadCollector.collectorID], interval: interval.rawValue, source: .menubarCPU))
         } else {
@@ -50,15 +51,28 @@ final class StatusItemController {
 
     // MARK: - 私有
 
-    private func installIfNeeded() {
+    /// 样式或柱数变化时重新定宽（只在设置变化时发生，运行中宽度不变，K32）。
+    private func apply(_ configuration: CPUStatusItemConfiguration) {
+        guard let item, let itemView, itemView.configuration != configuration else { return }
+        let width = CPUStatusItemView.fixedWidth(for: configuration)
+        itemView.configuration = configuration
+        if item.length != width {
+            item.length = width
+            itemView.setFrameSize(NSSize(width: width, height: itemView.frame.height))
+            Log.menubar.info("CPU item 改为 \(configuration.style.rawValue, privacy: .public)，宽度 \(width, format: .fixed(precision: 1)) pt")
+        }
+    }
+
+    private func installIfNeeded(_ configuration: CPUStatusItemConfiguration) {
         guard item == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: CPUStatusItemView.fixedWidth)
+        let width = CPUStatusItemView.fixedWidth(for: configuration)
+        let item = NSStatusBar.system.statusItem(withLength: width)
         item.autosaveName = "\(BuildInfo.bundleIdentifier).cpu"
         item.behavior = .removalAllowed
         // autosaveName 会持久化可见性；可见性以 app 设置为准（K32），创建后显式设为可见。
         item.isVisible = true
 
-        let view = CPUStatusItemView(store: store, height: NSStatusBar.system.thickness)
+        let view = CPUStatusItemView(store: store, height: NSStatusBar.system.thickness, configuration: configuration)
         item.view = view
         item.expandedInterfaceDelegate = expandedInterfaceDelegate
 
@@ -76,7 +90,7 @@ final class StatusItemController {
 
         self.item = item
         itemView = view
-        Log.menubar.info("CPU item 已创建，宽度 \(CPUStatusItemView.fixedWidth, format: .fixed(precision: 1)) pt")
+        Log.menubar.info("CPU item 已创建，宽度 \(width, format: .fixed(precision: 1)) pt")
     }
 
     private func remove() {

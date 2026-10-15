@@ -35,6 +35,8 @@ final class MetricStore {
     private(set) var cpuCores: [Sample] = []
     /// 菜单栏显示用的 CPU 总占用。
     private(set) var menuBarCPU: MenuBarReading = .noData
+    /// 菜单栏的着色级别（D32：对平滑后的总占用做持续判定）。
+    private(set) var menuBarLevel: UsageLevel = .normal
     /// 调度器状态（tick 数、需求、降频、各采集器健康信息）。
     private(set) var engineStatus: EngineStatus?
     /// 最近一个 tick 的整体耗时。
@@ -42,6 +44,13 @@ final class MetricStore {
 
     @ObservationIgnored private var smoother = ExponentialSmoother(timeConstant: MetricStore.menuBarTimeConstant)
     @ObservationIgnored private var ticksSinceLog = 0
+    @ObservationIgnored private var levelTracker = SustainedLevelTracker(thresholds: .cpuDefault)
+
+    /// 着色阈值（来自设置）。
+    var colorThresholds: ColorThresholds {
+        get { levelTracker.thresholds }
+        set { levelTracker.thresholds = newValue }
+    }
 
     func apply(_ event: EngineEvent) {
         switch event {
@@ -116,6 +125,10 @@ final class MetricStore {
         }
         if reading != menuBarCPU {
             menuBarCPU = reading
+        }
+        let level = levelTracker.update(smoothed, at: Double(sample.time.continuousNanos) / 1e9)
+        if level != menuBarLevel {
+            menuBarLevel = level
         }
     }
 

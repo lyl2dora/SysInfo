@@ -58,8 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 store.apply(event)
             }
         }
-        Task {
+        Task { [weak self] in
             await engine.runSelfTests()  // K19：启动时自检
+            self?.applySettings()  // 自检刷新了拓扑：按档柱的个数随之确定
         }
         noteSystemBuild()
 
@@ -152,7 +153,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
-        statusItems.update(visible: settings.cpuItemVisible, interval: settings.cpuInterval)
+        store.colorThresholds = settings.cpuColorThresholds
+        let topology = CPUTopologyService.shared.current
+        statusItems.update(
+            visible: settings.cpuItemVisible, interval: settings.cpuInterval,
+            configuration: CPUStatusItemConfiguration(
+                style: settings.menuBarCPUStyle, showsLabel: settings.menuBarCPULabel,
+                coloring: settings.menuBarCPUColoring, levelCount: max(topology?.perfLevels.count ?? 2, 1),
+                coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8))
         throttle.automatic = settings.autoThrottle
         let configuration = HistoryRecorder.Configuration(
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled)
