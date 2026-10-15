@@ -12,6 +12,8 @@ import SysModel
 struct TopNSection: View {
     let model: TopNModel
     let grouping: TopNGrouping
+    /// 行位数（设置的行数）。行位固定、每行高度固定，数据到达只填内容，面板高度不变（学 Stats 的做法）。
+    let slots: Int
     @State private var expanded: Set<String> = []
     @Environment(\.panelLayoutChanged) private var layoutChanged
 
@@ -37,16 +39,17 @@ struct TopNSection: View {
                         .help("运行两次 /bin/ps，间隔 2 秒，列出所有用户的进程")
                 }
             }
-            if model.rows.isEmpty {
-                Text("等待数据…").font(.caption).foregroundStyle(.tertiary)
-            }
-            ForEach(model.rows) { row in
+            ForEach(model.rows.prefix(slots)) { row in
                 TopNRowView(
                     row: row, expanded: expanded.contains(row.id),
                     toggle: {
                         if expanded.contains(row.id) { expanded.remove(row.id) } else { expanded.insert(row.id) }
                     },
                     terminate: model.terminate)
+            }
+            // 没有数据的行位：同样高度的空行；还没有任何数据时第一行写「等待数据…」。
+            ForEach(model.rows.count..<max(slots, model.rows.count), id: \.self) { index in
+                TopNRowView.placeholder(index == 0 ? String(localized: "等待数据…") : nil)
             }
         }
         .onHover { model.isFrozen = $0 }
@@ -55,11 +58,11 @@ struct TopNSection: View {
 }
 
 extension TopNSection {
-    /// 影响高度的结构：行数、展开的行、各行有无副标题、展开行的成员数。
+    /// 影响高度的结构：行位数、回退提示、展开的行及其成员数。行高固定，行数据本身不影响高度。
     fileprivate var layoutSignature: [Int] {
-        [model.rows.count, model.isFallback ? 1 : 0]
-            + model.rows.map { row in
-                (row.topMember == nil ? 0 : 1) + (expanded.contains(row.id) ? 2 + min(row.members.count, 9) * 4 : 0)
+        [slots, model.isFallback ? 1 : 0]
+            + model.rows.prefix(slots).map { row in
+                expanded.contains(row.id) ? 2 + min(row.members.count, 9) * 4 : 0
             }
     }
 }
@@ -84,12 +87,11 @@ private struct TopNRowView: View {
                             Text("×\(row.memberCount)").foregroundStyle(.tertiary)
                         }
                     }
-                    if let top = row.topMember {
-                        Text("\(top.name) \(top.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "")")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    // 副标题行总在（没有时留空），每行高度相同。
+                    Text(row.topMember.map { "\($0.name) \($0.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "")" } ?? " ")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 if let share = row.perfLevel0Share {
@@ -152,6 +154,20 @@ private struct TopNRowView: View {
                 }
             }
         }
+    }
+
+    /// 空行位：与有数据的行同样的结构和高度。
+    static func placeholder(_ text: String?) -> some View {
+        HStack(spacing: 6) {
+            Color.clear.frame(width: 16, height: 16)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(text ?? " ").foregroundStyle(.tertiary).lineLimit(1)
+                Text(" ").font(.caption2).lineLimit(1)
+            }
+            Spacer()
+        }
+        .font(.caption)
+        .accessibilityHidden(text == nil)
     }
 
     private func killButton(pid: pid_t, name: String) -> some View {

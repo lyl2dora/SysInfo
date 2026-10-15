@@ -86,6 +86,9 @@ final class TopNModel {
             rows = []
             return
         }
+        // 后台历史每 10 s 扫一次 coalition，`latestWindow` 里通常已有不超过 10 s 的窗口：
+        // 立即用它组装第一版，不必等面板自己的两次扫描（约 2–3 s 的「等待数据」）。
+        if !isFallback { coalitionTick(maxAgeSeconds: Self.firstWindowMaxAge) }
         if isFallback {
             _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
             let timer = Timer(timeInterval: TimeInterval(interval), repeats: true) { [weak self] _ in
@@ -96,9 +99,16 @@ final class TopNModel {
         }
     }
 
-    /// 引擎交付了一个 `app.coalition` 结果。
-    func coalitionTick() {
+    /// 面板打开时可以直接采用的窗口的最大年龄，秒（后台历史 10 s 扫一次，留一点余量）。
+    static let firstWindowMaxAge: Double = 15
+
+    /// 引擎交付了一个 `app.coalition` 结果；或面板刚打开，用已有的窗口（不超过 `maxAgeSeconds`）。
+    func coalitionTick(maxAgeSeconds: Double? = nil) {
         guard !isFallback, !building, !isFrozen, rowCount > 0, let sampler, let window = sampler.latestWindow else { return }
+        if let maxAgeSeconds {
+            let age = Double(SampleTime.now().continuousNanos &- window.time.continuousNanos) / 1e9
+            guard age <= maxAgeSeconds else { return }
+        }
         building = true
         let builder = builder
         let rows = rowCount

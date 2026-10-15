@@ -24,7 +24,7 @@ struct CPUPanelView: View {
             PanelCard { CPUCoresSection(store: store, sensors: services.collectors.sensors) }
             PanelCard { CPUDetailsSection(store: store, services: services, expandInitially: expandDetails) }
             if settings.panelTopNRows > 0 {
-                PanelCard { TopNSection(model: services.topN, grouping: settings.panelGrouping) }
+                PanelCard { TopNSection(model: services.topN, grouping: settings.panelGrouping, slots: settings.panelTopNRows) }
             }
         }
     }
