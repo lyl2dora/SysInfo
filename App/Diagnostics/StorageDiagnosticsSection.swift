@@ -120,6 +120,7 @@ struct StorageDiagnosticsSection: View {
             return String(localized: "SMART 正常 · 上次 \(cost) CPU")
         case .notSupported: return String(localized: "不支持 NVMe SMART")
         case .openFailed(let code): return String(localized: "打开失败 0x\(String(UInt32(bitPattern: code), radix: 16))")
+        case .busy(let count): return String(localized: "被其他程序占用（连续 \(count) 次），稍后重试")
         case .readFailed(let code): return String(localized: "读取失败 0x\(String(UInt32(bitPattern: code), radix: 16))")
         case .implausible(let detail): return String(localized: "读数不合理：\(detail)")
         }

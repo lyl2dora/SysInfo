@@ -1,7 +1,8 @@
 // NVMe SMART 采集器 `storage.smart`（存储模块设计 §4.3，D54、D55）：公开接口（CSysStorage），blocking 通道。
 //
-// - 每块支持 NVMe SMART 的物理盘一个常驻连接（plugin），盘消失、自检时释放；读失败一次就重建一次，再失败该盘不可用。
-//   常驻时单盘一次约 0.13–0.18 ms CPU，重建约 0.7–1.0 ms（§1.1）；
+// - 每次读取都「打开 → 读 → 关闭」，不常驻（D56）：NVMe SMART 的用户态连接是独占的（kIOReturnExclusiveAccess），
+//   常驻会让其他读 SMART 的程序与另一个 SysInfo 实例（D16）都读不到。单盘一次约 0.7–1.0 ms CPU（§1.1）；
+//   被别的程序占用时这一轮跳过该盘（保留上一次读数），连续 3 轮占用才标为不可用；
 // - 焦点盘（D55）：`focus` 为 nil 时每次读全部盘（面板存储 tab、诊断页、CLI）；为集合时每次只读这些盘
 //   （菜单栏 widget 绑定的盘），其余盘距上次读满 `backgroundSeconds` 才读一次（给历史）；
 // - 只读 SMART / Health 日志与 Identify Controller，不发任何会改变设备状态的命令（D54）；
@@ -23,6 +24,8 @@ public struct DiskSMARTStatus: Hashable, Sendable {
         case notSupported
         /// 打开连接失败，附 IOReturn / HRESULT。
         case openFailed(Int32)
+        /// 被别的程序独占（kIOReturnExclusiveAccess），附连续次数。
+        case busy(Int)
         /// 读取失败，附 IOReturn。
         case readFailed(Int32)
         /// 读数不合理（自检未通过），附说明。
@@ -42,11 +45,9 @@ public struct DiskSMARTStatus: Hashable, Sendable {
     }
 }
 
-/// 一个打开的 SMART 连接。只在采集器的锁内或串行通道上使用。
-private final class SMARTHandle: @unchecked Sendable {
+/// 一个打开的 SMART 连接。只在一次读取里存在，用完立即关闭（D56）。
+private final class SMARTHandle {
     let pointer: OpaquePointer
-    /// Identify Controller 是静态信息，每个连接只读一次。
-    var identify: [UInt8]?
 
     private init(pointer: OpaquePointer) {
         self.pointer = pointer
@@ -70,12 +71,9 @@ private final class SMARTHandle: @unchecked Sendable {
     }
 
     func readIdentify() -> [UInt8]? {
-        if let identify { return identify }
         var buffer = [UInt8](repeating: 0, count: Int(CST_IDENTIFY_SIZE))
         let r = buffer.withUnsafeMutableBufferPointer { cst_smart_identify(pointer, $0.baseAddress!) }
-        guard r == 0 else { return nil }
-        identify = buffer
-        return buffer
+        return r == 0 ? buffer : nil
     }
 }
 
@@ -91,9 +89,16 @@ public final class SMARTCollector: Collector {
 
     static let sampleMetrics: [MetricID.DiskMetric] = [.temp, .life, .spare, .mediaErrors, .warning, .dataRead, .dataWritten]
 
+    /// kIOReturnExclusiveAccess。
+    static let exclusiveAccess: Int32 = Int32(bitPattern: 0xE000_02BE)
+    /// 连续这么多轮被占用才标为不可用。
+    static let busyLimit = 3
+
     private struct State {
         var usable: Bool?
-        var handles: [DiskKey: SMARTHandle] = [:]
+        /// Identify Controller 是静态信息：每块盘只读一次，按盘缓存（D56 之后连接不常驻）。
+        var identify: [DiskKey: [UInt8]] = [:]
+        var busyCounts: [DiskKey: Int] = [:]
         var records: [DiskKey: SMARTRecord] = [:]
         var statuses: [DiskKey: DiskSMARTStatus] = [:]
         var lastReadNanos: [DiskKey: UInt64] = [:]
@@ -127,7 +132,8 @@ public final class SMARTCollector: Collector {
         inventory.invalidate()
         let snapshot = inventory.snapshot()
         state.withLock {
-            $0.handles = [:]
+            $0.identify = [:]
+            $0.busyCounts = [:]
             $0.implausible = []
             $0.generation = snapshot.inventory.generation
         }
@@ -166,9 +172,10 @@ public final class SMARTCollector: Collector {
         let snapshot = inventory.snapshot()
         let (usable, focus) = state.withLock { s -> (Bool?, Set<DiskKey>?) in
             if s.generation != snapshot.inventory.generation {
-                // 盘插拔：释放已不在的盘的连接与读数。
+                // 盘插拔：丢掉已不在的盘的缓存与读数。
                 let keys = Set(snapshot.inventory.disks.map(\.key))
-                s.handles = s.handles.filter { keys.contains($0.key) }
+                s.identify = s.identify.filter { keys.contains($0.key) }
+                s.busyCounts = s.busyCounts.filter { keys.contains($0.key) }
                 s.records = s.records.filter { keys.contains($0.key) }
                 s.statuses = s.statuses.filter { keys.contains($0.key) }
                 s.lastReadNanos = s.lastReadNanos.filter { keys.contains($0.key) }
@@ -205,14 +212,18 @@ public final class SMARTCollector: Collector {
                 }
                 continue
             }
-            guard let entry = snapshot.entries[disk.key], let record = read(disk, entry: entry, at: time.wallClock) else {
+            guard let entry = snapshot.entries[disk.key] else { continue }
+            let record = read(disk, entry: entry, at: time.wallClock)
+            if record == nil, let busy = state.withLock({ $0.busyCounts[disk.key] }), busy < Self.busyLimit {
+                continue  // 被别的程序占用：这一轮跳过，保留上一次读数
+            }
+            guard let record else {
                 degraded = true
                 samples += Self.sampleMetrics.map {
                     .unavailable(.storageDisk(disk.key, $0), reason: .readFailed("SMARTReadData"), at: time)
                 }
                 continue
             }
-            state.withLock { $0.lastReadNanos[disk.key] = time.continuousNanos }
             samples += Self.samples(record, key: disk.key, at: time)
         }
         return CollectorOutput(samples: samples, status: degraded ? .degraded : .ok, dataPath: Self.dataPath)
@@ -222,43 +233,48 @@ public final class SMARTCollector: Collector {
 
     // MARK: - 读取
 
-    /// 读一块盘（必要时打开或重建连接）；成功时更新最新读数与状态。
+    /// 读一块盘：打开 → 读 SMART（首次另读 Identify）→ 关闭。成功时更新最新读数与状态。
     private func read(_ disk: PhysicalDisk, entry: DiskInventory.Entry, at date: Date) -> SMARTRecord? {
         let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
-        var handle = state.withLock { $0.handles[disk.key] }
-        var attempts = 0
-        while attempts < 2 {
-            attempts += 1
-            if handle == nil {
-                let opened = SMARTHandle.open(entry)
-                guard let fresh = opened.handle else {
-                    state.withLock { $0.statuses[disk.key] = DiskSMARTStatus(state: .openFailed(opened.result)) }
-                    return nil
+        let opened = SMARTHandle.open(entry)
+        guard let handle = opened.handle else {
+            state.withLock { s in
+                if opened.result == Self.exclusiveAccess {
+                    let count = (s.busyCounts[disk.key] ?? 0) + 1
+                    s.busyCounts[disk.key] = count
+                    s.statuses[disk.key] = DiskSMARTStatus(
+                        state: .busy(count), lastCPUNanos: s.statuses[disk.key]?.lastCPUNanos, lastRead: s.statuses[disk.key]?.lastRead)
+                } else {
+                    s.busyCounts[disk.key] = nil
+                    s.statuses[disk.key] = DiskSMARTStatus(state: .openFailed(opened.result))
                 }
-                handle = fresh
-                state.withLock { $0.handles[disk.key] = fresh }
             }
-            guard let current = handle else { return nil }
-            let (bytes, result) = current.read()
-            if result == 0, var record = SMARTParser.healthLog(bytes) {
-                if let identify = current.readIdentify() { SMARTParser.applyIdentify(identify, to: &record) }
-                let cost = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start
-                state.withLock {
-                    $0.records[disk.key] = record
-                    if !$0.implausible.contains(disk.key) {
-                        $0.statuses[disk.key] = DiskSMARTStatus(state: .ok, lastCPUNanos: cost, lastRead: date)
-                    }
-                }
-                return record
-            }
-            // 读失败：丢掉连接，重建一次再试。
+            return nil
+        }
+        let (bytes, result) = handle.read()
+        guard result == 0, var record = SMARTParser.healthLog(bytes) else {
             state.withLock {
-                $0.handles[disk.key] = nil
+                $0.busyCounts[disk.key] = nil
                 $0.statuses[disk.key] = DiskSMARTStatus(state: .readFailed(result))
             }
-            handle = nil
+            return nil
         }
-        return nil
+        let cachedIdentify = state.withLock { $0.identify[disk.key] }
+        if let identify = cachedIdentify ?? handle.readIdentify() {
+            SMARTParser.applyIdentify(identify, to: &record)
+            if cachedIdentify == nil { state.withLock { $0.identify[disk.key] = identify } }
+        }
+        let cost = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- start
+        let readAt = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)  // 与 SampleTime.continuousNanos 同一时钟
+        state.withLock {
+            $0.busyCounts[disk.key] = nil
+            $0.lastReadNanos[disk.key] = readAt
+            $0.records[disk.key] = record
+            if !$0.implausible.contains(disk.key) {
+                $0.statuses[disk.key] = DiskSMARTStatus(state: .ok, lastCPUNanos: cost, lastRead: date)
+            }
+        }
+        return record
     }
 
     static func samples(_ record: SMARTRecord, key: DiskKey, at time: SampleTime) -> [Sample] {

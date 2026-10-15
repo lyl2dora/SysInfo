@@ -200,8 +200,8 @@ enum CostLabel {
         GPUPowerCollector.collectorID: 1.8,
         // 内存模块设计 §2.4：sysctl 与 host_statistics64 一次约 0.3 ms
         MemoryCollector.collectorID: 0.3,
-        // 存储模块设计 §1.1：常驻连接时一块盘约 0.17 ms（盘温 widget 只读绑定的盘）；6 块盘的驱动统计约 0.8 ms
-        SMARTCollector.collectorID: 0.2,
+        // 存储模块设计 §1.1、D56：每次打开 → 读 → 关闭，一块盘约 0.7–1.0 ms（盘温 widget 只读绑定的盘）；6 块盘的驱动统计约 0.8 ms
+        SMARTCollector.collectorID: 1.0,
         StorageIOCollector.collectorID: 0.8,
     ]
 
