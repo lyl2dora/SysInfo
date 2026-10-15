@@ -20,8 +20,8 @@
 | 4 | DRAM 带宽通道发现 | `PMP0`，空闲约 8 GB/s | `PMP`，空闲约 8 GB/s |
 | 5 | 速率：10 s 窗口能看到页入变化；0.5 s 连采 12 次没有陈旧读数 | 通过 | — |
 | 6 | 单测 177 个、硬件测试（`make test-hw` 内存部分、`make remote-test`） | 通过 | 通过 |
-| 8 | 压力警告 / 严重（D52：`sudo memory_pressure -S -l warn` 与 `-l critical` 各 20 s，只模拟等级，不分配内存，到时自动恢复） | CLI 依次读到 normal → warning → normal → critical → normal；面板概览显示「严重 · 6%」，恢复后出现「15 分钟内最高：严重」徽标；历史库 03:18 一分钟的最高等级为 2（均值 1.33，即 20 s 警告），03:19 为 4（均值 2.0，即 20 s 严重） | — |
 | 7 | 单实例（D48）：Debug 主实例运行时 | 带 `--single-instance` 的第二个实例在创建 `NSApplication` 前退出，主实例收到通知后打开设置窗口（日志核对）；不带参数时第二个实例照常运行，历史库在 `SysInfo-secondary-<pid>`，退出时删除 | — |
+| 8 | 压力警告 / 严重（D52：`sudo memory_pressure -S -l warn` 与 `-l critical` 各 20 s，只模拟等级，不分配内存，到时自动恢复） | CLI 依次读到 normal → warning → normal → critical → normal；面板概览显示「严重 · 6%」，恢复后出现「15 分钟内最高：严重」徽标；历史库 03:18 一分钟的最高等级为 2（均值 1.33，即 20 s 警告），03:19 为 4（均值 2.0，即 20 s 严重） | — |
 
 ## 开销（`docs/perf/memory.md`，D40 口径）
 
