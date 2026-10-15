@@ -13,8 +13,10 @@ struct CPUCollectors {
     var frequency: CPUFrequencyCollector?
     var sensors: SensorCollector?
     var apps: AppSampler?
+    var interrupts: InterruptDeviceCollector?
 
     init(_ collectors: [any Collector]) {
+        interrupts = collectors.compactMap { $0 as? InterruptDeviceCollector }.first
         frequency = collectors.compactMap { $0 as? CPUFrequencyCollector }.first
         sensors = collectors.compactMap { $0 as? SensorCollector }.first
         apps = collectors.compactMap { $0 as? AppSampler }.first
@@ -162,11 +164,19 @@ final class CPUServices {
     let topN: TopNModel
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
+    /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
+    private let interruptDemand: DemandSlot
 
-    init(collectors: CPUCollectors, history: HistoryRecorder?) {
+    init(collectors: CPUCollectors, history: HistoryRecorder?, engine: SamplingEngine) {
         self.collectors = collectors
         self.topN = TopNModel(sampler: collectors.apps)
         self.history = history
+        self.interruptDemand = DemandSlot(engine: engine)
+    }
+
+    func setInterruptSourcesVisible(_ visible: Bool) {
+        interruptDemand.set(
+            visible ? Demand(collectors: [InterruptDeviceCollector.collectorID], interval: 5, source: .panel) : nil)
     }
 
     /// 引擎事件（在 MainActor 上，由 AppDelegate 的事件泵转来）。

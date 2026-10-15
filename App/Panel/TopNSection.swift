@@ -95,6 +95,8 @@ private struct TopNRowView: View {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel(expanded ? Text("收起成员") : Text("展开成员"))
+                    .help(expanded ? "收起成员" : "展开成员")
                     .frame(width: 16)
                 } else {
                     Color.clear.frame(width: 16)
@@ -136,6 +138,7 @@ private struct TopNRowView: View {
             Image(systemName: "xmark.circle")
         }
         .buttonStyle(.borderless)
+        .accessibilityLabel(Text("结束 \(name)"))
         .frame(width: 16)
         .help("结束（按住 ⌥ 时默认强制结束）")
     }

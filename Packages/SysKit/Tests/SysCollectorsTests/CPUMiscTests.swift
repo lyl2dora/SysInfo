@@ -30,3 +30,28 @@ import Testing
         #expect(InterruptRates.compute(previous: c, current: c, elapsedNanos: 0) == nil)
     }
 }
+
+@Suite struct InterruptSourcesTests {
+    func delta(_ subgroup: String, _ name: String, _ value: Int64) -> IOReportChannelDelta {
+        IOReportChannelDelta(
+            key: IOReportChannelKey(group: InterruptDeviceCollector.group, subgroup: subgroup, name: name),
+            stateResidencies: [], stateNames: [], integerValue: value)
+    }
+
+    @Test func deviceNameDropsTrailingIndex() {
+        #expect(InterruptDeviceCollector.device("i2c5 0") == "i2c5")
+        #expect(InterruptDeviceCollector.device("gfx-asc") == "gfx-asc")
+        #expect(InterruptDeviceCollector.device("lan 10gb") == "lan 10gb")
+    }
+
+    @Test func mergesByDeviceAndIgnoresOtherChannels() {
+        let first = "               First Level Interrupt Handler Count"
+        let sources = InterruptDeviceCollector.sources(
+            [
+                delta("ans 0", first, 30), delta("ans 1", first, 20),
+                delta("ans 0", "              Second Level Interrupt Handler Count", 999),
+                delta("smc 0", first, 10), delta("lan0 0", first, -5),
+            ], elapsedNanos: 10_000_000_000)
+        #expect(sources == [InterruptSource(device: "ans", perSecond: 5), InterruptSource(device: "smc", perSecond: 1)])
+    }
+}

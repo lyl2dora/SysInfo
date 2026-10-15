@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first,
             factoryDefaults: options.factoryDefaults, settings: settings)
         self.history = history
-        let services = CPUServices(collectors: CPUCollectors(collectors), history: history)
+        let services = CPUServices(collectors: CPUCollectors(collectors), history: history, engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
         eventPump = Task {

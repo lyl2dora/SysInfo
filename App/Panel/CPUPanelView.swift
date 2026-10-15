@@ -17,7 +17,7 @@ struct CPUPanelView: View {
             PanelCard { CPUOverview(store: store, splitUserSystem: settings.panelSplitUserSystem) }
             PanelCard { CPUHistoryChart(store: store, history: services.history, defaultSpan: settings.panelChartSpan) }
             PanelCard { CPUCoresSection(store: store, sensors: services.collectors.sensors) }
-            PanelCard { CPUDetailsSection(store: store) }
+            PanelCard { CPUDetailsSection(store: store, services: services) }
             if settings.panelTopNRows > 0 {
                 PanelCard { TopNSection(model: services.topN, grouping: settings.panelGrouping) }
             }
@@ -250,7 +250,9 @@ private struct CoreBar: View {
 
 private struct CPUDetailsSection: View {
     let store: MetricStore
+    let services: CPUServices
     @State private var expanded = false
+    @State private var sourcesExpanded = false
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
@@ -262,11 +264,38 @@ private struct CPUDetailsSection: View {
                     String(localized: "中断"),
                     "IPI \(rate(.cpuInterruptIPIRate)) · \(String(localized: "定时器")) \(rate(.cpuInterruptTimerRate)) · \(String(localized: "其余")) \(rate(.cpuInterruptOtherRate))",
                     help: String(localized: "全部核之和；「其余」是扣掉 IPI 和定时器后的余量，约等于设备中断"))
+                DisclosureGroup(isExpanded: $sourcesExpanded) {
+                    interruptSources
+                } label: {
+                    Text("中断来源").font(.caption)
+                }
             }
             .padding(.top, 4)
         } label: {
             Text("详情").font(.caption.weight(.semibold))
         }
+    }
+
+    /// 按设备的中断次数（IOReport，展开时每 5 秒更新一次）。
+    @ViewBuilder
+    private var interruptSources: some View {
+        let _ = store.engineStatus?.tickCount  // 随 tick 刷新
+        let sources = services.collectors.interrupts?.latestSources ?? []
+        VStack(alignment: .leading, spacing: 2) {
+            if sources.isEmpty {
+                Text("约 5 秒后显示").font(.caption2).foregroundStyle(.tertiary)
+            }
+            ForEach(sources.prefix(8), id: \.device) { source in
+                HStack {
+                    Text(source.device).font(.caption2.monospaced())
+                    Spacer()
+                    Text(Formatting.rate(source.perSecond)).font(.caption2).monospacedDigit()
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { services.setInterruptSourcesVisible(true) }
+        .onDisappear { services.setInterruptSourcesVisible(false) }
     }
 
     private var loadAverage: String {

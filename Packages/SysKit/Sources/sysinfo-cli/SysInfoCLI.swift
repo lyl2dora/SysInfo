@@ -75,6 +75,13 @@ struct SysInfoCLI {
             case "topo":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runTopo(json: options.flag("--json")))
+            case "irq":
+                let options = try Options(arguments, flags: [], values: ["--interval", "--count", "--rows"])
+                exit(
+                    runInterruptSources(
+                        interval: try options.double("--interval", default: 5, range: 1...60),
+                        count: try options.int("--count", default: 2, range: 1...100),
+                        rows: try options.int("--rows", default: 10, range: 1...100)))
             case "history":
                 exit(try await runHistory(arguments))
             case "engine":
@@ -118,6 +125,8 @@ struct SysInfoCLI {
               verify passive [--seconds 30] [--yes]   经调度器跑拓扑与频率的被动核对；--yes 在本进程内施加负载
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
+              irq [--interval 5] [--count 2] [--rows 10]
+                                                      中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
               history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）
               history export --out PATH [--format csv|jsonl] [--granularity minute|hour] [--hours 24]
                              [--metrics cpu.usage.,cpu.temp.] [--no-apps] [--db PATH]
@@ -330,6 +339,30 @@ struct SysInfoCLI {
         while nanosleep(&request, &remaining) != 0, errno == EINTR {
             request = remaining
         }
+    }
+
+    // MARK: - irq
+
+    static func runInterruptSources(interval: Double, count: Int, rows: Int) -> Int32 {
+        print(machineLine())
+        let collector = InterruptDeviceCollector()
+        let test = collector.selfTest()
+        print("自检：\(test.checks.map { "\($0.name) \($0.passed ? "✓" : "✗") \($0.detail)" }.joined(separator: "；"))")
+        guard test.isUsable else { return 1 }
+        _ = collector.sample(at: .now())
+        for index in 1...count {
+            sleep(untilUptimeNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + UInt64(interval * 1e9))
+            let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            _ = collector.sample(at: .now())
+            let cost = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started) / 1e6
+            let sources = collector.latestSources
+            let total = sources.reduce(0) { $0 + $1.perSecond }
+            print(String(format: "#%d  %d 个设备，共 %.0f/s，本次采样 %.2f ms CPU", index, sources.count, total, cost))
+            for s in sources.prefix(rows) {
+                print(String(format: "  %8.0f/s  %@", s.perSecond, s.device))
+            }
+        }
+        return 0
     }
 
     // MARK: - engine
