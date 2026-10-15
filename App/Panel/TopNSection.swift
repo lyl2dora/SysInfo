@@ -80,18 +80,22 @@ private struct TopNRowView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 AppIcon(path: row.appPath)
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 3) {
-                        Text(row.name).lineLimit(1)
-                        if row.memberCount > 1 {
-                            Text("×\(row.memberCount)").foregroundStyle(.tertiary)
+                // 行高固定为两行（看不见的模板撑开），内容在行内垂直居中：没有副标题时名字居中，不留半行空白。
+                Self.twoLineSlot {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 3) {
+                            Text(row.name).lineLimit(1)
+                            if row.memberCount > 1 {
+                                Text("×\(row.memberCount)").foregroundStyle(.tertiary)
+                            }
+                        }
+                        if let top = row.topMember {
+                            Text("\(top.name) \(top.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
-                    // 副标题行总在（没有时留空），每行高度相同。
-                    Text(row.topMember.map { "\($0.name) \($0.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "")" } ?? " ")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 if let share = row.perfLevel0Share {
@@ -156,14 +160,23 @@ private struct TopNRowView: View {
         }
     }
 
-    /// 空行位：与有数据的行同样的结构和高度。
+    /// 两行高的槽位：用看不见的「名字 + 副标题」模板定高，内容叠在上面、垂直居中。
+    static func twoLineSlot<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ZStack(alignment: .leading) {
+            VStack(spacing: 0) {
+                Text(" ")
+                Text(" ").font(.caption2)
+            }
+            .hidden()
+            content()
+        }
+    }
+
+    /// 空行位：与有数据的行同样的高度。
     static func placeholder(_ text: String?) -> some View {
         HStack(spacing: 6) {
             Color.clear.frame(width: 16, height: 16)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(text ?? " ").foregroundStyle(.tertiary).lineLimit(1)
-                Text(" ").font(.caption2).lineLimit(1)
-            }
+            twoLineSlot { Text(text ?? " ").foregroundStyle(.tertiary).lineLimit(1) }
             Spacer()
         }
         .font(.caption)
