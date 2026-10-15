@@ -60,9 +60,10 @@ public enum StandardCollectors: Sendable {
     /// 全部采集器：CPU 负载（`cpu.load`）、频率（`cpu.freq`）、杂项（`cpu.misc`）、温度与功耗（`cpu.sensors`）、应用活动（`app.coalition`）、
     /// 本进程开销（`app.self`）。每次调用返回新实例。`cpu.load` 排在最前：它的自检会刷新拓扑，其余采集器按拓扑建方案。
     public static func make() -> [any Collector] {
-        [
-            CPULoadCollector(), CPUFrequencyCollector(), CPUMiscCollector(), InterruptDeviceCollector(), SensorCollector(),
-            AppSampler(), SelfUsageCollector(),
+        let frequency = CPUFrequencyCollector()
+        return [
+            CPULoadCollector(), frequency, CPUMiscCollector(), InterruptDeviceCollector(),
+            CoreFrequencyCollector(frequency: frequency), SensorCollector(), AppSampler(), SelfUsageCollector(),
         ]
     }
 }

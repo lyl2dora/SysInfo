@@ -148,6 +148,7 @@ struct CPUDiagnosticsSection: View {
                     }
                 }
             }
+            coreFrequencies
             DisclosureGroup("SMC 键原始值（\(services.collectors.sensors?.latestReadings.count ?? 0) 个）") {
                 ForEach(services.collectors.sensors?.latestReadings ?? [], id: \.key) { r in
                     HStack {
@@ -167,6 +168,44 @@ struct CPUDiagnosticsSection: View {
             Text("「E 簇附近」读数受 GPU 与 P 簇影响大，只在这里列出（D33）；x2 峰值组也只在这里显示。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 逐核频率与「每核 tick 忙碌 vs 逐核通道活跃」的相关性核对（被动判据，要求 ≥ 0.99）。
+    @ViewBuilder
+    private var coreFrequencies: some View {
+        let _ = store.engineStatus?.tickCount  // 随 tick 刷新
+        let snapshot = services.collectors.cores?.latest
+        LabeledContent("逐核核对") {
+            if let snapshot {
+                if let r = snapshot.correlation {
+                    Label(
+                        String(format: "相关系数 %.4f", r),
+                        systemImage: snapshot.correlationPassed == true ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(snapshot.correlationPassed == true ? .green : .orange)
+                } else {
+                    Text("不确定：各核负载差异太小").foregroundStyle(.secondary)
+                }
+            } else {
+                Text("约 4 秒后显示").foregroundStyle(.secondary)
+            }
+        }
+        .help("每核 tick 忙碌比例与逐核频率通道的活跃驻留比例应高度相关（≥ 0.99），用来发现把请求通道误当成实际通道之类的错误")
+        DisclosureGroup("逐核频率（\(snapshot?.cores.count ?? 0) 个核）") {
+            ForEach(snapshot?.cores ?? [], id: \.cpu) { core in
+                HStack {
+                    Text("cpu\(core.cpu)").font(.caption.monospaced()).frame(width: 46, alignment: .leading)
+                    Text(core.cluster.description).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(Self.reading(core.reading)).font(.caption).monospacedDigit()
+                    Text(core.busy.map { "忙碌 " + PercentFormat.string(fromRatio: $0) } ?? "—")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 72, alignment: .trailing)
+                }
+            }
         }
     }
 

@@ -55,3 +55,27 @@ import Testing
         #expect(sources == [InterruptSource(device: "ans", perSecond: 5), InterruptSource(device: "smc", perSecond: 1)])
     }
 }
+
+@Suite struct CoreCorrelationTests {
+    @Test func perfectlyLinearIsOne() {
+        let pairs = (0..<6).map { (busy: Double($0) * 0.1, active: Double($0) * 0.1 + 0.02) }
+        #expect(abs((CoreFrequencyCollector.correlation(pairs) ?? 0) - 1) < 1e-9)
+    }
+
+    @Test func flatLoadIsInconclusive() {
+        let pairs = (0..<8).map { _ in (busy: 0.001, active: 0.002) }
+        #expect(CoreFrequencyCollector.correlation(pairs) == nil)
+    }
+
+    @Test func tooFewCoresIsInconclusive() {
+        #expect(CoreFrequencyCollector.correlation([(0.1, 0.1), (0.5, 0.5), (0.9, 0.9)]) == nil)
+    }
+
+    @Test func swappedChannelsFail() {
+        // 通道错位：活跃比例与忙碌比例不对应
+        let busy = [0.9, 0.8, 0.1, 0.05, 0.6, 0.0]
+        let active = [0.05, 0.1, 0.9, 0.8, 0.0, 0.6]
+        let r = CoreFrequencyCollector.correlation(Array(zip(busy, active)).map { (busy: $0.0, active: $0.1) })
+        #expect((r ?? 1) < CoreFrequencySnapshot.requiredCorrelation)
+    }
+}

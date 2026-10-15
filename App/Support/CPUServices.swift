@@ -14,8 +14,10 @@ struct CPUCollectors {
     var sensors: SensorCollector?
     var apps: AppSampler?
     var interrupts: InterruptDeviceCollector?
+    var cores: CoreFrequencyCollector?
 
     init(_ collectors: [any Collector]) {
+        cores = collectors.compactMap { $0 as? CoreFrequencyCollector }.first
         interrupts = collectors.compactMap { $0 as? InterruptDeviceCollector }.first
         frequency = collectors.compactMap { $0 as? CPUFrequencyCollector }.first
         sensors = collectors.compactMap { $0 as? SensorCollector }.first

@@ -75,6 +75,12 @@ struct SysInfoCLI {
             case "topo":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runTopo(json: options.flag("--json")))
+            case "cores":
+                let options = try Options(arguments, flags: [], values: ["--interval", "--count"])
+                exit(
+                    runCoreFrequency(
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        count: try options.int("--count", default: 3, range: 1...100)))
             case "irq":
                 let options = try Options(arguments, flags: [], values: ["--interval", "--count", "--rows"])
                 exit(
@@ -125,6 +131,7 @@ struct SysInfoCLI {
               verify passive [--seconds 30] [--yes]   经调度器跑拓扑与频率的被动核对；--yes 在本进程内施加负载
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
+              cores [--interval 2] [--count 3]       逐核频率（诊断用），以及每核 tick 忙碌与逐核通道活跃的相关系数（要求 ≥0.99）
               irq [--interval 5] [--count 2] [--rows 10]
                                                       中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
               history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）
@@ -339,6 +346,42 @@ struct SysInfoCLI {
         while nanosleep(&request, &remaining) != 0, errno == EINTR {
             request = remaining
         }
+    }
+
+    // MARK: - cores
+
+    static func runCoreFrequency(interval: Double, count: Int) -> Int32 {
+        print(machineLine())
+        _ = CPUTopologyService.shared.refresh()
+        let frequency = CPUFrequencyCollector()
+        guard frequency.selfTest().isUsable else {
+            printError("频率采集器自检未通过")
+            return 1
+        }
+        let cores = CoreFrequencyCollector(frequency: frequency)
+        _ = cores.sample(at: .now())
+        var failed = false
+        for index in 1...count {
+            sleep(untilUptimeNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + UInt64(interval * 1e9))
+            let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            _ = cores.sample(at: .now())
+            let cost = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started) / 1e6
+            guard let snapshot = cores.latest else { continue }
+            let r = snapshot.correlation.map { String(format: "%.4f", $0) } ?? "不确定（各核差异太小）"
+            print(String(format: "#%d  相关系数 %@，本次采样 %.2f ms CPU", index, r, cost))
+            for c in snapshot.cores {
+                let f: String
+                switch c.reading {
+                case .active(let hz, let a)?: f = String(format: "%5.0f MHz 活跃 %5.1f%%", hz / 1e6, a * 100)
+                case .idle(let a)?: f = String(format: "   空闲   活跃 %5.1f%%", a * 100)
+                case .invalid(let why)?: f = "✗ \(why)"
+                case nil: f = "—"
+                }
+                print("  cpu\(c.cpu) \(c.cluster)  \(f)  忙碌 \(c.busy.map { String(format: "%5.1f%%", $0 * 100) } ?? "—")")
+            }
+            if snapshot.correlationPassed == false { failed = true }
+        }
+        return failed ? 1 : 0
     }
 
     // MARK: - irq

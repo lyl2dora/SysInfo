@@ -14,6 +14,8 @@ enum DisplayNames {
         case "cpu.misc": String(localized: "负载均值与中断")
         case "cpu.sensors": String(localized: "温度与功耗")
         case "app.coalition": String(localized: "应用活动")
+        case "cpu.irq.devices": String(localized: "中断来源")
+        case "cpu.freq.cores": String(localized: "逐核频率")
         case "app.self": String(localized: "本进程开销")
         default: id.rawValue
         }

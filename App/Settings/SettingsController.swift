@@ -66,6 +66,8 @@ final class SettingsController {
     private let engine: SamplingEngine
     private let services: CPUServices
     private let diagnosticsDemand: DemandSlot
+    /// 诊断页的逐核频率（cpu.freq.cores，2 s，CPU 模块设计 §7.4）。
+    private let coreFrequencyDemand: DemandSlot
 
     private var openSettingsAction: (() -> Void)?
     private weak var window: NSWindow?
@@ -80,6 +82,7 @@ final class SettingsController {
         self.engine = engine
         self.services = services
         self.diagnosticsDemand = DemandSlot(engine: engine)
+        self.coreFrequencyDemand = DemandSlot(engine: engine)
     }
 
     /// 把 Settings 场景挂到 NSApplication 上（启动时调用一次）。
@@ -160,6 +163,9 @@ final class SettingsController {
             ? Demand(collectors: [SelfUsageCollector.collectorID], interval: 1, source: .diagnostics)
             : nil
         diagnosticsDemand.set(demand)
+        coreFrequencyDemand.set(
+            visible && state.isWindowOpen
+                ? Demand(collectors: [CoreFrequencyCollector.collectorID], interval: 2, source: .diagnostics) : nil)
     }
 }
 
