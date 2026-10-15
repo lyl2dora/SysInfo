@@ -1,6 +1,7 @@
 // 哪些指标进历史库、怎么聚合（CPU 模块设计 §6，边界稿 §5.5）。
 //
-// CPU 每分钟约 12–16 行；功耗与散热每分钟约 6 行（整机、SoC、GPU、DRAM 功率，最热点，风扇转速），随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
+// CPU 每分钟约 12–16 行；功耗与散热每分钟约 6 行（整机、SoC、GPU、DRAM 功率，最热点，风扇转速）；
+// 内存每分钟 13 行（已用、占用率、App、联动、被压缩、已缓存、Swap、压力与等级、页入 / 页出、换入 / 换出），随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
 // 每簇与总功耗、1 分钟负载均值、热状态与热压力。每核、每簇占用、中断、任务数不入库。
 //
 // 两类聚合：
@@ -23,6 +24,7 @@ public enum HistoryAggregation: String, Sendable, Hashable, Codable {
 public enum HistoryModule: String, Sendable, Hashable, Codable, CaseIterable {
     case cpu
     case power
+    case memory
 }
 
 /// 历史库里一个指标的说明。
@@ -70,6 +72,16 @@ public enum HistoryCatalog {
         case .thermalSoCHotspot:
             return HistoryMetricSpec(
                 aggregation: .instant, unit: "degC", collector: PowerSensorCollector.collectorID, module: .power)
+        // 内存（内存模块设计 §6，D49）：物理内存、空闲、Swap 总量、压缩比、压缩 / 解压速率不入库。
+        case .memoryUsed, .memoryApp, .memoryWired, .memoryCompressed, .memoryCached, .memorySwapUsed:
+            return HistoryMetricSpec(aggregation: .instant, unit: "B", collector: MemoryCollector.collectorID, module: .memory)
+        case .memoryUsage, .memoryPressure:
+            return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: MemoryCollector.collectorID, module: .memory)
+        case .memoryPressureLevel:
+            return HistoryMetricSpec(aggregation: .instant, unit: "level", collector: MemoryCollector.collectorID, module: .memory)
+        case .memoryPageInRate, .memoryPageOutRate, .memorySwapInRate, .memorySwapOutRate:
+            // 两次读数之间的平均速率，样本本身就是一段区间。
+            return HistoryMetricSpec(aggregation: .interval, unit: "1/s", collector: MemoryCollector.collectorID, module: .memory)
         default:
             break
         }

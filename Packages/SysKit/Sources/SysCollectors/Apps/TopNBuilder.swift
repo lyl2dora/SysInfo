@@ -5,6 +5,8 @@
 //   宿主 coalition（终端、Xcode）副标题给占用最高的同 uid 成员；
 //   展开：同 uid 成员用 rusage 精确拆分，外部成员只能归入残差，残差只在窗口内成员没有变化时才算（钳到 ≥0）；
 // - 按进程：单成员 coalition 直接是一个进程；多成员的拆成同 uid 成员，外部成员合成一个分不开的组行；
+// - 内存（D49）：按 coalition 的 footprint（slot 40，成员之和）排序，同 uid 成员用 `ri_phys_footprint` 拆分，
+//   外部成员合计 = coalition 合计 − 同 uid 之和（footprint 是当前值，不涉及窗口内成员变化）；
 // - 名称按开机期间唯一 id 缓存（PROC_PIDUNIQIDENTIFIERINFO），pid 复用不会张冠李戴；
 // - 只为排在前面的 coalition 读成员和进程信息，扫描本身由 AppSampler 完成。
 
@@ -127,11 +129,8 @@ public final class TopNBuilder: Sendable {
     ) -> TopNRow {
         let ownUID = getuid()
         let entries = pids.compactMap { table[$0] }
-        // 代表成员：最外层 .app 里的成员优先，同级取最早启动的；没有 .app 时取最早启动的。
         let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
-        let inApp = infos.filter { $0.1.appPath != nil }
-        let representative: (ProcessEntry, NameInfo)? =
-            (inApp.isEmpty ? infos : inApp).min { $0.0.startMicros < $1.0.startMicros }
+        let representative = Self.representative(infos)
         let cpu = Double(delta.cpuNanos) / elapsed
 
         var members: [TopNMember] = []
@@ -165,6 +164,93 @@ public final class TopNBuilder: Sendable {
             perfLevel0Share: showPerfLevel0 && delta.cpuNanos > 0 ? Double(delta.perfLevel0Nanos) / Double(delta.cpuNanos) : nil,
             energyWatts: slotsTrusted ? Double(delta.energyNanojoules) / elapsed : nil, topMember: top, members: members,
             residualCPU: residual, residualCount: foreign, eligibility: eligibility)
+    }
+
+    /// 代表成员：最外层 .app 里的成员优先，同级取最早启动的；没有 .app 时取最早启动的。
+    static func representative(_ infos: [(ProcessEntry, NameInfo)]) -> (ProcessEntry, NameInfo)? {
+        let inApp = infos.filter { $0.1.appPath != nil }
+        return (inApp.isEmpty ? infos : inApp).min { $0.0.startMicros < $1.0.startMicros }
+    }
+
+    // MARK: - 内存（D49）
+
+    /// 按内存 footprint 生成 Top N 行。footprint 是当前值，一次扫描就够，不需要差分。
+    public func buildMemory(footprints: CoalitionFootprints, rows: Int, grouping: TopNGrouping) -> [TopNRow] {
+        guard rows > 0 else { return [] }
+        let table = ProcessTable.snapshot()
+        let candidates = footprints.coalitions.prefix(grouping == .byApp ? rows : rows * 3)
+        var out: [TopNRow] = []
+        for coalition in candidates where coalition.bytes > 0 {
+            let pids = CoalitionReader.members(of: coalition.id, tasksHint: Int(coalition.tasks)) ?? []
+            let row = memoryRow(coalition, pids: pids, table: table)
+            switch grouping {
+            case .byApp: out.append(row)
+            case .byProcess: out.append(contentsOf: memoryProcessRows(from: row))
+            }
+        }
+        if grouping == .byProcess { out.sort { ($0.footprint ?? 0) > ($1.footprint ?? 0) } }
+        pruneCaches(alive: Set(table.keys))
+        return Array(out.prefix(rows))
+    }
+
+    private func memoryRow(_ coalition: CoalitionFootprint, pids: [pid_t], table: [pid_t: ProcessEntry]) -> TopNRow {
+        let ownUID = getuid()
+        let entries = pids.compactMap { table[$0] }
+        let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
+        let representative = Self.representative(infos)
+        var members: [TopNMember] = []
+        var sameUID: UInt64 = 0
+        for (entry, info) in infos where entry.uid == ownUID {
+            let bytes = ProcessInfoReader.rusage(of: entry.pid)?.ri_phys_footprint
+            sameUID &+= bytes ?? 0
+            members.append(
+                TopNMember(
+                    pid: entry.pid, name: info.name, path: info.path, cpu: nil,
+                    eligibility: ProcessControl.eligibility(uid: entry.uid, pid: entry.pid), footprint: bytes))
+        }
+        members.sort { ($0.footprint ?? 0) > ($1.footprint ?? 0) }
+        let foreign = entries.count - members.count
+        let top = members.first.flatMap { m -> TopNMember? in
+            guard entries.count > 1, m.pid != representative?.0.pid, (m.footprint ?? 0) > 0 else { return nil }
+            return m
+        }
+        let isKernel = pids.contains(0)
+        return TopNRow(
+            id: "c\(coalition.id)", kind: .coalition, coalitionID: coalition.id,
+            name: isKernel ? "kernel_task" : (representative?.1.name ?? "cid \(coalition.id)"),
+            appPath: representative?.1.appPath, representativePID: representative?.0.pid ?? pids.first ?? 0,
+            memberCount: max(pids.count, Int(coalition.tasks)), cpu: 0, perfLevel0Share: nil, energyWatts: nil,
+            topMember: top, members: members, residualCPU: nil, residualCount: foreign,
+            eligibility: entries.count == 1 ? ProcessControl.eligibility(uid: entries[0].uid, pid: entries[0].pid) : .group,
+            footprint: coalition.bytes,
+            residualFootprint: foreign > 0 ? (coalition.bytes > sameUID ? coalition.bytes - sameUID : 0) : nil)
+    }
+
+    /// 按进程视图（内存）：单成员 coalition 就是一个进程；多成员的拆成同 uid 成员，外部成员合成一个组行。
+    private func memoryProcessRows(from row: TopNRow) -> [TopNRow] {
+        if row.memberCount <= 1 {
+            var single = row
+            single.kind = .process
+            single.id = "p\(row.representativePID)"
+            return [single]
+        }
+        var out: [TopNRow] = row.members.compactMap { m in
+            guard let bytes = m.footprint, bytes > 0 else { return nil }
+            return TopNRow(
+                id: "p\(m.pid)", kind: .process, coalitionID: row.coalitionID, name: m.name,
+                appPath: m.path.flatMap(Self.outermostApp(in:)), representativePID: m.pid, memberCount: 1, cpu: 0,
+                perfLevel0Share: nil, energyWatts: nil, topMember: nil, members: [], residualCPU: nil, residualCount: 0,
+                eligibility: m.eligibility, footprint: bytes)
+        }
+        if row.residualCount > 0, let residual = row.residualFootprint, residual > 0 {
+            out.append(
+                TopNRow(
+                    id: "g\(row.coalitionID)", kind: .group, coalitionID: row.coalitionID, name: row.name,
+                    appPath: row.appPath, representativePID: row.representativePID, memberCount: row.residualCount, cpu: 0,
+                    perfLevel0Share: nil, energyWatts: nil, topMember: nil, members: [], residualCPU: nil,
+                    residualCount: row.residualCount, eligibility: .group, footprint: residual))
+        }
+        return out
     }
 
     /// 按进程视图：单成员 coalition 就是一个进程；多成员的拆成同 uid 成员，外部成员合成一个组行。

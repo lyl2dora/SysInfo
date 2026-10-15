@@ -27,13 +27,18 @@ public struct TopNMember: Hashable, Codable, Sendable {
     /// 窗口内的 CPU，按单核比例；第一次出现、还没有差分时为 nil。
     public var cpu: Double?
     public var eligibility: TerminationEligibility
+    /// 内存 footprint，字节（内存 Top N，D49）；CPU Top N 里为 nil。
+    public var footprint: UInt64?
 
-    public init(pid: Int32, name: String, path: String?, cpu: Double?, eligibility: TerminationEligibility) {
+    public init(
+        pid: Int32, name: String, path: String?, cpu: Double?, eligibility: TerminationEligibility, footprint: UInt64? = nil
+    ) {
         self.pid = pid
         self.name = name
         self.path = path
         self.cpu = cpu
         self.eligibility = eligibility
+        self.footprint = footprint
     }
 }
 
@@ -67,12 +72,19 @@ public struct TopNRow: Hashable, Codable, Sendable, Identifiable {
     public var residualCPU: Double?
     public var residualCount: Int
     public var eligibility: TerminationEligibility
+    /// 内存 footprint，字节（内存 Top N，D49：coalition 为成员之和）；CPU Top N 里为 nil。
+    public var footprint: UInt64?
+    /// 外部成员（root 与其他用户）合计的 footprint：coalition 合计减去同 uid 成员之和，钳到 ≥0。
+    public var residualFootprint: UInt64?
 
     public init(
         id: String, kind: Kind, coalitionID: UInt64, name: String, appPath: String?, representativePID: Int32,
         memberCount: Int, cpu: Double, perfLevel0Share: Double?, energyWatts: Double?, topMember: TopNMember?,
-        members: [TopNMember], residualCPU: Double?, residualCount: Int, eligibility: TerminationEligibility
+        members: [TopNMember], residualCPU: Double?, residualCount: Int, eligibility: TerminationEligibility,
+        footprint: UInt64? = nil, residualFootprint: UInt64? = nil
     ) {
+        self.footprint = footprint
+        self.residualFootprint = residualFootprint
         self.id = id
         self.kind = kind
         self.coalitionID = coalitionID
@@ -89,6 +101,12 @@ public struct TopNRow: Hashable, Codable, Sendable, Identifiable {
         self.residualCount = residualCount
         self.eligibility = eligibility
     }
+}
+
+/// Top N 按什么排序：CPU（D31）或内存 footprint（D49）。
+public enum TopNMetric: String, Hashable, Codable, Sendable {
+    case cpu
+    case memory
 }
 
 /// Top N 的分组方式（D31）。

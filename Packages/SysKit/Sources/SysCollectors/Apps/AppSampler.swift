@@ -36,6 +36,19 @@ public struct CoalitionDelta: Hashable, Sendable {
     public var isNew: Bool
 }
 
+/// 一个 coalition 当前的内存 footprint（成员 `phys_footprint` 之和，slot 40，D49）。
+public struct CoalitionFootprint: Hashable, Sendable {
+    public var id: UInt64
+    public var tasks: UInt32
+    public var bytes: UInt64
+}
+
+/// 一次扫描时全部有成员的 coalition 的 footprint，按字节降序。footprint 是当前值，不需要差分，第一次扫描就有。
+public struct CoalitionFootprints: Hashable, Sendable {
+    public var time: SampleTime
+    public var coalitions: [CoalitionFootprint]
+}
+
 /// 一次扫描得到的窗口。
 public struct AppActivityWindow: Hashable, Sendable {
     public var time: SampleTime
@@ -62,6 +75,7 @@ public final class AppSampler: Collector {
         var previousMaxID: UInt64?
         var previousTime: SampleTime?
         var latest: AppActivityWindow?
+        var footprints: CoalitionFootprints?
         var usable: Bool?
         var warnings = false
         /// S4 不过：能耗、perflevel0 槽不可信。
@@ -80,6 +94,9 @@ public final class AppSampler: Collector {
 
     /// 最近一个窗口；还没有两次扫描时为 nil。
     public var latestWindow: AppActivityWindow? { state.withLock { $0.latest } }
+
+    /// 最近一次扫描的各 coalition 内存 footprint（内存 Top N，D49）；还没扫描过时为 nil。
+    public var latestFootprints: CoalitionFootprints? { state.withLock { $0.footprints } }
 
     /// 能耗、perflevel0 等辅助槽是否可信（自检 S4）。
     public var auxiliarySlotsTrusted: Bool { state.withLock { $0.slotsTrusted } }
@@ -170,8 +187,13 @@ public final class AppSampler: Collector {
             current[entry.id] = usage
             tasks[entry.id] = entry.tasks
         }
+        let footprints = CoalitionFootprints(
+            time: time,
+            coalitions: current.map { CoalitionFootprint(id: $0.key, tasks: tasks[$0.key] ?? 0, bytes: $0.value.physFootprint) }
+                .sorted { $0.bytes > $1.bytes })
         return state.withLock { s in
             let previousMaxID = s.previousMaxID
+            s.footprints = footprints
             defer {
                 s.previous = current
                 s.previousMaxID = maxID

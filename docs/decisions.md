@@ -475,3 +475,32 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 - 其余（`.dev`，含 measure 脚本用的 Release 配置 .dev 构建）：可以多开。拿到锁的是主实例；其余是从实例，照常运行，但历史库改用 `$TMPDIR/SysInfo-secondary-<pid>`，不与主实例同写。主实例退出后从实例不升级。临时历史目录（含 `--factory-defaults` 的）在退出时删除。
 - `--single-instance` 启动参数让 Debug 版按日用版规则执行，用于自查与测试，不必动日用版（D16、D18）。
 - D16「Debug 与 Release 可以同时运行」不变：两者的锁文件在各自的数据目录里。
+
+## 2026-10-16（内存模块边界拍板）
+
+依据：`docs/design/memory.md` §1–§2（M5 Pro 与 M4 Pro 的只读比对，`research/probes/memory-module/`）。M1–M6、合并模式改期、K41，2026-10-16 用户全部按推荐确认。
+
+### D49 内存模块的能力边界与出厂默认 · 已定（M1–M6 按推荐；落实 D29 的划分、K40 中本模块部分）
+- 纳入本模块：
+  - 总量：物理内存、已用、App、联动、被压缩、已缓存文件、空闲。页面队列读 `vm.page_*` sysctl（不受 `host_statistics` 节流）；被压缩、压缩比与各累计计数读 `host_statistics64` rev6，与上次逐字节相同的结果按陈旧处理。
+  - 口径（M1 = A）：照活动监视器，已用 = App（internal − purgeable）+ 联动 + 被压缩；已缓存文件 = external + purgeable；空闲只取 `vm.page_free_count`。占用率 = 已用 ÷ `hw.memsize`。
+  - 压力：`kern.memorystatus_vm_pressure_level`（正常 / 警告 / 严重）与压力百分比（100 − `kern.memorystatus_level`，即 `memory_pressure` 的「free percentage」的补数）。另挂 `DispatchSource` 内存压力事件：一个采样间隔内出现过的最差等级也记下来，短暂的警告不会因为后台 10 s 采样而漏掉。等级只做徽标与变化记录，不参与着色（D43）。
+  - Swap 用量；页入 / 页出、换入 / 换出、压缩 / 解压的每秒次数；压缩比。
+  - Top N（按内存）：照 D31，按应用（coalition slot 40，即成员 footprint 之和）分组，可展开同 uid 成员，可结束同 uid 进程；只在内存面板可见时工作。coalition 不可用时只列同 uid 进程（`ri_phys_footprint`），不提供 `ps` 的「刷新全部」（`ps` 没有 footprint 列）。
+  - 历史：整机指标按 D30 的模式记录，面板关闭时后台每 10 s 采一次（M6 = A）。
+- 菜单栏（M2 = A，D38 一项一个 widget）：占用、压力、Swap 三个 widget，出厂只开「占用」。占用 widget 可选显示百分比或已用 GB。
+- 只放诊断页：
+  - DRAM 带宽（M3 = B）：IOReport「DCS BW」子组的 AMCC 读写直方图，按状态名给出的分档（16 GB/s 一档）取中点估算，只作相对量，诊断页展开时才订阅。组名随芯片不同（M5 `PMP0`、M4 `PMP`），运行时按子组发现，不写死。
+  - MTE 标签存储（M4 = A，只有 M5 有 `vm.mte.*`，M4 上不出现）与 ECC 纠错计数（M5 实测在涨：9 月 28 日 1001 → 10 月 16 日 9598；M4 为 0），注明含义未经验证，不进主界面。
+- 划给「应用活动」（M5 = A）：每应用内存历史。本模块不新增每应用的历史表。
+- 不做：jetsam 优先级与内存上限（需要 root 或 entitlement）；spawn `top`、`vm_stat`、`memory_pressure`；单独列出 purgeable；按数值着色。
+- 事实更正（随本条记录）：`vm.page_pageable_external_count` 包含 speculative 页。M4 空闲时 speculative 约 3.4 GiB，按「空闲 = free + speculative、缓存 = external + purgeable」相加会比 `hw.memsize_usable` 多出约 3.4 GiB；所以空闲只取 free。另外 `host_statistics64` 的 `free_count` 已经含 speculative，与 sysctl 的 `vm.page_free_count` 口径不同。
+
+### D50 合并模式改期 · 已定（取代 D15 中「『合并为单个 item』在菜单栏同时有 3 个模块时实现」）
+- D38 之后菜单栏是一项一个 widget，按 D51 出厂只开 3 个 widget，在 1920 pt 宽、没有刘海的目标机菜单栏上并不拥挤。
+- 「合并为单个 item」（D06）与 K43、D47 遗留的合并模式切换，改到「网络模块完成后」或「用户提出需要时」再做，以先到者为准。
+
+### D51 首次启动默认开启的 widget · 已定（关闭 K41）
+- 出厂默认开启：CPU 占用、整机功率、内存占用，共 3 个 widget；其余 widget 默认关。
+- 以后的模块（网络、GPU、存储）的 widget 出厂默认关，除非在该模块开工时另行决定。
+- 目标设备里出现刘海屏笔记本时（D20），再重新考虑默认数量。
