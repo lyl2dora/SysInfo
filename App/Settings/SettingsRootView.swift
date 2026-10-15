@@ -56,6 +56,8 @@ private struct SettingsSplitView: View {
         case .power:
             PowerSettingsView(
                 settings: context.settings, store: context.store, services: context.services, openPage: openPage)
+        case .memory:
+            MemorySettingsView(settings: context.settings, store: context.store, openPage: openPage)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
@@ -63,7 +65,8 @@ private struct SettingsSplitView: View {
         case .diagnostics:
             DiagnosticsView(
                 store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests,
-                services: context.services, catalogVisibilityChanged: context.catalogVisibilityChanged)
+                services: context.services, catalogVisibilityChanged: context.catalogVisibilityChanged,
+                bandwidthVisibilityChanged: context.bandwidthVisibilityChanged)
                 .onAppear { context.diagnosticsVisibilityChanged(true) }
                 .onDisappear { context.diagnosticsVisibilityChanged(false) }
         case .about:
@@ -149,6 +152,8 @@ private struct MenuBarSettingsView: View {
                     Button("CPU") { openPage(.cpu) }
                         .buttonStyle(.link)
                     Button("功耗与散热") { openPage(.power) }
+                        .buttonStyle(.link)
+                    Button("内存") { openPage(.memory) }
                         .buttonStyle(.link)
                 }
             }

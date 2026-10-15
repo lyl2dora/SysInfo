@@ -19,6 +19,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case menuBar
     case cpu
     case power
+    case memory
     case history
     case privacy
     case diagnostics
@@ -32,6 +33,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .menuBar: String(localized: "菜单栏")
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
+        case .memory: String(localized: "内存")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -45,6 +47,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .menuBar: "menubar.rectangle"
         case .cpu: "cpu"
         case .power: "bolt"
+        case .memory: "memorychip"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
@@ -74,6 +77,8 @@ final class SettingsController {
     /// 诊断页的功耗数据（power.*，2 s）与展开的传感器目录（sensors.catalog，5 s）。
     private let powerDemand: DemandSlot
     private let catalogDemand: DemandSlot
+    private let memoryDemand: DemandSlot
+    private let bandwidthDemand: DemandSlot
 
     private var openSettingsAction: (() -> Void)?
     private weak var window: NSWindow?
@@ -91,6 +96,8 @@ final class SettingsController {
         self.coreFrequencyDemand = DemandSlot(engine: engine)
         self.powerDemand = DemandSlot(engine: engine)
         self.catalogDemand = DemandSlot(engine: engine)
+        self.memoryDemand = DemandSlot(engine: engine)
+        self.bandwidthDemand = DemandSlot(engine: engine)
     }
 
     /// 把 Settings 场景挂到 NSApplication 上（启动时调用一次）。
@@ -100,6 +107,7 @@ final class SettingsController {
             windowAttached: { [weak self] window in self?.attach(window) },
             diagnosticsVisibilityChanged: { [weak self] visible in self?.setDiagnosticsVisible(visible) },
             catalogVisibilityChanged: { [weak self] visible in self?.setCatalogVisible(visible) },
+            bandwidthVisibilityChanged: { [weak self] visible in self?.setBandwidthVisible(visible) },
             runSelfTests: { [engine] in
                 Task { await engine.runSelfTests() }
             })
@@ -181,7 +189,21 @@ final class SettingsController {
                 ? Demand(
                     collectors: [PowerRailCollector.collectorID, PowerSensorCollector.collectorID, GPUPowerCollector.collectorID],
                     interval: 1, source: .diagnostics) : nil)
-        if !visible { catalogDemand.set(nil) }
+        // 内存诊断读数每 2 s（D49）。
+        memoryDemand.set(
+            visible && state.isWindowOpen
+                ? Demand(collectors: [MemoryCollector.collectorID], interval: 2, source: .diagnostics) : nil)
+        if !visible {
+            catalogDemand.set(nil)
+            bandwidthDemand.set(nil)
+        }
+    }
+
+    /// DRAM 带宽只在诊断页展开它时采（D49 M3），每 2 s。
+    private func setBandwidthVisible(_ visible: Bool) {
+        bandwidthDemand.set(
+            visible && state.isWindowOpen
+                ? Demand(collectors: [DRAMBandwidthCollector.collectorID], interval: 2, source: .diagnostics) : nil)
     }
 
     private func setCatalogVisible(_ visible: Bool) {
@@ -202,5 +224,6 @@ struct SettingsContext {
     let windowAttached: (NSWindow) -> Void
     let diagnosticsVisibilityChanged: (Bool) -> Void
     let catalogVisibilityChanged: (Bool) -> Void
+    let bandwidthVisibilityChanged: (Bool) -> Void
     let runSelfTests: () -> Void
 }

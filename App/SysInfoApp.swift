@@ -89,7 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first, power: power,
             temporaryDirectory: temporaryHistoryDirectory, settings: settings)
         self.history = history
-        let services = AppServices(collectors: CPUCollectors(collectors), power: power, history: history, engine: engine)
+        let services = AppServices(
+            collectors: CPUCollectors(collectors), power: power, memory: MemoryCollectors(collectors), history: history,
+            engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
         eventPump = Task {
@@ -205,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HistoryRecorder.Configuration(
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
             highPrecision: settings.historyHighPrecision, recordPower: settings.historyPowerEnabled,
-            recordEnergy: settings.historyEnergyEnabled)
+            recordEnergy: settings.historyEnergyEnabled, recordMemory: settings.historyMemoryEnabled)
     }
 
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）；

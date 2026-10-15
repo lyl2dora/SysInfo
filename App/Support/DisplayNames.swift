@@ -22,6 +22,8 @@ enum DisplayNames {
         case "power.gpu": String(localized: "GPU 功率")
         case "power.pmgr": String(localized: "30 分钟分部件能耗")
         case "sensors.catalog": String(localized: "传感器目录")
+        case "memory.vm": String(localized: "内存")
+        case "memory.bandwidth": String(localized: "DRAM 带宽")
         default: id.rawValue
         }
     }
@@ -45,6 +47,12 @@ enum DisplayNames {
         case "app.self.read": String(localized: "读取 proc_pid_rusage")
         case "app.self.footprint": String(localized: "内存 footprint")
         case "app.self.cpuUnits": String(localized: "CPU 时间单位校验")
+        case "memory.vm.sysctl": String(localized: "读取内存与页面队列 sysctl")
+        case "memory.vm.hostStatistics": String(localized: "host_statistics64 返回 rev6")
+        case "memory.vm.queueSum": String(localized: "页面队列之和与可用内存一致")
+        case "memory.vm.pressure": String(localized: "读取内存压力")
+        case "memory.bandwidth.ioreport": String(localized: "IOReport 可用")
+        case "memory.bandwidth.channels": String(localized: "找到 DCS BW 通道")
         default: name
         }
     }
@@ -57,8 +65,24 @@ enum DisplayNames {
         case .cli: String(localized: "命令行")
         case .history: String(localized: "历史记录")
         default:
-            source.rawValue.hasPrefix("menubar.power.")
-                ? String(localized: "菜单栏功耗与散热") : source.rawValue.hasPrefix("menubar.cpu.") ? String(localized: "菜单栏 CPU") : source.rawValue
+            if source.rawValue.hasPrefix("menubar.power.") {
+                String(localized: "菜单栏功耗与散热")
+            } else if source.rawValue.hasPrefix("menubar.cpu.") {
+                String(localized: "菜单栏 CPU")
+            } else if source.rawValue.hasPrefix("menubar.memory.") {
+                String(localized: "菜单栏内存")
+            } else {
+                source.rawValue
+            }
+        }
+    }
+
+    /// 内存压力等级（D49）。
+    static func memoryPressure(_ level: MemoryPressureLevel) -> String {
+        switch level {
+        case .normal: String(localized: "正常")
+        case .warning: String(localized: "警告")
+        case .critical: String(localized: "严重")
         }
     }
 

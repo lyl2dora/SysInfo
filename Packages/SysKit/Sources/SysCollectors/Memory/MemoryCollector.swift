@@ -406,3 +406,37 @@ extension UnavailableReason {
     /// 压缩器里没有页，压缩比无从谈起（UI 显示「—」）。
     public static func nothingCompressed(_ detail: String? = nil) -> Self { Self(code: "nothingCompressed", detail: detail) }
 }
+
+/// 诊断页的内存读数（D49：MTE、ECC 只放诊断页，含义未经验证）。读一次约 0.1 ms，只在诊断页刷新时调用。
+public struct MemoryDiagnosticReadings: Hashable, Sendable {
+    public var pageSize: UInt64?
+    public var physicalBytes: UInt64?
+    public var usableBytes: UInt64?
+    /// 引导时被占用的页（`boot_stolen_count`，rev6）。
+    public var bootStolenPages: UInt64?
+    /// 可执行文件映射的常驻页、共享区页（rev6）。
+    public var executablePages: UInt64?
+    public var sharedRegionPages: UInt64?
+    /// ECC 纠错计数（`vm.vm_ecc_corrected_count` / `_uncorrected_count`）；没有这个 sysctl 时为 nil。
+    public var eccCorrected: UInt64?
+    public var eccUncorrected: UInt64?
+    /// MTE（只在有 `vm.mte.*` 的芯片上，2026-10-16 实测只有 M5）：带标签的页、标签存储区页数。
+    public var mteTaggedPages: UInt64?
+    public var mteTagStoragePages: UInt64?
+    public var mteFreeTagStoragePages: UInt64?
+
+    public static func read() -> Self {
+        let stats = MemoryCollector.readVMStatistics()
+        let rev6 = stats?.count == MemoryCollector.vmInfo64Count
+        let mte = MemoryCollector.sysctlUInt64("vm.mte.tagged")
+        return Self(
+            pageSize: MemoryCollector.sysctlUInt64("hw.pagesize"), physicalBytes: MemoryCollector.sysctlUInt64("hw.memsize"),
+            usableBytes: MemoryCollector.sysctlUInt64("hw.memsize_usable"),
+            bootStolenPages: rev6 ? stats?.raw.boot_stolen_count : nil, executablePages: rev6 ? stats?.raw.executable_count : nil,
+            sharedRegionPages: rev6 ? stats?.raw.shared_region_count : nil,
+            eccCorrected: MemoryCollector.sysctlUInt64("vm.vm_ecc_corrected_count"),
+            eccUncorrected: MemoryCollector.sysctlUInt64("vm.vm_ecc_uncorrected_count"), mteTaggedPages: mte,
+            mteTagStoragePages: mte != nil && rev6 ? stats?.raw.total_tag_storage_pages : nil,
+            mteFreeTagStoragePages: mte != nil && rev6 ? stats?.raw.free_tag_storage_pages : nil)
+    }
+}

@@ -8,6 +8,7 @@
 // - 每个 widget 可见时登记它自己的需求，隐藏时注销（只在有消费者时采样）：
 //   占用 → cpu.load，频率 → cpu.freq（D19 高开销项），温度与功耗 → cpu.sensors；
 //   整机功率 → power.rail，SoC 功率、最热点、风扇 → power.sensors，GPU 功率 → power.gpu；
+//   内存的三个 widget → memory.vm（D49）；
 //   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
 // - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）。
 
@@ -75,6 +76,7 @@ final class StatusItemController {
         case .systemPower: PowerRailCollector.collectorID
         case .socHotspot, .socPower, .fan: PowerSensorCollector.collectorID
         case .gpuPower: GPUPowerCollector.collectorID
+        case .memoryUsage, .memoryPressure, .swapUsed: MemoryCollector.collectorID
         }
     }
 
@@ -167,6 +169,7 @@ extension StatusItemConfiguration {
         self.init(
             widget: widget, style: settings.renderStyle(for: widget), showsLabel: settings.menuBarShowsLabel,
             color: settings.color(for: widget), levelCount: max(topology?.perfLevels.count ?? 2, 1),
-            coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8)
+            coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8,
+            memoryShowsBytes: settings.memoryUsagePresentation == .bytes)
     }
 }

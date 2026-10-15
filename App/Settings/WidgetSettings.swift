@@ -31,6 +31,12 @@ struct WidgetSettingsRow: View {
                         }
                     }
                 }
+                if widget == .memoryUsage {
+                    Picker("显示", selection: $settings.memoryUsagePresentation) {
+                        Text("占用率（%）").tag(MemoryUsagePresentation.percent)
+                        Text("已用（GB）").tag(MemoryUsagePresentation.bytes)
+                    }
+                }
                 Toggle("自定义颜色", isOn: Binding(
                     get: { settings.color(for: widget) != .system },
                     set: { settings.setColor($0 ? (WidgetColor(.systemBlue) ?? .system) : .system, for: widget) }))
@@ -73,6 +79,9 @@ enum WidgetInfo {
         case .socPower: String(localized: "SoC 功率")
         case .gpuPower: String(localized: "GPU 功率")
         case .fan: String(localized: "风扇转速")
+        case .memoryUsage: String(localized: "内存占用")
+        case .memoryPressure: String(localized: "内存压力")
+        case .swapUsed: String(localized: "Swap 用量")
         }
     }
 
@@ -81,6 +90,7 @@ enum WidgetInfo {
         switch module {
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
+        case .memory: String(localized: "内存")
         }
     }
 
@@ -106,6 +116,12 @@ enum WidgetInfo {
             return String(localized: "GPU 实时功率（AGX 能量计数）。\(CostLabel.text(collector: GPUPowerCollector.collectorID, interval: interval, store: store))")
         case .fan:
             return String(localized: "最快的风扇的实际转速。\(CostLabel.text(collector: PowerSensorCollector.collectorID, interval: interval, store: store))")
+        case .memoryUsage:
+            return String(localized: "已用内存（App + 联动 + 被压缩），与活动监视器同口径。\(CostLabel.text(collector: MemoryCollector.collectorID, interval: interval, store: store))")
+        case .memoryPressure:
+            return String(localized: "系统内存压力百分比（100 − 可用水位），与 memory_pressure 同源。\(CostLabel.text(collector: MemoryCollector.collectorID, interval: interval, store: store))")
+        case .swapUsed:
+            return String(localized: "已写入 swap 文件的数据量。\(CostLabel.text(collector: MemoryCollector.collectorID, interval: interval, store: store))")
         }
     }
 }
@@ -120,6 +136,8 @@ enum CostLabel {
         PowerRailCollector.collectorID: 0.6,
         PowerSensorCollector.collectorID: 1.0,
         GPUPowerCollector.collectorID: 1.8,
+        // 内存模块设计 §2.4：sysctl 与 host_statistics64 一次约 0.3 ms
+        MemoryCollector.collectorID: 0.3,
     ]
 
     static func text(collector: CollectorID, interval: Int, store: MetricStore) -> String {

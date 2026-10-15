@@ -9,6 +9,7 @@
 // - 面板可见且在 CPU tab 时登记「面板」需求（D29，CPU 模块设计 §5.8）：占用与杂项 1 s，频率、温度与功耗、Top N
 //   按设置的间隔；在「功耗与散热」tab 时（功耗与散热模块设计 §4.7）：整机功率与杂项（热状态）1 s，
 //   SoC/GPU/DRAM 功率、最热点与风扇按设置的间隔，CPU 功耗按 CPU 面板的温度与功耗间隔，PMGR 批次 60 s；
+//   在「内存」tab 时（内存模块设计 §7.2）：内存 1 s，内存 Top N 的 coalition 扫描按设置的间隔（默认 5 s）；
 //   隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
 // - 内容高度会变（展开详情、Top N 行数），面板跟着内容改高，锚定时保持顶边不动。
 
@@ -23,6 +24,7 @@ import OSLog
 enum PanelTab: String, CaseIterable, Identifiable {
     case cpu
     case power
+    case memory
 
     var id: String { rawValue }
 
@@ -30,6 +32,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
+        case .memory: String(localized: "内存")
         }
     }
 
@@ -37,6 +40,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         switch module {
         case .cpu: self = .cpu
         case .power: self = .power
+        case .memory: self = .memory
         }
     }
 }
@@ -100,6 +104,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let powerDemand: DemandSlot
     private let powerSensorDemand: DemandSlot
     private let pmgrDemand: DemandSlot
+    private let memoryDemand: DemandSlot
+    private let memoryTopNDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -129,6 +135,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.powerDemand = DemandSlot(engine: engine)
         self.powerSensorDemand = DemandSlot(engine: engine)
         self.pmgrDemand = DemandSlot(engine: engine)
+        self.memoryDemand = DemandSlot(engine: engine)
+        self.memoryTopNDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -259,6 +267,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         } else {
             [powerDemand, powerSensorDemand, pmgrDemand].forEach { $0.set(nil) }
         }
+        updateMemoryDemands(visible: visible && state.selectedTab == .memory)
         let cpuVisible = visible && state.selectedTab == .cpu
         guard cpuVisible else {
             [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
@@ -288,6 +297,33 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             topN.setActive(true, coalitionUsable: coalitionUsable)
         } else {
             topNDemand.set(nil)
+            topN.setActive(false, coalitionUsable: coalitionUsable)
+        }
+    }
+
+    /// 内存 tab（D49）：内存 1 s；Top N 行数大于 0 时按设置的间隔扫描 coalition。
+    private func updateMemoryDemands(visible: Bool) {
+        let topN = services.memoryTopN
+        guard visible else {
+            memoryDemand.set(nil)
+            memoryTopNDemand.set(nil)
+            topN.setActive(false, coalitionUsable: true)
+            return
+        }
+        memoryDemand.set(Demand(collectors: [MemoryCollector.collectorID], interval: 1, source: .panel))
+        topN.rowCount = settings.memoryTopNRows
+        topN.grouping = settings.memoryGrouping
+        topN.interval = settings.memoryTopNInterval
+        let coalitionUsable =
+            store.engineStatus?.health.first { $0.id == AppSampler.collectorID }?.status != .unavailable
+        if settings.memoryTopNRows > 0 {
+            memoryTopNDemand.set(
+                coalitionUsable
+                    ? Demand(collectors: [AppSampler.collectorID], interval: settings.memoryTopNInterval, source: .panel)
+                    : nil)
+            topN.setActive(true, coalitionUsable: coalitionUsable)
+        } else {
+            memoryTopNDemand.set(nil)
             topN.setActive(false, coalitionUsable: coalitionUsable)
         }
     }
