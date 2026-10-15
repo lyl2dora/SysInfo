@@ -26,6 +26,12 @@ let package = Package(
         // 私有 C 层。M0 只放占位头文件和 .c，不声明任何私有符号。
         .target(name: "CSysPrivate"),
 
+        // 存储模块的公开 IOKit C 封装（NVMe SMART 的 CFPlugIn 接口，存储模块设计 §4.3）。只有公开接口。
+        .target(
+            name: "CSysStorage",
+            linkerSettings: [.linkedFramework("IOKit"), .linkedFramework("CoreFoundation")]
+        ),
+
         // 值类型数据模型，不依赖私有 API。
         .target(
             name: "SysModel",
@@ -35,7 +41,7 @@ let package = Package(
         // 采集层：调度器、采集器、降频信号。唯一允许依赖 CSysPrivate 的 Swift target。
         .target(
             name: "SysCollectors",
-            dependencies: ["SysModel", "CSysPrivate"],
+            dependencies: ["SysModel", "CSysPrivate", "CSysStorage"],
             // 内置芯片档案（CPU 模块设计 §4.3）。
             resources: [.copy("Resources/ChipProfiles")],
             swiftSettings: swiftSettings
