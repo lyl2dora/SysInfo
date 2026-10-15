@@ -160,16 +160,16 @@ final class CPUStatusItemView: NSView {
             let size = value.size()
             value.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: contentRect.minY + Self.stackedValueFont.descender))
         case .sparkline:
-            drawSparkline(in: drawStackedLabel(label), color: color)
+            drawSparkline(in: drawStackedLabel(label, graphic: true), color: color)
         case .barsTotal:
             let ratio: Double? = if case .value(let r, _) = store.menuBarCPU { r } else { nil }
-            drawBars([ratio], width: Self.totalBarWidth, gap: 0, in: drawStackedLabel(label), color: color)
+            drawBars([ratio], width: Self.totalBarWidth, gap: 0, in: drawStackedLabel(label, graphic: true), color: color)
         case .barsLevels:
             let levels = (0..<max(configuration.levelCount, 1)).map { store.latest[.cpuUsagePerfLevel($0)]?.value }
-            drawBars(levels, width: Self.levelBarWidth, gap: 1, in: drawStackedLabel(label), color: color)
+            drawBars(levels, width: Self.levelBarWidth, gap: 1, in: drawStackedLabel(label, graphic: true), color: color)
         case .barsCores:
             let cores = store.cpuCores.map(\.value)
-            drawBars(cores, width: Self.coreBarWidth - 1, gap: 1, in: drawStackedLabel(label), color: color)
+            drawBars(cores, width: Self.coreBarWidth - 1, gap: 1, in: drawStackedLabel(label, graphic: true), color: color)
         }
 
         setAccessibilityLabel("\(label) \(valueText)")
@@ -180,7 +180,9 @@ final class CPUStatusItemView: NSView {
 
     /// 上下布局：按「数值大写高度 + 间距 + 标签大写高度」整组垂直居中。画出标签（关闭时不画），
     /// 返回下方内容区（数值的大写高度那一条；折线和柱也画在这里）。
-    private func drawStackedLabel(_ text: String) -> NSRect {
+    /// - Parameter graphic: 折线、柱状用：返回标签下方的全部空间（下边留 3 pt），而不只是数字大写高度那一条，
+    ///   否则图形只有约 7 pt 高，低占用时几乎贴在底线上（2026-10-15 自查发现）。
+    private func drawStackedLabel(_ text: String, graphic: Bool = false) -> NSRect {
         let valueCap = Self.stackedValueFont.capHeight
         let labelCap = configuration.showsLabel ? Self.stackedLabelFont.capHeight + Self.stackedGap : 0
         let valueBaseline = floor((bounds.height - valueCap - labelCap) / 2)
@@ -189,6 +191,11 @@ final class CPUStatusItemView: NSView {
                 string: text, attributes: [.font: Self.stackedLabelFont, .foregroundColor: NSColor.labelColor])
             let labelBaseline = valueBaseline + valueCap + Self.stackedGap
             label.draw(at: NSPoint(x: (bounds.width - label.size().width) / 2, y: labelBaseline + Self.stackedLabelFont.descender))
+        }
+        if graphic {
+            let bottom: CGFloat = 3
+            let top = configuration.showsLabel ? valueBaseline + valueCap + 1 : bounds.height - 3
+            return NSRect(x: Self.padding, y: bottom, width: bounds.width - 2 * Self.padding, height: max(top - bottom, 4))
         }
         return NSRect(x: Self.padding, y: valueBaseline, width: bounds.width - 2 * Self.padding, height: ceil(valueCap))
     }

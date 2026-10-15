@@ -178,7 +178,8 @@ public final class TopNBuilder: Sendable {
         var out: [TopNRow] = row.members.compactMap { m in
             guard let cpu = m.cpu, cpu > 0 else { return nil }
             return TopNRow(
-                id: "p\(m.pid)", kind: .process, coalitionID: row.coalitionID, name: m.name, appPath: nil,
+                id: "p\(m.pid)", kind: .process, coalitionID: row.coalitionID, name: m.name,
+                appPath: m.path.flatMap(Self.outermostApp(in:)),
                 representativePID: m.pid, memberCount: 1, cpu: cpu, perfLevel0Share: nil, energyWatts: nil, topMember: nil,
                 members: [], residualCPU: nil, residualCount: 0, eligibility: m.eligibility)
         }
