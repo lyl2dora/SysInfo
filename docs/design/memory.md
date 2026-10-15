@@ -193,4 +193,4 @@ M5 上 sysctl 的空闲比 `vm_stat` 的「Pages free」稳定地少约 65 MiB�
 - 2026-10-16：CPU 的 Top N 模型原来在每次 coalition 扫描后都组装，包括面板关闭时后台历史每 10 s 一次的扫描（组装约 1–3 ms，结果直接丢弃）。加内存 Top N 时一并改为只在所属 tab 可见时组装（`TopNModel.isActive`）。
 - 2026-10-16：内存 Top N 默认 5 s 一次（CPU 为 2 s）。footprint 变化慢，coalition 全量扫描一次要 10–14 ms，2 s 会让面板档多出约 0.4% 单核。
 - 2026-10-16：设置页 sidebar 的内存图标用 SF Symbol `memorychip`。
-- 2026-10-16：压力警告 / 严重等级没有在真实压力下验证。不用 sudo 就造不出系统级内存压力（D18），只验证了正常等级与 `memory_pressure` 一致，以及 dispatch 事件源能注册。
+- 2026-10-16：压力警告 / 严重等级起初没法验证（D18 不用 sudo）。用户授权 D52 后，用 `sudo memory_pressure -S` 模拟两档各 20 s 验证通过，见验收报告第 8 项。
