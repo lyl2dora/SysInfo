@@ -73,6 +73,10 @@ extension SysInfoCLI {
     static func runPMGR(watch: Bool, timeout: Double) -> Int32 {
         let ledger = PowerLedger()
         let collector = PMGRBatchCollector(ledger: ledger)
+        // --watch 时另按后台历史的节奏（10 s）采 DRAM 功率，喂给账本，批次到达时做 PZD1 ÷ PMGR DRAM 核对。
+        _ = CPUTopologyService.shared.refresh()
+        let sensors = PowerSensorCollector(ledger: ledger)
+        if watch { _ = sensors.selfTest() }
         let result = collector.selfTest()
         for check in result.checks {
             printError("    \(check.passed ? "✓" : "✗") \(check.name)：\(check.detail)")
@@ -86,7 +90,10 @@ extension SysInfoCLI {
         let start = Date()
         var batches = 0
         while Date().timeIntervalSince(start) < timeout {
-            Thread.sleep(forTimeInterval: 60)
+            for _ in 0..<6 {
+                _ = sensors.sample(at: .now())
+                Thread.sleep(forTimeInterval: 10)
+            }
             _ = collector.sample(at: .now())
             if let batch = collector.latestBatch, batch.end > start, batches == 0 || batch.end.timeIntervalSince(start) > 0 {
                 batches += 1

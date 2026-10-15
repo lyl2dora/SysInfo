@@ -192,9 +192,14 @@ public final class PMGRBatchCollector: Collector {
     public func resetBaseline() {}
 
     /// 批次到达时的交叉核对（D44 §7）。
+    /// GPU 核对需要的最低窗口均值，W：空闲时 GPU 只有几十毫瓦，比值会飘（M5 空闲实测 1.074，满载 1.002），
+    /// 低于它时这一批不下结论，免得误判后停用 GPU 功率。
+    static let minimumGPUWatts = 0.3
+
     func crossCheck(_ batch: PMGRBatch) {
         if let pmgr = batch.joules["gpu"], pmgr > 1, let agx = batch.agxJoules {
-            ledger.record(.gpu, ratio: agx / pmgr, range: PowerLedger.ranges[.gpu]!, at: batch.end)
+            let enough = pmgr / batch.seconds >= Self.minimumGPUWatts
+            ledger.record(.gpu, ratio: enough ? agx / pmgr : nil, range: PowerLedger.ranges[.gpu]!, at: batch.end)
         }
         if let pmgr = batch.joules["dram"], pmgr > 1 {
             let integral = ledger.dramIntegral(from: batch.start, to: batch.end)
