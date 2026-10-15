@@ -35,6 +35,20 @@ struct CPUSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("高开销选项") {
+                Toggle(isOn: $settings.historyHighPrecision) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("后台高精度历史")
+                        Text(
+                            "频率、温度与功耗在后台每 5 秒采一次（默认 60 秒 / 10 秒）。频率 \(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: 5, store: store))；温度与功耗 \(CostLabel.text(collector: SensorCollector.collectorID, interval: 5, store: store))。"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!settings.historyCPUEnabled)
+            }
+
             Section("菜单栏") {
                 Picker("样式", selection: $settings.menuBarCPUStyle) {
                     ForEach(MenuBarCPUStyle.allCases) { style in

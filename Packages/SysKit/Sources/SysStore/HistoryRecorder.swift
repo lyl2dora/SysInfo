@@ -2,6 +2,7 @@
 //
 // - 登记 background 层需求（锁屏、显示器睡眠时继续采，不受降频影响）：
 //   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）。
+//   用户开启「后台高精度」时，频率、温度与功耗改为每 5 s（D19 的高开销项）。
 //   菜单栏、面板的前台需求更密时，引擎按较短的间隔采样，记录器直接用这些样本，峰值随之更准；
 // - 每 5 分钟（整 5 分之后 1 分钟，即 :01、:06…）提交一次事务：写入已结束的分钟、新开 epoch、小时汇总、
 //   每天一次的过期清理。睡眠、退出、导出前由调用方 `flush()` 立即提交（含当前这一分钟，之后的数据按 UPSERT 合并）；
@@ -24,10 +25,13 @@ public actor HistoryRecorder {
         public var recordSystem: Bool
         /// 记录每应用 CPU（设置「是否记录每应用 CPU」）。
         public var recordApps: Bool
+        /// 后台高精度：频率、温度与功耗改为每 5 s（用户开启的高开销项，D19、CPU 模块设计 §7.3）。
+        public var highPrecision: Bool
 
-        public init(recordSystem: Bool = true, recordApps: Bool = true) {
+        public init(recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false) {
             self.recordSystem = recordSystem
             self.recordApps = recordApps
+            self.highPrecision = highPrecision
         }
     }
 
@@ -35,6 +39,8 @@ public actor HistoryRecorder {
     public static let slowInterval = 60
     public static let sensorInterval = 10
     public static let appInterval = 10
+    /// 高精度时频率、温度与功耗的间隔。
+    public static let highPrecisionInterval = 5
     /// 提交周期，分钟；在周期边界之后这么多秒提交（让上一分钟最后一个 1 s 样本先到）。
     static let flushPeriodMinutes: Int64 = 5
     static let flushOffsetSeconds: Int64 = 62
@@ -133,18 +139,25 @@ public actor HistoryRecorder {
         tokens.forEach { $0.cancel() }
         tokens = []
         var demands: [Demand] = []
+        let recordApps = configuration.recordApps && appSampler != nil
         if configuration.recordSystem {
+            let precise = configuration.highPrecision
             demands.append(
                 Demand(
-                    collectors: [CPULoadCollector.collectorID, CPUFrequencyCollector.collectorID, CPUMiscCollector.collectorID],
-                    interval: Self.slowInterval, source: .history, tier: .background))
+                    collectors: [CPULoadCollector.collectorID, CPUMiscCollector.collectorID], interval: Self.slowInterval,
+                    source: .history, tier: .background))
+            demands.append(
+                Demand(
+                    collectors: [CPUFrequencyCollector.collectorID],
+                    interval: precise ? Self.highPrecisionInterval : Self.slowInterval, source: .history, tier: .background))
+            demands.append(
+                Demand(
+                    collectors: [SensorCollector.collectorID],
+                    interval: precise ? Self.highPrecisionInterval : Self.sensorInterval, source: .history, tier: .background))
         }
-        var fast: Set<CollectorID> = []
-        if configuration.recordSystem { fast.insert(SensorCollector.collectorID) }
-        let recordApps = configuration.recordApps && appSampler != nil
-        if recordApps { fast.insert(AppSampler.collectorID) }
-        if !fast.isEmpty {
-            demands.append(Demand(collectors: fast, interval: Self.sensorInterval, source: .history, tier: .background))
+        if recordApps {
+            demands.append(
+                Demand(collectors: [AppSampler.collectorID], interval: Self.appInterval, source: .history, tier: .background))
         }
         appSampler?.setRetainsWindows(recordApps)
         for demand in demands {

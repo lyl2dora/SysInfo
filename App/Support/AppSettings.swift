@@ -9,7 +9,7 @@
 // - menubar.cpu.style / .label / .coloring / .warningPercent / .criticalPercent   菜单栏 CPU item 的样式与着色（D32）
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
 // - cpu.panel.topNRows / .grouping / .chartSpan / .splitUserSystem   面板显示
-// - history.cpu.enabled / history.apps.enabled   是否记录历史（D30）
+// - history.cpu.enabled / history.apps.enabled / history.cpu.highPrecision   是否记录历史与后台高精度（D30、D19）
 
 import Foundation
 import Observation
@@ -33,6 +33,7 @@ final class AppSettings {
         static let cpuItemVisible = "menubar.cpu.visible"
         static let historyCPU = "history.cpu.enabled"
         static let historyApps = "history.apps.enabled"
+        static let historyHighPrecision = "history.cpu.highPrecision"
         static let menuBarCPUStyle = "menubar.cpu.style"
         static let menuBarCPULabel = "menubar.cpu.label"
         static let menuBarCPUColoring = "menubar.cpu.coloring"
@@ -80,6 +81,11 @@ final class AppSettings {
     /// 是否记录每应用 CPU（D30：默认开）。
     var historyAppsEnabled: Bool {
         didSet { persist(historyAppsEnabled, Key.historyApps) }
+    }
+
+    /// 后台高精度历史：频率、温度与功耗每 5 秒（高开销项，默认关，D19）。
+    var historyHighPrecision: Bool {
+        didSet { persist(historyHighPrecision, Key.historyHighPrecision) }
     }
 
     /// 菜单栏 CPU item 的样式（D32：默认上下布局）。
@@ -164,6 +170,7 @@ final class AppSettings {
         autoThrottle = defaults?.object(forKey: Key.autoThrottle) as? Bool ?? true
         historyCPUEnabled = defaults?.object(forKey: Key.historyCPU) as? Bool ?? true
         historyAppsEnabled = defaults?.object(forKey: Key.historyApps) as? Bool ?? true
+        historyHighPrecision = defaults?.object(forKey: Key.historyHighPrecision) as? Bool ?? false
         menuBarCPUStyle = defaults?.string(forKey: Key.menuBarCPUStyle).flatMap(MenuBarCPUStyle.init(rawValue:)) ?? .stacked
         menuBarCPULabel = defaults?.object(forKey: Key.menuBarCPULabel) as? Bool ?? true
         menuBarCPUColoring = defaults?.object(forKey: Key.menuBarCPUColoring) as? Bool ?? true

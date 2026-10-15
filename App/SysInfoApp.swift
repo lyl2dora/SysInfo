@@ -169,7 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8))
         throttle.automatic = settings.autoThrottle
         let configuration = HistoryRecorder.Configuration(
-            recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled)
+            recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
+            highPrecision: settings.historyHighPrecision)
         Task { [history] in await history?.setConfiguration(configuration) }
         panel?.updateDemands()
     }
@@ -191,7 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let store = try HistoryStore(url: url)
             let recorder = HistoryRecorder(
                 store: store, engine: engine, appSampler: appSampler,
-                configuration: .init(recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled))
+                configuration: .init(
+                    recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
+                    highPrecision: settings.historyHighPrecision))
             Task { await recorder.start() }
             return recorder
         } catch {
