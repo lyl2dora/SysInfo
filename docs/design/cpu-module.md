@@ -583,3 +583,15 @@ struct PowerProfile { var clusterRails: [ClusterKey: [String]]; var gpuRails: [S
     - 面板：两个 P 簇共用温度键，温度只显示在「性能核 ×10」的组标题里，簇行留空（D37）；能效核没有温度行（D33）；功耗按簇显示。
     - 诊断页：三种档次依据一致；档案为内置的 M4 Pro。
   - 本机（M5 Pro）：面板、四个菜单栏 widget、设置的 CPU 页、诊断页都截图核对过。
+- **2026-10-15 · §10 开销实测与面板优化（第 8 步）**
+  - 第一次四档实测（原始 CPU）：面板打开 M5 3.16%、M4 5.09%，超出 D19 的 2%；M4 常驻 0.52%，略超 0.5%。
+  - 面板的优化，按效果从大到小：
+    - 每秒都在变的概览、核心区和图表绘制区改成 AppKit 自绘（`Panel/LiveViews.swift`），在 `draw(_:)` 里直接读 MetricStore。数据更新时只重绘这几个 view，SwiftUI 不再重算、重排整棵树。footprint 由 121 MB 降到 25 MB。
+    - MetricStore 攒批发布：同一个 tick 的主结果和阻塞结果（晚到 10–70 ms）合并成一次观察变化（`revision`）。菜单栏的平滑占用和着色级别不经节流。
+    - 面板只在结构变化时量一次高度：展开或收起、Top N 行数或成员变化、第一次采样后核心区成形。原先每次更新都算 `fittingSize`，对整个面板做一次理想尺寸布局。
+    - 两个分段控件（模块 tab、图表跨度）换成纯 SwiftUI 的轻量按钮组。系统的分段控件底层是 NSSegmentedControl，每次布局都要重新测量。
+    - 图表从 Swift Charts 改为自绘；每核小柱从每核一个 GeometryReader 改为一次画完。
+  - 重绘计数：设环境变量 `SYSINFO_DRAW_STATS` 后，每 30 s 写一次日志。两台都是每个自绘 view 每秒重绘 1 次。
+  - M4 慢的原因：系统把 SysInfo 约 95% 的 CPU 时间调度到能效核（Top N 的 p0 占比 5%），同样的工作在能效核上的 CPU 时间约是性能核的 2–3 倍。M5 没有能效核。由此定 D40：开销按最快档等效时间考核。
+  - 测量脚本：四档（基线、出厂默认、面板打开、面板 + 详情展开）；面板档用 `--pin-panel` 固定为浮窗，点别处不会作废；`TIERS` 可只测几档；`make remote-measure` 在 M4 上跑同样的测量。
+  - 注意：zsh 里 `log` 是内建命令，查统一日志要写 `/usr/bin/log`。
