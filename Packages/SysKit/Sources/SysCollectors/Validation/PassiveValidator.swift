@@ -31,6 +31,9 @@ public final class PassiveValidator {
         /// 全体进程 CPU 至少这么多（按单核比例），拓扑核对才有意义。
         public var minimumActivity = 0.3
         public var minimumSpanSeconds: Int64 = 10
+        /// 频率窗口不超过这么长才做频率判定，秒。内核的按档 cycles/时间按线程运行时间加权，IOReport 按簇活跃时间加权，
+        /// 窗口里负载变化大时两者本来就会分开（2026-10-15 自查：后台 60 s 窗口 + 传感器校准的轮流满载，−21.6% 误报）。
+        public var maximumFrequencyWindowSeconds: Double = 10
 
         public init() {}
     }
@@ -51,6 +54,8 @@ public final class PassiveValidator {
         var coalitionP0 = 0.0
         var p0Cycles = 0.0
         var otherCycles = 0.0
+        /// 区间里有超过上限的频率窗口：这一区间不做频率判定。
+        var longFrequencyWindow = false
     }
 
     private var lastTick: [Source: Int64] = [:]
@@ -137,6 +142,10 @@ public final class PassiveValidator {
 
     private func accumulateFrequency(_ s: [MetricID: Sample], _ duration: Double) {
         defer { busySinceFrequency = [:] }
+        if duration > thresholds.maximumFrequencyWindowSeconds {
+            accumulator.longFrequencyWindow = true
+            return
+        }
         for cluster in topology.clusters {
             guard let sample = s[.cpuFrequencyCluster(cluster.key)], let hz = sample.value, sample.quality == .measured,
                 let busy = busySinceFrequency[cluster.key], busy > 0
@@ -176,8 +185,8 @@ public final class PassiveValidator {
                     detail: "perflevel0 share: kernel \(pct(coalitionShare)), mapped ticks \(pct(tickShare))", spanSeconds: 0))
         }
 
-        // 频率（perflevel0；两档芯片上另一档）
-        let levels = topology.perfLevels.count == 2 ? [0, 1] : [0]
+        // 频率（perflevel0；两档芯片上另一档）。区间里有长频率窗口时不判定（见 maximumFrequencyWindowSeconds）。
+        let levels = a.longFrequencyWindow ? [] : (topology.perfLevels.count == 2 ? [0, 1] : [0])
         for index in levels {
             guard let level = topology.perfLevels.first(where: { $0.index == index }),
                 let busy = a.levelBusy[index], busy / (Double(level.cpuCount) * span) >= thresholds.minimumLevelBusy

@@ -103,18 +103,18 @@ private func time(_ seconds: Int64) -> SampleTime {
     }
 
     /// 喂一段稳定负载：P 档 75% 忙、E 档 25% 忙，P 簇 3.0 GHz、E 簇 2.0 GHz；coalition 端给出 `kernelP0Hz`。
-    private func run(kernelP0Hz: Double) -> [PassiveFinding] {
+    private func run(kernelP0Hz: Double, frequencyEvery: Int64 = 5, until last: Int64 = 130) -> [PassiveFinding] {
         let v = PassiveValidator(topology: topology)
         let p = ClusterKey(die: 0, cluster: 1)
         let e = ClusterKey(die: 0, cluster: 0)
         var findings: [PassiveFinding] = []
-        for tick in Int64(100)...130 {
+        for tick in Int64(100)...last {
             findings += v.ingest(
                 result(tick, CPULoadCollector.collectorID, [
                     (.cpuUsagePerfLevel(0), 0.75), (.cpuUsagePerfLevel(1), 0.25), (.cpuUsageCluster(p), 0.75),
                     (.cpuUsageCluster(e), 0.25),
                 ]))
-            if tick % 5 == 0 {
+            if tick % frequencyEvery == 0 {
                 findings += v.ingest(
                     result(tick, CPUFrequencyCollector.collectorID, [(.cpuFrequencyCluster(p), 3e9), (.cpuFrequencyCluster(e), 2e9)]))
             }
@@ -143,6 +143,13 @@ private func time(_ seconds: Int64) -> SampleTime {
         let findings = run(kernelP0Hz: 2.8e9)
         #expect(findings.filter { $0.check == "cpu.freq.passive.perflevel0" }.allSatisfy { !$0.passed })
         #expect(findings.filter { $0.check == "cpu.topology.passive" }.allSatisfy { $0.passed })
+    }
+
+    @Test func skipsFrequencyOnLongWindows() {
+        // 后台 60 s 一次的频率窗口：内核与 IOReport 的加权口径不同，不做频率判定（2026-10-15 自查的误报）；拓扑照常。
+        let findings = run(kernelP0Hz: 2.0e9, frequencyEvery: 60, until: 300)
+        #expect(!findings.contains { $0.check.hasPrefix("cpu.freq.passive") }, "\(findings)")
+        #expect(!findings.filter { $0.check == "cpu.topology.passive" }.isEmpty)
     }
 }
 

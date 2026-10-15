@@ -209,6 +209,17 @@ struct CPUDiagnosticsSection: View {
         }
     }
 
+    /// 比对的一行：缺的标橙（不通过的原因），候选照常灰色；都没有时写「无」。
+    static func comparisonLine(_ title: String, _ r: CalibrationComparison.ClusterResult) -> some View {
+        let missing = r.missing.isEmpty ? String(localized: "无") : r.missing.joined(separator: " ")
+        let candidates = r.candidates.isEmpty ? String(localized: "无") : r.candidates.joined(separator: " ")
+        return VStack(alignment: .leading, spacing: 1) {
+            Text("\(title)：缺 \(missing)").foregroundStyle(r.missing.isEmpty ? Color.secondary : Color.orange)
+            Text("候选 \(candidates)").foregroundStyle(.secondary)
+        }
+        .font(.caption.monospaced())
+    }
+
     static func reading(_ reading: ClusterFrequencyReading?) -> String {
         switch reading {
         case .active(let hz, _): Formatting.frequency(hz)
@@ -270,11 +281,15 @@ struct CPUDiagnosticsSection: View {
             )
             .foregroundStyle(comparison.passed ? .green : .orange)
             ForEach(comparison.temperatures, id: \.cluster) { t in
-                if !t.missing.isEmpty || !t.candidates.isEmpty {
-                    Text("\(t.cluster)：缺 \(t.missing.joined(separator: " "))；候选 \(t.candidates.joined(separator: " "))")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
+                Self.comparisonLine(String(localized: "\(t.cluster) 温度"), t)
+            }
+            ForEach(comparison.rails, id: \.cluster) { r in
+                Self.comparisonLine(String(localized: "\(r.cluster) 功耗轨"), r)
+            }
+            if !comparison.missingSentinels.isEmpty {
+                Text("占位值：缺 \(comparison.missingSentinels.map { String($0) }.joined(separator: " "))")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.orange)
             }
             Text("内置档案保持不变（D37）。多出的候选键多为 die/SoC 传感器，需要人工确认。")
                 .font(.caption)
