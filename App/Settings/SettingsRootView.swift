@@ -53,6 +53,9 @@ private struct SettingsSplitView: View {
             MenuBarSettingsView(settings: context.settings, store: context.store, openPage: openPage)
         case .cpu:
             CPUSettingsView(settings: context.settings, store: context.store, openPage: openPage)
+        case .power:
+            PowerSettingsView(
+                settings: context.settings, store: context.store, services: context.services, openPage: openPage)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
@@ -60,7 +63,7 @@ private struct SettingsSplitView: View {
         case .diagnostics:
             DiagnosticsView(
                 store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests,
-                services: context.services)
+                services: context.services, catalogVisibilityChanged: context.catalogVisibilityChanged)
                 .onAppear { context.diagnosticsVisibilityChanged(true) }
                 .onDisappear { context.diagnosticsVisibilityChanged(false) }
         case .about:
@@ -119,23 +122,23 @@ private struct MenuBarSettingsView: View {
             }
 
             Section {
-                let widgets = settings.visibleCPUWidgets
+                let widgets = settings.visibleWidgets
                 if widgets.isEmpty {
                     Text("还没有开启任何菜单栏项目。").foregroundStyle(.secondary)
                 } else {
                     ForEach(widgets) { widget in
-                        let configuration = CPUStatusItemConfiguration(widget: widget, settings: settings)
+                        let configuration = StatusItemConfiguration(widget: widget, settings: settings)
                         LabeledContent {
                             StatusItemPreview(store: store, configuration: configuration)
                         } label: {
-                            Text(CPUWidgetInfo.title(widget))
-                            Text("CPU · \(Self.points(CPUStatusItemView.fixedWidth(for: configuration)))")
+                            Text(WidgetInfo.title(widget))
+                            Text("\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))")
                         }
                     }
                     LabeledContent(
                         "合计宽度",
                         value: Self.points(
-                            widgets.map { CPUStatusItemView.fixedWidth(for: CPUStatusItemConfiguration(widget: $0, settings: settings)) }
+                            widgets.map { StatusItemView.fixedWidth(for: StatusItemConfiguration(widget: $0, settings: settings)) }
                                 .reduce(0, +)))
                 }
             } header: {
@@ -144,6 +147,8 @@ private struct MenuBarSettingsView: View {
                 HStack(spacing: 4) {
                     Text("各项目的开关和配置在所属模块页。")
                     Button("CPU") { openPage(.cpu) }
+                        .buttonStyle(.link)
+                    Button("功耗与散热") { openPage(.power) }
                         .buttonStyle(.link)
                 }
             }

@@ -12,7 +12,7 @@ import SysModel
 
 struct CPUDiagnosticsSection: View {
     let store: MetricStore
-    let services: CPUServices
+    let services: AppServices
     let model: CPUDiagnosticsModel
 
     var body: some View {

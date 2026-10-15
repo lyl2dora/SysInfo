@@ -17,6 +17,11 @@ enum DisplayNames {
         case "cpu.irq.devices": String(localized: "中断来源")
         case "cpu.freq.cores": String(localized: "逐核频率")
         case "app.self": String(localized: "本进程开销")
+        case "power.rail": String(localized: "整机功率")
+        case "power.sensors": String(localized: "SoC 功率、最热点与风扇")
+        case "power.gpu": String(localized: "GPU 功率")
+        case "power.pmgr": String(localized: "30 分钟分部件能耗")
+        case "sensors.catalog": String(localized: "传感器目录")
         default: id.rawValue
         }
     }
@@ -51,7 +56,9 @@ enum DisplayNames {
         case .diagnostics: String(localized: "诊断页")
         case .cli: String(localized: "命令行")
         case .history: String(localized: "历史记录")
-        default: source.rawValue
+        default:
+            source.rawValue.hasPrefix("menubar.power.")
+                ? String(localized: "菜单栏功耗与散热") : source.rawValue.hasPrefix("menubar.cpu.") ? String(localized: "菜单栏 CPU") : source.rawValue
         }
     }
 
@@ -135,6 +142,27 @@ enum Formatting {
 
     static func watts(_ watts: Double) -> String {
         watts < 10 ? String(format: "%.2f W", watts) : String(format: "%.1f W", watts)
+    }
+
+    /// 刻度用：「20 W」「5 W」。
+    static func wattsShort(_ watts: Double) -> String {
+        watts == watts.rounded() ? String(format: "%.0f W", watts) : String(format: "%.1f W", watts)
+    }
+
+    /// 能耗：「1.23 kWh」；小于 1 kWh 时用 Wh，小数位随量级减少（「0.25 Wh」「8.4 Wh」「320 Wh」）。
+    static func energy(_ joules: Double) -> String {
+        let wh = joules / 3600
+        switch wh {
+        case ..<10: return String(format: "%.2f Wh", wh)
+        case ..<100: return String(format: "%.1f Wh", wh)
+        case ..<1000: return String(format: "%.0f Wh", wh)
+        default: return String(format: "%.2f kWh", wh / 1000)
+        }
+    }
+
+    /// 转速：「1000 rpm」。
+    static func rpm(_ value: Double) -> String {
+        String(format: "%.0f rpm", value)
     }
 
     /// 每秒次数：「1.2k/s」。

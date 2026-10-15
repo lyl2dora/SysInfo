@@ -21,8 +21,8 @@ struct CPUSettingsView: View {
     var body: some View {
         Form {
             Section {
-                ForEach(CPUMenuWidget.allCases) { widget in
-                    widgetRow(widget)
+                ForEach(MenuWidget.widgets(of: .cpu)) { widget in
+                    WidgetSettingsRow(settings: settings, store: store, widget: widget)
                 }
             } header: {
                 Text("菜单栏")
@@ -60,7 +60,7 @@ struct CPUSettingsView: View {
             Section("面板") {
                 Picker("图表默认跨度", selection: $settings.panelChartSpan) {
                     ForEach(ChartSpan.allCases) { span in
-                        Text(CPUHistoryChart.title(span)).tag(span)
+                        Text(HistoryChart.title(span)).tag(span)
                     }
                 }
                 Toggle("拆分用户 / 系统", isOn: $settings.panelSplitUserSystem)
@@ -103,54 +103,6 @@ struct CPUSettingsView: View {
         .formStyle(.grouped)
     }
 
-    /// 一个 widget：开关与说明；打开后展开它自己的配置与预览（D41）。
-    @ViewBuilder
-    private func widgetRow(_ widget: CPUMenuWidget) -> some View {
-        let visible = settings.isVisible(widget)
-        Toggle(isOn: Binding(get: { settings.isVisible(widget) }, set: { settings.setVisible(widget, $0) })) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(CPUWidgetInfo.title(widget))
-                if let note = CPUWidgetInfo.note(widget, settings: settings, store: store) {
-                    Text(note).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        if visible {
-            Group {
-                if widget == .usage {
-                    Picker("呈现形式", selection: $settings.cpuUsagePresentation) {
-                        ForEach(CPUUsagePresentation.allCases) { presentation in
-                            Text(Self.presentationName(presentation)).tag(presentation)
-                        }
-                    }
-                }
-                Toggle("自定义颜色", isOn: Binding(
-                    get: { settings.color(for: widget) != .system },
-                    set: { settings.setColor($0 ? (WidgetColor(.systemBlue) ?? .system) : .system, for: widget) }))
-                if settings.color(for: widget) != .system {
-                    ColorPicker("颜色", selection: Binding(
-                        get: { Color(nsColor: settings.color(for: widget).nsColor) },
-                        set: { if let color = WidgetColor(NSColor($0)) { settings.setColor(color, for: widget) } }),
-                        supportsOpacity: false)
-                }
-                LabeledContent("预览") {
-                    StatusItemPreview(store: store, configuration: CPUStatusItemConfiguration(widget: widget, settings: settings))
-                }
-            }
-            .padding(.leading, 16)
-        }
-    }
-
-    static func presentationName(_ presentation: CPUUsagePresentation) -> String {
-        switch presentation {
-        case .number: String(localized: "数字")
-        case .sparkline: String(localized: "迷你折线")
-        case .barsTotal: String(localized: "柱：总量")
-        case .barsLevels: String(localized: "柱：按档")
-        case .barsCores: String(localized: "柱：每核")
-        }
-    }
-
     private func intervalPicker(_ title: String, _ selection: Binding<Int>, collector: CollectorID) -> some View {
         Picker(title, selection: selection) {
             ForEach(AppSettings.panelIntervals, id: \.self) { seconds in
@@ -160,71 +112,3 @@ struct CPUSettingsView: View {
     }
 }
 
-/// CPU widget 的名称与说明，CPU 页与菜单栏总览共用。
-enum CPUWidgetInfo {
-    static func title(_ widget: CPUMenuWidget) -> String {
-        switch widget {
-        case .usage: String(localized: "CPU 占用")
-        case .frequency: String(localized: "CPU 频率")
-        case .temperature: String(localized: "CPU 温度")
-        case .power: String(localized: "CPU 功耗")
-        }
-    }
-
-    /// 开销说明（D19）：按常驻采集间隔换算。
-    static func note(_ widget: CPUMenuWidget, settings: AppSettings, store: MetricStore) -> String? {
-        let interval = settings.cpuInterval.rawValue
-        switch widget {
-        case .usage:
-            return nil
-        case .frequency:
-            return String(localized: "最忙的簇的实际频率。高开销：\(CostLabel.text(collector: CPUFrequencyCollector.collectorID, interval: interval, store: store))")
-        case .temperature:
-            return String(localized: "CPU 最高温。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
-        case .power:
-            return String(localized: "CPU 各簇功耗之和，不含 GPU；没有专用功耗轨的芯片显示「—」。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
-        }
-    }
-}
-
-/// 开销标注（D19）。
-enum CostLabel {
-    /// 参考值：单次采样的线程 CPU 时间，毫秒（偏离记录与 D34 的两台实测，取较大者）。
-    static let referenceMilliseconds: [CollectorID: Double] = [
-        CPUFrequencyCollector.collectorID: 9.5,  // D34：M5 约 9.5 ms，M4 约 8.5 ms
-        AppSampler.collectorID: 14,  // 偏离记录 §5.7：M5 约 10.8 ms，M4 约 14 ms（含组装）
-    ]
-
-    static func text(collector: CollectorID, interval: Int, store: MetricStore) -> String {
-        if let health = store.engineStatus?.health.first(where: { $0.id == collector }), let cost = health.averageCost,
-            health.sampleCount >= 5
-        {
-            let percent = Double(cost.cpuNanos) / 1e9 / Double(interval) * 100
-            return String(localized: "约 \(String(format: "%.2f", percent))% 单核（本机实测）")
-        }
-        if let ms = referenceMilliseconds[collector] {
-            let percent = ms / 1000 / Double(interval) * 100
-            return String(localized: "约 \(String(format: "%.2f", percent))% 单核（参考 M5 Pro / M4 Pro）")
-        }
-        return String(localized: "尚无实测")
-    }
-}
-
-/// 设置页的菜单栏预览：用真实的 item view 渲染。
-struct StatusItemPreview: NSViewRepresentable {
-    let store: MetricStore
-    let configuration: CPUStatusItemConfiguration
-
-    func makeNSView(context: Context) -> CPUStatusItemView {
-        CPUStatusItemView(store: store, height: NSStatusBar.system.thickness, configuration: configuration)
-    }
-
-    func updateNSView(_ view: CPUStatusItemView, context: Context) {
-        view.configuration = configuration
-        view.invalidateIntrinsicContentSize()
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: CPUStatusItemView, context: Context) -> CGSize? {
-        CGSize(width: CPUStatusItemView.fixedWidth(for: configuration), height: NSStatusBar.system.thickness)
-    }
-}

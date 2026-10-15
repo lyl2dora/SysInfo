@@ -47,6 +47,16 @@ struct HistorySettingsView: View {
         }
     }
 
+    /// 功耗与散热的记录状态（只读总览，开关在模块页，D41）。
+    private var powerRecordingSummary: String {
+        switch (settings.historyPowerEnabled, settings.historyEnergyEnabled) {
+        case (true, true): String(localized: "记录指标与能耗")
+        case (true, false): String(localized: "记录指标，不记能耗")
+        case (false, true): String(localized: "只记能耗")
+        case (false, false): String(localized: "不记录")
+        }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -54,6 +64,12 @@ struct HistorySettingsView: View {
                     HStack {
                         Text(recordingSummary)
                         Button("设置…") { openPage(.cpu) }
+                    }
+                }
+                LabeledContent("功耗与散热") {
+                    HStack {
+                        Text(powerRecordingSummary)
+                        Button("设置…") { openPage(.power) }
                     }
                 }
             } header: {

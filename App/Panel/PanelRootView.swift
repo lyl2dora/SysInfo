@@ -7,10 +7,12 @@ struct PanelRootView: View {
     let store: MetricStore
     @Bindable var state: PanelState
     let actions: PanelActions
-    let services: CPUServices
+    let services: AppServices
     let settings: AppSettings
     /// 内容的结构变了（展开或收起、行数变化），请面板重新量一次高度。
     var onLayoutChange: () -> Void = {}
+    /// 切换了 tab：重新登记需求（只采当前 tab 要的数据）。
+    var onTabChange: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 12) {
@@ -23,8 +25,12 @@ struct PanelRootView: View {
             case .cpu:
                 CPUPanelView(
                     store: store, services: services, settings: settings, expandDetails: state.expandDetailsInitially)
+            case .power:
+                PowerPanelView(
+                    store: store, services: services, settings: settings, openCPUTab: { state.selectedTab = .cpu })
             }
         }
+        .onChange(of: state.selectedTab) { onTabChange() }
         .padding(14)
         .frame(width: PanelController.width)
         .environment(\.panelLayoutChanged, PanelLayoutAction(action: onLayoutChange))

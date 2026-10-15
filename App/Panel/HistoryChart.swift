@@ -1,4 +1,4 @@
-// 面板 CPU tab 的历史图（CPU 模块设计 §7.2、§6，K39）。
+// 面板的历史图（CPU 模块设计 §7.2、§6，K39；功耗与散热模块设计 §7.2）：CPU 占用（0–100%），或功率（W，纵轴自动取整）。
 //
 // - 2 分、15 分读内存环形缓冲（原始值）；1 时、24 时、7 天读历史库：1 时用分钟表，24 时用分钟表降采样到
 //   5 分钟一桶（288 点），7 天用小时表。画成均值线加峰值带（有峰值时），空洞处断开；
@@ -9,13 +9,31 @@ import SysCollectors
 import SysModel
 import SysStore
 
-struct CPUHistoryChart: View {
+/// 图上画什么：主指标、可选的叠加指标、产生它的采集器（判断空洞）、纵轴。
+struct ChartSeries: Equatable {
+    var metric: MetricID
+    var overlay: MetricID?
+    var collector: CollectorID
+    var scale: ChartScale
+
+    static let cpuUsage = ChartSeries(metric: .cpuUsageTotal, overlay: nil, collector: CPULoadCollector.collectorID, scale: .unit)
+}
+
+/// 纵轴：0–1 的比例（刻度由 SwiftUI 画），或功率（瓦，按数据自动取整，刻度由绘制区自己画）。
+enum ChartScale: Equatable {
+    case unit
+    case watts
+}
+
+struct HistoryChart: View {
     let store: MetricStore
     let history: HistoryRecorder?
     let defaultSpan: ChartSpan
+    var series: ChartSeries = .cpuUsage
 
     @State private var span: ChartSpan?
     @State private var stored: [StoredPoint] = []
+    @State private var storedOverlay: [StoredPoint] = []
     @State private var loadError = false
 
     private var current: ChartSpan { span ?? defaultSpan }
@@ -40,13 +58,18 @@ struct CPUHistoryChart: View {
                 Text("历史库不可用").font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .task(id: current) {
+        .task(id: TaskKey(span: current, overlay: series.overlay)) {
             guard current.usesHistory else { return }
             while !Task.isCancelled {
                 await load()
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+    }
+
+    private struct TaskKey: Equatable {
+        var span: ChartSpan
+        var overlay: MetricID?
     }
 
     static func title(_ span: ChartSpan) -> String {
@@ -71,14 +94,21 @@ struct CPUHistoryChart: View {
             case .oneDay: (.minute, 5)
             default: (.hour, 60)
             }
-        do {
-            let points = try await history.series(
-                .cpuUsageTotal, from: now.addingTimeInterval(-span.seconds), to: now, granularity: granularity,
-                bucketMinutes: bucket)
-            stored = points.map {
+        func read(_ metric: MetricID) async throws -> [StoredPoint] {
+            try await history.series(
+                metric, from: now.addingTimeInterval(-span.seconds), to: now, granularity: granularity, bucketMinutes: bucket
+            ).map {
                 StoredPoint(
                     date: Date(timeIntervalSince1970: TimeInterval($0.minute * 60)), avg: $0.avg, max: $0.max,
                     bucket: Double(bucket * 60))
+            }
+        }
+        do {
+            stored = try await read(series.metric)
+            if let overlay = series.overlay {
+                storedOverlay = try await read(overlay)
+            } else {
+                storedOverlay = []
             }
             loadError = false
         } catch {
@@ -92,22 +122,28 @@ struct CPUHistoryChart: View {
     private var chart: some View {
         let span = current.seconds
         let stored: [StoredPoint]? = current.usesHistory ? self.stored : nil
+        let storedOverlay: [StoredPoint]? = current.usesHistory && series.overlay != nil ? self.storedOverlay : nil
+        let series = series
         return VStack(spacing: 2) {
             HStack(alignment: .top, spacing: 4) {
                 LiveView(make: { ChartDrawView(store: store) }) { view in
+                    view.series = series
                     view.spanSeconds = span
                     view.stored = stored
+                    view.storedOverlay = storedOverlay
                 }
-                VStack(alignment: .leading) {
-                    Text(PercentFormat.string(fromRatio: 1))
-                    Spacer()
-                    Text(PercentFormat.string(fromRatio: 0.5))
-                    Spacer()
-                    Text(PercentFormat.string(fromRatio: 0))
+                if series.scale == .unit {
+                    VStack(alignment: .leading) {
+                        Text(PercentFormat.string(fromRatio: 1))
+                        Spacer()
+                        Text(PercentFormat.string(fromRatio: 0.5))
+                        Spacer()
+                        Text(PercentFormat.string(fromRatio: 0))
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, alignment: .leading)
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .leading)
             }
             HStack {
                 Text(Self.axisLabel(span))
@@ -118,7 +154,7 @@ struct CPUHistoryChart: View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
-            .padding(.trailing, 38)
+            .padding(.trailing, series.scale == .unit ? 38 : 0)
         }
     }
 
