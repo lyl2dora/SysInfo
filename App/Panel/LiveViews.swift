@@ -7,6 +7,7 @@
 // 坐标系翻转（isFlipped），文字用 NSAttributedString 画，颜色一律用语义色或按档名取的颜色。
 
 import AppKit
+import OSLog
 import SwiftUI
 import SysCollectors
 import SysModel
@@ -28,6 +29,23 @@ class LiveDrawView: NSView {
     }
 
     override var isFlipped: Bool { true }
+
+    /// 诊断用：设了环境变量 SYSINFO_DRAW_STATS 时，每 30 秒把各 view 的重绘次数写进日志（开销分析用）。
+    static let drawStatsEnabled = ProcessInfo.processInfo.environment["SYSINFO_DRAW_STATS"] != nil
+    nonisolated(unsafe) static var drawCounts: [String: Int] = [:]
+    nonisolated(unsafe) static var drawStatsTimer: Timer?
+
+    func countDraw() {
+        guard Self.drawStatsEnabled else { return }
+        Self.drawCounts[String(describing: type(of: self)), default: 0] += 1
+        if Self.drawStatsTimer == nil {
+            Self.drawStatsTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+                let summary = LiveDrawView.drawCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+                Log.panel.notice("重绘次数（30 s）：\(summary, privacy: .public)")
+                LiveDrawView.drawCounts = [:]
+            }
+        }
+    }
 
     static func text(_ s: String, _ font: NSFont, _ color: NSColor = .labelColor) -> NSAttributedString {
         NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color])
@@ -69,6 +87,7 @@ final class OverviewDrawView: LiveDrawView {
     private static let callout = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 
     override func draw(_ dirtyRect: NSRect) {
+        countDraw()
         let latest = store.latest  // 观察：数据变化时重绘
         let total = latest[.cpuUsageTotal]
         Self.draw(Self.text(String(localized: "总占用"), Self.subheadline, .secondaryLabelColor), x: 0, y: 0)
@@ -172,6 +191,7 @@ final class CoresDrawView: LiveDrawView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        countDraw()
         let latest = store.latest  // 观察：数据变化时重绘
         let cores = store.cpuCores
         guard let topology = CPUTopologyService.shared.current, topology.logicalCPUCount == cores.count, !cores.isEmpty
@@ -312,6 +332,7 @@ final class ChartDrawView: LiveDrawView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        countDraw()
         let span = spanSeconds
         let size = bounds.size
         func x(_ v: Double) -> CGFloat { CGFloat((v + span) / span) * size.width }
