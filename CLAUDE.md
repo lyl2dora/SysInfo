@@ -65,6 +65,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
     - IOReport Energy Model 中由 PMGR 驱动的通道（CPU、ANE、DRAM、GPU0 等）每 30 分钟才批量发布一次，不能用作实时功耗。
     - AGX 的 `GPU Energy` 是例外，它是实时的，是 GPU 功耗的首选来源。
     - 实时 CPU、DRAM、SoC 功耗改用 SMC（调研报告 §0-2）。
+    - `PowerTelemetryData` 累加器在高负载下会整分钟漏记，长期能耗用 `PDTR` 积分（D46）；CPU 专用轨不乘 PMGR 系数（D45）；M4 的 SMC GPU 轨不是 GPU 功率，GPU 一律用 AGX（D44）。
   - `host_statistics` 受全系统节流：页面计数改读 `vm.page_*` sysctl；与上次逐字节相同的结果视为陈旧。
   - 传感器：
     - SMC 按属性位判断字节序，要支持 `flt`、`ioft`、`si32` 等类型，并检查 result 字节。

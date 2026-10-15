@@ -1,11 +1,14 @@
-// 菜单栏 CPU widget（K32、D38，M0 设计 §6）：一个 widget 只显示一项，每个 widget 是一个独立的 `NSStatusItem`。
+// 菜单栏 widget（K32、D38，M0 设计 §6）：一个 widget 只显示一项，每个 widget 是一个独立的 `NSStatusItem`。
 //
 // - 固定宽度，自绘 `statusItem.view`；
-// - autosaveName = "<bundle id>.cpu"（占用，沿用 M0 的名字，保住用户拖好的位置）或 "<bundle id>.cpu.<项>"；
+// - autosaveName = "<bundle id>.cpu"（占用，沿用 M0 的名字，保住用户拖好的位置）、"<bundle id>.cpu.<项>"
+//   或 "<bundle id>.power.<项>"（功耗与散热，D44）；
 //   创建后显式设 isVisible = true，并启用 `.removalAllowed`；KVO 观察 isVisible，用户把 item 拖走后同步关掉设置里的开关
 //   （可见性以 app 设置为准）；
 // - 每个 widget 可见时登记它自己的需求，隐藏时注销（只在有消费者时采样）：
 //   占用 → cpu.load，频率 → cpu.freq（D19 高开销项），温度与功耗 → cpu.sensors；
+//   整机功率 → power.rail，SoC 功率、最热点、风扇 → power.sensors，GPU 功率 → power.gpu；
+//   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
 // - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）。
 
 import AppKit
@@ -16,11 +19,11 @@ import OSLog
 final class StatusItemController {
     private final class Entry {
         let item: NSStatusItem
-        let view: CPUStatusItemView
+        let view: StatusItemView
         let demand: DemandSlot
         var observation: NSKeyValueObservation?
 
-        init(item: NSStatusItem, view: CPUStatusItemView, demand: DemandSlot) {
+        init(item: NSStatusItem, view: StatusItemView, demand: DemandSlot) {
             self.item = item
             self.view = view
             self.demand = demand
@@ -29,7 +32,7 @@ final class StatusItemController {
 
     private let store: MetricStore
     private let engine: SamplingEngine
-    private var entries: [CPUMenuWidget: Entry] = [:]
+    private var entries: [MenuWidget: Entry] = [:]
 
     /// 最近一次被点击（开启 session）的 item；面板锚在它下方。
     weak var activeItem: NSStatusItem?
@@ -40,7 +43,7 @@ final class StatusItemController {
     }
 
     /// 用户在菜单栏里把某个 widget 移除（⌘ 拖走或在系统设置里关闭）后调用。
-    var onUserRemoved: ((CPUMenuWidget) -> Void)?
+    var onUserRemoved: ((MenuWidget) -> Void)?
 
     init(store: MetricStore, engine: SamplingEngine) {
         self.store = store
@@ -48,44 +51,61 @@ final class StatusItemController {
     }
 
     /// 按设置显示或移除各 widget，并同步采样需求与显示配置。`configurations` 里只有要显示的 widget。
-    func update(_ configurations: [CPUStatusItemConfiguration], interval: SamplingInterval) {
+    func update(_ configurations: [StatusItemConfiguration], intervals: (MenuModule) -> SamplingInterval) {
         let wanted = Dictionary(uniqueKeysWithValues: configurations.map { ($0.widget, $0) })
-        for widget in CPUMenuWidget.allCases {
+        for widget in MenuWidget.allCases {
             if let configuration = wanted[widget] {
                 let entry = installIfNeeded(configuration)
                 apply(configuration, to: entry)
                 entry.demand.set(
-                    Demand(collectors: [Self.collector(for: widget)], interval: interval.rawValue, source: Self.source(widget)))
+                    Demand(
+                        collectors: [Self.collector(for: widget)], interval: intervals(widget.module).rawValue,
+                        source: Self.source(widget)))
             } else {
                 remove(widget)
             }
         }
     }
 
-    static func collector(for widget: CPUMenuWidget) -> CollectorID {
+    static func collector(for widget: MenuWidget) -> CollectorID {
         switch widget {
         case .usage: CPULoadCollector.collectorID
         case .frequency: CPUFrequencyCollector.collectorID
         case .temperature, .power: SensorCollector.collectorID
+        case .systemPower: PowerRailCollector.collectorID
+        case .socHotspot, .socPower, .fan: PowerSensorCollector.collectorID
+        case .gpuPower: GPUPowerCollector.collectorID
         }
     }
 
-    static func source(_ widget: CPUMenuWidget) -> DemandSource {
-        widget == .usage ? .menubarCPU : DemandSource("menubar.cpu.\(widget.rawValue)")
+    static func source(_ widget: MenuWidget) -> DemandSource {
+        widget == .usage ? .menubarCPU : DemandSource("menubar.\(widget.module.rawValue).\(widget.rawValue)")
+    }
+
+    /// 屏幕上的这一点是否落在本 app 除 `excluded` 以外的某个 widget 上（从一个 widget 点到另一个时原地换面板，D47）。
+    func isOtherItem(at point: NSPoint, excluding excluded: NSStatusItem?) -> Bool {
+        entries.values.contains { entry in
+            entry.item !== excluded && (entry.item.view?.window ?? entry.item.button?.window)?.frame.contains(point) == true
+        }
+    }
+
+    /// 某个 item 是哪个 widget（点击后按模块选择面板内容，D47）。
+    func widget(for item: NSStatusItem) -> MenuWidget? {
+        entries.first { $0.value.item === item }?.key
     }
 
     /// 面板锚点：被点击的 widget 所在的菜单栏窗口；没有时取第一个显示的 widget。
     var anchorWindow: NSWindow? {
-        let item = activeItem ?? CPUMenuWidget.allCases.lazy.compactMap { self.entries[$0]?.item }.first
+        let item = activeItem ?? MenuWidget.allCases.lazy.compactMap { self.entries[$0]?.item }.first
         return item?.view?.window ?? item?.button?.window
     }
 
     // MARK: - 私有
 
     /// 样式或柱数变化时重新定宽（只在设置变化时发生，运行中宽度不变，K32）。
-    private func apply(_ configuration: CPUStatusItemConfiguration, to entry: Entry) {
+    private func apply(_ configuration: StatusItemConfiguration, to entry: Entry) {
         guard entry.view.configuration != configuration else { return }
-        let width = CPUStatusItemView.fixedWidth(for: configuration)
+        let width = StatusItemView.fixedWidth(for: configuration)
         entry.view.configuration = configuration
         if entry.item.length != width {
             entry.item.length = width
@@ -96,18 +116,19 @@ final class StatusItemController {
         }
     }
 
-    private func installIfNeeded(_ configuration: CPUStatusItemConfiguration) -> Entry {
+    private func installIfNeeded(_ configuration: StatusItemConfiguration) -> Entry {
         let widget = configuration.widget
         if let entry = entries[widget] { return entry }
-        let width = CPUStatusItemView.fixedWidth(for: configuration)
+        let width = StatusItemView.fixedWidth(for: configuration)
         let item = NSStatusBar.system.statusItem(withLength: width)
         item.autosaveName =
-            widget == .usage ? "\(BuildInfo.bundleIdentifier).cpu" : "\(BuildInfo.bundleIdentifier).cpu.\(widget.rawValue)"
+            widget == .usage
+            ? "\(BuildInfo.bundleIdentifier).cpu" : "\(BuildInfo.bundleIdentifier).\(widget.module.rawValue).\(widget.rawValue)"
         item.behavior = .removalAllowed
         // autosaveName 会持久化可见性；可见性以 app 设置为准（K32），创建后显式设为可见。
         item.isVisible = true
 
-        let view = CPUStatusItemView(store: store, height: NSStatusBar.system.thickness, configuration: configuration)
+        let view = StatusItemView(store: store, height: NSStatusBar.system.thickness, configuration: configuration)
         item.view = view
         item.expandedInterfaceDelegate = expandedInterfaceDelegate
 
@@ -128,7 +149,7 @@ final class StatusItemController {
         return entry
     }
 
-    private func remove(_ widget: CPUMenuWidget) {
+    private func remove(_ widget: MenuWidget) {
         guard let entry = entries.removeValue(forKey: widget) else { return }
         entry.demand.set(nil)
         entry.observation?.invalidate()
@@ -139,9 +160,9 @@ final class StatusItemController {
     }
 }
 
-extension CPUStatusItemConfiguration {
+extension StatusItemConfiguration {
     /// 按当前设置与拓扑生成某个 widget 的显示配置（菜单栏、设置页预览与总览共用）。
-    init(widget: CPUMenuWidget, settings: AppSettings) {
+    init(widget: MenuWidget, settings: AppSettings) {
         let topology = CPUTopologyService.shared.current
         self.init(
             widget: widget, style: settings.renderStyle(for: widget), showsLabel: settings.menuBarShowsLabel,

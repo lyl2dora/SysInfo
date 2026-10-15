@@ -9,7 +9,7 @@ import SysModel
 
 struct CPUPanelView: View {
     let store: MetricStore
-    let services: CPUServices
+    let services: AppServices
     @Bindable var settings: AppSettings
     var expandDetails = false
 
@@ -20,11 +20,11 @@ struct CPUPanelView: View {
                 LiveView(make: { OverviewDrawView(store: store) }, update: { $0.splitUserSystem = split })
                     .frame(height: split ? OverviewDrawView.height : OverviewDrawView.height - 22)
             }
-            PanelCard { CPUHistoryChart(store: store, history: services.history, defaultSpan: settings.panelChartSpan) }
+            PanelCard { HistoryChart(store: store, history: services.history, defaultSpan: settings.panelChartSpan) }
             PanelCard { CPUCoresSection(store: store, sensors: services.collectors.sensors) }
             PanelCard { CPUDetailsSection(store: store, services: services, expandInitially: expandDetails) }
             if settings.panelTopNRows > 0 {
-                PanelCard { TopNSection(model: services.topN, grouping: settings.panelGrouping) }
+                PanelCard { TopNSection(model: services.topN, grouping: settings.panelGrouping, slots: settings.panelTopNRows) }
             }
         }
     }
@@ -62,12 +62,12 @@ struct CPUCoresSection: View {
 
 private struct CPUDetailsSection: View {
     let store: MetricStore
-    let services: CPUServices
+    let services: AppServices
     @State private var expanded: Bool
     @State private var sourcesExpanded: Bool
     @Environment(\.panelLayoutChanged) private var layoutChanged
 
-    init(store: MetricStore, services: CPUServices, expandInitially: Bool) {
+    init(store: MetricStore, services: AppServices, expandInitially: Bool) {
         self.store = store
         self.services = services
         _expanded = State(initialValue: expandInitially)

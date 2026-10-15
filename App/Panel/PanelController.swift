@@ -7,7 +7,9 @@
 // - session 期间 item 的高亮由系统绘制（27 实测），这里不再自绘；
 // - 「固定」：结束 session，把同一个面板改成可拖动的浮窗（level = .floating），显示关闭按钮；
 // - 面板可见且在 CPU tab 时登记「面板」需求（D29，CPU 模块设计 §5.8）：占用与杂项 1 s，频率、温度与功耗、Top N
-//   按设置的间隔；隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
+//   按设置的间隔；在「功耗与散热」tab 时（功耗与散热模块设计 §4.7）：整机功率与杂项（热状态）1 s，
+//   SoC/GPU/DRAM 功率、最热点与风扇按设置的间隔，CPU 功耗按 CPU 面板的温度与功耗间隔，PMGR 批次 60 s；
+//   隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
 // - 内容高度会变（展开详情、Top N 行数），面板跟着内容改高，锚定时保持顶边不动。
 
 import AppKit
@@ -17,15 +19,24 @@ import SysCollectors
 import SysModel
 import OSLog
 
-/// 面板里的模块。M0 只有 CPU，但按多 tab 的结构写（D21）。
+/// 面板里的模块（D21、D47）：单 widget 模式下面板只显示被点击 widget 所属的模块。
 enum PanelTab: String, CaseIterable, Identifiable {
     case cpu
+    case power
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .cpu: String(localized: "CPU")
+        case .power: String(localized: "功耗与散热")
+        }
+    }
+
+    init(_ module: MenuModule) {
+        switch module {
+        case .cpu: self = .cpu
+        case .power: self = .power
         }
     }
 }
@@ -79,13 +90,16 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     weak var statusItems: StatusItemController?
 
     private let store: MetricStore
-    private let services: CPUServices
+    private let services: AppServices
     private let settings: AppSettings
     /// 面板的几条需求：间隔不同，各占一个槽。
     private let usageDemand: DemandSlot
     private let frequencyDemand: DemandSlot
     private let sensorDemand: DemandSlot
     private let topNDemand: DemandSlot
+    private let powerDemand: DemandSlot
+    private let powerSensorDemand: DemandSlot
+    private let pmgrDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -100,8 +114,11 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private var sessionlessClosedByItemClickAt: TimeInterval?
     /// 上面两件事之间允许的最大间隔，秒（实测约 20 ms）。
     static let itemClickSessionWindow: TimeInterval = 0.5
+    /// 面板开着时点了本 app 的另一个 widget 的时刻（同上的时钟）：旧 session 结束时不隐藏面板，
+    /// 等新 session 开始后原地换内容（D47）。原先先隐藏再显示，中间约 60 ms 空白，看起来是闪烁。
+    private var switchRequestedAt: TimeInterval?
 
-    init(store: MetricStore, engine: SamplingEngine, services: CPUServices, settings: AppSettings) {
+    init(store: MetricStore, engine: SamplingEngine, services: AppServices, settings: AppSettings) {
         self.store = store
         self.services = services
         self.settings = settings
@@ -109,6 +126,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.frequencyDemand = DemandSlot(engine: engine)
         self.sensorDemand = DemandSlot(engine: engine)
         self.topNDemand = DemandSlot(engine: engine)
+        self.powerDemand = DemandSlot(engine: engine)
+        self.powerSensorDemand = DemandSlot(engine: engine)
+        self.pmgrDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -120,7 +140,11 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             ProcessInfo.processInfo.systemUptime - $0 < Self.itemClickSessionWindow
         } ?? false
         sessionlessClosedByItemClickAt = nil
-        if presentation == .anchored, sessionItem == nil {
+        // 从一个 widget 点到另一个（D47）：系统先结束旧 session（sessionItem 已清空），再开新 session。
+        // 这时面板还开着、没有 session，但不是「无 session 的面板被点了」，要先判断，原地换内容。
+        let switching = switchRequestedAt.map { ProcessInfo.processInfo.systemUptime - $0 < Self.itemClickSessionWindow } ?? false
+        switchRequestedAt = nil
+        if presentation == .anchored, sessionItem == nil, !switching {
             Log.panel.info("无 session 的面板开着时点击 item：关闭面板，取消系统新开的 session")
             hide()
             session.cancel()
@@ -135,7 +159,14 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         Log.panel.info("expanded interface session 开始")
         sessionItem = statusItem
         statusItems?.activeItem = statusItem
-        showAnchored()
+        if let widget = statusItems?.widget(for: statusItem) {
+            state.selectedTab = PanelTab(widget.module)
+        }
+        if switching, presentation == .anchored {
+            swapInPlace()
+        } else {
+            showAnchored()
+        }
     }
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
@@ -144,9 +175,19 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             sessionItem = nil
         }
         // 固定为浮窗时 session 由我们主动结束，面板保留。
-        if presentation == .anchored {
-            hide()
+        guard presentation == .anchored else { return }
+        // 点到了另一个 widget：面板先留着，等新 session 开始后原地换内容；新 session 没来就照常隐藏。
+        if switchRequestedAt != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.itemClickSessionWindow) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.switchRequestedAt != nil, self.sessionItem == nil else { return }
+                    self.switchRequestedAt = nil
+                    self.hide()
+                }
+            }
+            return
         }
+        hide()
     }
 
     // MARK: - 打开与关闭
@@ -202,9 +243,26 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     /// 按面板状态与设置登记或注销需求（设置变化、切换 tab 时也调用）。
     func updateDemands() {
         requestFit()  // Top N 行数等设置可能变了
-        let cpuVisible = presentation != .hidden && state.selectedTab == .cpu
+        let visible = presentation != .hidden
+        let powerVisible = visible && state.selectedTab == .power
+        if powerVisible {
+            powerDemand.set(
+                Demand(collectors: [PowerRailCollector.collectorID, CPUMiscCollector.collectorID], interval: 1, source: .panel))
+            powerSensorDemand.set(
+                Demand(
+                    collectors: [PowerSensorCollector.collectorID, GPUPowerCollector.collectorID],
+                    interval: settings.powerPanelInterval, source: .panel))
+            pmgrDemand.set(Demand(collectors: [PMGRBatchCollector.collectorID], interval: 60, source: .panel))
+            // 功率分解里的 CPU 行（专用轨）
+            sensorDemand.set(
+                Demand(collectors: [SensorCollector.collectorID], interval: settings.panelSensorInterval, source: .panel))
+        } else {
+            [powerDemand, powerSensorDemand, pmgrDemand].forEach { $0.set(nil) }
+        }
+        let cpuVisible = visible && state.selectedTab == .cpu
         guard cpuVisible else {
-            [usageDemand, frequencyDemand, sensorDemand, topNDemand].forEach { $0.set(nil) }
+            [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
+            if !powerVisible { sensorDemand.set(nil) }
             services.topN.setActive(false, coalitionUsable: true)
             return
         }
@@ -252,6 +310,20 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         installMonitors()
         updateDemands()
         Log.panel.info("面板已显示：\(NSStringFromRect(panel.frame), privacy: .public)")
+    }
+
+    /// 面板保持可见，换成新模块的内容并移到新 widget 下方，同一次提交里完成（不出现空白帧，D47）。
+    private func swapInPlace() {
+        guard let panel else { return showAnchored() }
+        let size = installContent(in: panel)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.setFrame(anchoredFrame(for: size), display: true)
+        CATransaction.commit()
+        panel.makeKey()
+        shownAt = ProcessInfo.processInfo.systemUptime
+        updateDemands()
+        Log.panel.info("面板原地换为 \(self.state.selectedTab.rawValue, privacy: .public)：\(NSStringFromRect(panel.frame), privacy: .public)")
     }
 
     private func hide() {
@@ -303,7 +375,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         let hosting = NSHostingView(
             rootView: PanelRootView(
                 store: store, state: state, actions: actions, services: services, settings: settings,
-                onLayoutChange: { [weak self] in self?.requestFit() }))
+                onLayoutChange: { [weak self] in self?.requestFit() },
+                onTabChange: { [weak self] in self?.updateDemands() }))
         // 面板尺寸由 fitToContent 控制，不让 hosting view 平时维护固有尺寸约束（省掉每次更新后的约束求解）。
         hosting.sizingOptions = []
         let size = NSSize(width: Self.width, height: ceil(max(Self.idealHeight(of: hosting), 200)))
@@ -413,6 +486,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 // 无 session 的面板：系统随后会为这次点击开启新 session，didBegin 里把它取消。
                 sessionlessClosedByItemClickAt = ProcessInfo.processInfo.systemUptime
             }
+        } else if sessionItem != nil, statusItems?.isOtherItem(at: location, excluding: sessionItem) == true {
+            Log.panel.info("点击另一个 widget：等新 session 开始后原地换内容")
+            switchRequestedAt = ProcessInfo.processInfo.systemUptime
+            return
         } else {
             Log.panel.info("点击面板以外的位置，关闭面板")
         }

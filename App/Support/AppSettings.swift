@@ -10,6 +10,9 @@
 // - menubar.layout / menubar.label   所有 widget 共用的排版（stacked / inline）与小标签开关（D41）
 // - menubar.cpu.usage.presentation   占用 widget 的呈现形式（number / sparkline / barsTotal / barsLevels / barsCores，D41）
 // - menubar.cpu.<widget>.color   各 widget 的颜色：system（跟随系统）或 #RRGGBB（D43）；<widget> 为 usage / frequency / temperature / power
+// - menubar.power.<widget>.visible / .color   功耗与散热 widget（systemPower / socHotspot / socPower / gpuPower / fan，D44：只有 systemPower 默认开）
+// - power.interval / power.panel.interval / power.panel.chartSpan / power.panel.overlaySoC   功耗与散热的常驻间隔覆盖与面板设置
+// - history.power.enabled / history.energy.enabled   是否记录功耗与散热历史、是否记录能耗（D46）
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
@@ -48,7 +51,15 @@ final class AppSettings {
         /// D41 之前的键，只读不写。
         static let legacyCPUStyle = "menubar.cpu.style"
         static let legacyCPULabel = "menubar.cpu.label"
-        static func widgetColor(_ widget: CPUMenuWidget) -> String { "menubar.cpu.\(widget.rawValue).color" }
+        static func widgetColor(_ widget: MenuWidget) -> String { "menubar.\(widget.module.rawValue).\(widget.rawValue).color" }
+        /// 功耗与散热 widget 的显示开关（CPU 四项沿用上面的旧键）。
+        static func widgetVisible(_ widget: MenuWidget) -> String { "menubar.\(widget.module.rawValue).\(widget.rawValue).visible" }
+        static let powerInterval = "power.interval"
+        static let powerPanelInterval = "power.panel.interval"
+        static let powerChartSpan = "power.panel.chartSpan"
+        static let powerChartOverlaySoC = "power.panel.overlaySoC"
+        static let historyPower = "history.power.enabled"
+        static let historyEnergy = "history.energy.enabled"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -91,26 +102,34 @@ final class AppSettings {
         didSet { persist(cpuPowerItemVisible, Key.cpuPowerItemVisible) }
     }
 
-    /// 当前显示的 CPU widget（D38）。
-    var visibleCPUWidgets: [CPUMenuWidget] {
-        CPUMenuWidget.allCases.filter { isVisible($0) }
+    /// 功耗与散热 widget 的显示开关（D44：出厂只开整机功率）。
+    private(set) var powerWidgetsVisible: [MenuWidget: Bool]
+
+    /// 当前显示的 widget（全部模块，D38）。
+    var visibleWidgets: [MenuWidget] {
+        MenuWidget.allCases.filter { isVisible($0) }
     }
 
-    func isVisible(_ widget: CPUMenuWidget) -> Bool {
+    func isVisible(_ widget: MenuWidget) -> Bool {
         switch widget {
         case .usage: cpuItemVisible
         case .frequency: cpuFrequencyItemVisible
         case .temperature: cpuTemperatureItemVisible
         case .power: cpuPowerItemVisible
+        default: powerWidgetsVisible[widget] ?? widget.visibleByDefault
         }
     }
 
-    func setVisible(_ widget: CPUMenuWidget, _ visible: Bool) {
+    func setVisible(_ widget: MenuWidget, _ visible: Bool) {
         switch widget {
         case .usage: cpuItemVisible = visible
         case .frequency: cpuFrequencyItemVisible = visible
         case .temperature: cpuTemperatureItemVisible = visible
         case .power: cpuPowerItemVisible = visible
+        default:
+            guard powerWidgetsVisible[widget] != visible else { return }
+            powerWidgetsVisible[widget] = visible
+            persist(visible, Key.widgetVisible(widget))
         }
     }
 
@@ -150,19 +169,19 @@ final class AppSettings {
     }
 
     /// widget 实际的绘制样式：占用 widget 选了图形时用图形，其余按全局排版。
-    func renderStyle(for widget: CPUMenuWidget) -> MenuBarCPUStyle {
+    func renderStyle(for widget: MenuWidget) -> MenuBarCPUStyle {
         if widget == .usage, let graphic = cpuUsagePresentation.graphicStyle { return graphic }
         return menuBarLayout == .inline ? .inline : .stacked
     }
 
     /// 各 widget 的颜色（D43：默认跟随系统）。
-    private(set) var widgetColors: [CPUMenuWidget: WidgetColor]
+    private(set) var widgetColors: [MenuWidget: WidgetColor]
 
-    func color(for widget: CPUMenuWidget) -> WidgetColor {
+    func color(for widget: MenuWidget) -> WidgetColor {
         widgetColors[widget] ?? .system
     }
 
-    func setColor(_ color: WidgetColor, for widget: CPUMenuWidget) {
+    func setColor(_ color: WidgetColor, for widget: MenuWidget) {
         // 按持久化的精度（8 位）取整，内存里的值与重启后读回的一致。
         let stored = WidgetColor(storageValue: color.storageValue) ?? .system
         guard widgetColors[widget] != stored else { return }
@@ -205,6 +224,49 @@ final class AppSettings {
         didSet { persist(panelSplitUserSystem, Key.panelSplitUserSystem) }
     }
 
+    // MARK: 功耗与散热（D44–D46）
+
+    /// 功耗与散热模块的常驻间隔覆盖；nil 表示跟随全局默认（D25）。
+    var powerIntervalOverride: SamplingInterval? {
+        didSet { persist(powerIntervalOverride?.rawValue ?? 0, Key.powerInterval) }
+    }
+
+    /// 功耗与散热模块实际使用的常驻间隔。
+    var powerInterval: SamplingInterval { powerIntervalOverride ?? globalInterval }
+
+    /// 面板「功耗与散热」tab 里 SoC/GPU/DRAM 功率、温度与风扇的间隔（默认 2 s）；整机功率固定每秒。
+    var powerPanelInterval: Int {
+        didSet { persist(powerPanelInterval, Key.powerPanelInterval) }
+    }
+
+    /// 功耗图的默认跨度。
+    var powerChartSpan: ChartSpan {
+        didSet { persist(powerChartSpan.rawValue, Key.powerChartSpan) }
+    }
+
+    /// 功耗图是否叠加 SoC 功率。
+    var powerChartOverlaySoC: Bool {
+        didSet { persist(powerChartOverlaySoC, Key.powerChartOverlaySoC) }
+    }
+
+    /// 是否记录功耗与散热历史（默认开）。
+    var historyPowerEnabled: Bool {
+        didSet { persist(historyPowerEnabled, Key.historyPower) }
+    }
+
+    /// 是否记录能耗（D46：后台每秒读一个 SMC 键，默认开）。
+    var historyEnergyEnabled: Bool {
+        didSet { persist(historyEnergyEnabled, Key.historyEnergy) }
+    }
+
+    /// 某个模块实际使用的常驻间隔。
+    func interval(for module: MenuModule) -> SamplingInterval {
+        switch module {
+        case .cpu: cpuInterval
+        case .power: powerInterval
+        }
+    }
+
     /// 面板里可选的间隔，秒。
     static let panelIntervals = [1, 2, 5]
     static let topNRowChoices = [0, 3, 5, 8, 10]
@@ -235,7 +297,7 @@ final class AppSettings {
             defaults?.string(forKey: Key.cpuUsagePresentation).flatMap(CPUUsagePresentation.init(rawValue:))
             ?? legacyStyle.flatMap(CPUUsagePresentation.init(graphicStyle:)) ?? .number
         widgetColors = Dictionary(
-            uniqueKeysWithValues: CPUMenuWidget.allCases.map { widget in
+            uniqueKeysWithValues: MenuWidget.allCases.map { widget in
                 (widget, defaults?.string(forKey: Key.widgetColor(widget)).flatMap(WidgetColor.init(storageValue:)) ?? .system)
             })
         panelFreqInterval = Self.int(defaults, Key.panelFreqInterval, choices: Self.panelIntervals) ?? 5
@@ -245,6 +307,16 @@ final class AppSettings {
         panelGrouping = defaults?.string(forKey: Key.panelGrouping).flatMap(TopNGrouping.init(rawValue:)) ?? .byApp
         panelChartSpan = defaults?.string(forKey: Key.panelChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
         panelSplitUserSystem = defaults?.object(forKey: Key.panelSplitUserSystem) as? Bool ?? true
+        powerWidgetsVisible = Dictionary(
+            uniqueKeysWithValues: MenuWidget.widgets(of: .power).map { widget in
+                (widget, defaults?.object(forKey: Key.widgetVisible(widget)) as? Bool ?? widget.visibleByDefault)
+            })
+        powerIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.powerInterval)) }
+        powerPanelInterval = Self.int(defaults, Key.powerPanelInterval, choices: Self.panelIntervals) ?? 2
+        powerChartSpan = defaults?.string(forKey: Key.powerChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
+        powerChartOverlaySoC = defaults?.object(forKey: Key.powerChartOverlaySoC) as? Bool ?? true
+        historyPowerEnabled = defaults?.object(forKey: Key.historyPower) as? Bool ?? true
+        historyEnergyEnabled = defaults?.object(forKey: Key.historyEnergy) as? Bool ?? true
     }
 
     private static func int(_ defaults: UserDefaults?, _ key: String, in range: ClosedRange<Int>) -> Int? {
@@ -341,11 +413,38 @@ enum ChartSpan: String, CaseIterable, Identifiable {
     var usesHistory: Bool { seconds > 900 }
 }
 
-/// CPU 模块的菜单栏 widget：一个 widget 只显示一项指标（D38）。
-enum CPUMenuWidget: String, CaseIterable, Identifiable {
+/// 菜单栏 widget：一个 widget 只显示一项指标（D38），每个 widget 属于一个模块。
+/// CPU 四项的 rawValue 沿用 CPU 模块的命名，设置键与 autosaveName 都不变。
+enum MenuWidget: String, CaseIterable, Identifiable {
     case usage
     case frequency
     case temperature
+    case power
+    // 功耗与散热（D44）
+    case systemPower
+    case socHotspot
+    case socPower
+    case gpuPower
+    case fan
+
+    var id: String { rawValue }
+
+    var module: MenuModule {
+        switch self {
+        case .usage, .frequency, .temperature, .power: .cpu
+        case .systemPower, .socHotspot, .socPower, .gpuPower, .fan: .power
+        }
+    }
+
+    static func widgets(of module: MenuModule) -> [MenuWidget] { allCases.filter { $0.module == module } }
+
+    /// 出厂默认是否显示（D38：CPU 只开占用；D44：功耗只开整机功率）。
+    var visibleByDefault: Bool { self == .usage || self == .systemPower }
+}
+
+/// widget 所属的模块：决定常驻采集间隔、点击后预选的面板 tab、设置页的位置。
+enum MenuModule: String, CaseIterable, Identifiable {
+    case cpu
     case power
 
     var id: String { rawValue }

@@ -18,6 +18,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case general
     case menuBar
     case cpu
+    case power
     case history
     case privacy
     case diagnostics
@@ -30,6 +31,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .general: String(localized: "通用")
         case .menuBar: String(localized: "菜单栏")
         case .cpu: String(localized: "CPU")
+        case .power: String(localized: "功耗与散热")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -42,6 +44,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .general: "gearshape"
         case .menuBar: "menubar.rectangle"
         case .cpu: "cpu"
+        case .power: "bolt"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
@@ -64,17 +67,20 @@ final class SettingsController {
     private let store: MetricStore
     private let throttle: ThrottleMonitor
     private let engine: SamplingEngine
-    private let services: CPUServices
+    private let services: AppServices
     private let diagnosticsDemand: DemandSlot
     /// 诊断页的逐核频率（cpu.freq.cores，2 s，CPU 模块设计 §7.4）。
     private let coreFrequencyDemand: DemandSlot
+    /// 诊断页的功耗数据（power.*，2 s）与展开的传感器目录（sensors.catalog，5 s）。
+    private let powerDemand: DemandSlot
+    private let catalogDemand: DemandSlot
 
     private var openSettingsAction: (() -> Void)?
     private weak var window: NSWindow?
     private var windowObservers: [any NSObjectProtocol] = []
 
     init(
-        settings: AppSettings, store: MetricStore, throttle: ThrottleMonitor, engine: SamplingEngine, services: CPUServices
+        settings: AppSettings, store: MetricStore, throttle: ThrottleMonitor, engine: SamplingEngine, services: AppServices
     ) {
         self.settings = settings
         self.store = store
@@ -83,6 +89,8 @@ final class SettingsController {
         self.services = services
         self.diagnosticsDemand = DemandSlot(engine: engine)
         self.coreFrequencyDemand = DemandSlot(engine: engine)
+        self.powerDemand = DemandSlot(engine: engine)
+        self.catalogDemand = DemandSlot(engine: engine)
     }
 
     /// 把 Settings 场景挂到 NSApplication 上（启动时调用一次）。
@@ -91,6 +99,7 @@ final class SettingsController {
             settings: settings, store: store, throttle: throttle, state: state, services: services, engine: engine,
             windowAttached: { [weak self] window in self?.attach(window) },
             diagnosticsVisibilityChanged: { [weak self] visible in self?.setDiagnosticsVisible(visible) },
+            catalogVisibilityChanged: { [weak self] visible in self?.setCatalogVisible(visible) },
             runSelfTests: { [engine] in
                 Task { await engine.runSelfTests() }
             })
@@ -166,6 +175,19 @@ final class SettingsController {
         coreFrequencyDemand.set(
             visible && state.isWindowOpen
                 ? Demand(collectors: [CoreFrequencyCollector.collectorID], interval: 2, source: .diagnostics) : nil)
+        // 遥测对账要整机功率每秒一次；原始功率键、最热点、GPU 每 2 s。
+        powerDemand.set(
+            visible && state.isWindowOpen
+                ? Demand(
+                    collectors: [PowerRailCollector.collectorID, PowerSensorCollector.collectorID, GPUPowerCollector.collectorID],
+                    interval: 1, source: .diagnostics) : nil)
+        if !visible { catalogDemand.set(nil) }
+    }
+
+    private func setCatalogVisible(_ visible: Bool) {
+        catalogDemand.set(
+            visible && state.isWindowOpen
+                ? Demand(collectors: [SensorCatalog.collectorID], interval: 5, source: .diagnostics) : nil)
     }
 }
 
@@ -175,9 +197,10 @@ struct SettingsContext {
     let store: MetricStore
     let throttle: ThrottleMonitor
     let state: SettingsState
-    let services: CPUServices
+    let services: AppServices
     let engine: SamplingEngine
     let windowAttached: (NSWindow) -> Void
     let diagnosticsVisibilityChanged: (Bool) -> Void
+    let catalogVisibilityChanged: (Bool) -> Void
     let runSelfTests: () -> Void
 }

@@ -1,6 +1,7 @@
 // sysctl 读取的小封装（公开 API）。
 
 import Darwin
+import Foundation
 
 /// 硬件与系统信息，全部在运行时读取，不写死任何机型的值（D20）。
 public enum SystemInfo: Sendable {
@@ -23,6 +24,15 @@ public enum SystemInfo: Sendable {
     /// 系统 build 号，例如 `26A428`（`kern.osversion`）。K19 的复检时机之一是它发生变化。
     public static var osBuild: String? {
         sysctlString("kern.osversion")
+    }
+
+    /// 本次开机的时刻（`kern.boottime`）：PMGR 计数与遥测累加器都从开机起算，开机变了就要作废旧的基线。
+    public static var bootTime: Date? {
+        var boot = timeval()
+        var size = MemoryLayout<timeval>.size
+        var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        guard sysctl(&mib, 2, &boot, &size, nil, 0) == 0, boot.tv_sec > 0 else { return nil }
+        return Date(timeIntervalSince1970: Double(boot.tv_sec) + Double(boot.tv_usec) / 1e6)
     }
 
     static func sysctlInt32(_ name: String) -> Int32? {

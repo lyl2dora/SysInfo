@@ -296,8 +296,14 @@ final class CoresDrawView: LiveDrawView {
 // MARK: - 历史图的绘制区
 
 final class ChartDrawView: LiveDrawView {
+    var series: ChartSeries = .cpuUsage {
+        didSet { if series != oldValue { needsDisplay = true } }
+    }
     /// 历史库读出的点（1 时、24 时、7 天）；为 nil 时画内存环形缓冲（2 分、15 分）。
-    var stored: [CPUHistoryChart.StoredPoint]? {
+    var stored: [HistoryChart.StoredPoint]? {
+        didSet { needsDisplay = true }
+    }
+    var storedOverlay: [HistoryChart.StoredPoint]? {
         didSet { needsDisplay = true }
     }
     var spanSeconds: Double = 120 {
@@ -311,11 +317,11 @@ final class ChartDrawView: LiveDrawView {
         var segment: Int
     }
 
-    private func points() -> [Point] {
+    private func points(_ metric: MetricID, stored: [HistoryChart.StoredPoint]?) -> [Point] {
         if let stored {
             let now = Date()
             var segment = 0
-            var previous: CPUHistoryChart.StoredPoint?
+            var previous: HistoryChart.StoredPoint?
             return stored.map { p in
                 if let previous, p.date.timeIntervalSince(previous.date) > p.bucket * 1.5 { segment += 1 }
                 previous = p
@@ -323,25 +329,36 @@ final class ChartDrawView: LiveDrawView {
                 return Point(x: min(x, 0), y: p.avg, peak: p.max, segment: segment)
             }
         }
-        let raw = store.recentPoints(.cpuUsageTotal, seconds: spanSeconds)  // 观察：数据变化时重绘
+        let raw = store.recentPoints(metric, seconds: spanSeconds)  // 观察：数据变化时重绘
         guard let newest = raw.last?.continuousNanos else { return [] }
-        let maxGap = store.maxContinuousGapNanos(for: CPULoadCollector.collectorID)
+        let maxGap = store.maxContinuousGapNanos(for: series.collector)
         return TimeSeries.segmented(raw, maxGapNanos: maxGap).map { point, value, segment in
             Point(x: -Double(newest - point.continuousNanos) / 1e9, y: value, peak: nil, segment: segment)
         }
+    }
+
+    /// 功率纵轴的上限：数据（含峰值、叠加线）的最大值向上取到 5、10、20、50…
+    static func niceCeiling(_ value: Double) -> Double {
+        let candidates: [Double] = [5, 10, 20, 50, 100, 200, 500, 1000]
+        return candidates.first { $0 >= value * 1.05 } ?? (value * 1.1).rounded(.up)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
         let span = spanSeconds
         let size = bounds.size
+        let all = points(series.metric, stored: stored)
+        let overlay = series.overlay.map { points($0, stored: storedOverlay) } ?? []
+        let top: Double =
+            series.scale == .unit
+            ? 1 : Self.niceCeiling((all.map { $0.peak ?? $0.y } + overlay.map(\.y)).max() ?? 0)
         func x(_ v: Double) -> CGFloat { CGFloat((v + span) / span) * size.width }
-        func y(_ v: Double) -> CGFloat { size.height * (1 - CGFloat(min(max(v, 0), 1))) }
+        func y(_ v: Double) -> CGFloat { size.height * (1 - CGFloat(min(max(v / top, 0), 1))) }
         // 网格
         let grid = NSBezierPath()
         for level in [0.0, 0.5, 1.0] {
-            grid.move(to: NSPoint(x: 0, y: y(level)))
-            grid.line(to: NSPoint(x: size.width, y: y(level)))
+            grid.move(to: NSPoint(x: 0, y: y(level * top)))
+            grid.line(to: NSPoint(x: size.width, y: y(level * top)))
         }
         for t in [-span, -span / 2, 0] {
             grid.move(to: NSPoint(x: x(t), y: 0))
@@ -352,7 +369,6 @@ final class ChartDrawView: LiveDrawView {
         NSColor.secondaryLabelColor.withAlphaComponent(0.35).setStroke()
         grid.stroke()
 
-        let all = points()
         let segments = Dictionary(grouping: all, by: \.segment).values.map { $0.sorted { $0.x < $1.x } }
         let accent = NSColor.controlAccentColor
         for segment in segments where !segment.isEmpty {
@@ -385,9 +401,30 @@ final class ChartDrawView: LiveDrawView {
             accent.setStroke()
             line.stroke()
         }
+        // 叠加线（例如 SoC 功率）：只画线，不填充。
+        for segment in Dictionary(grouping: overlay, by: \.segment).values.map({ $0.sorted { $0.x < $1.x } }) where segment.count > 1 {
+            let line = NSBezierPath()
+            for (i, p) in segment.enumerated() {
+                let pt = NSPoint(x: x(p.x), y: y(p.y))
+                if i == 0 { line.move(to: pt) } else { line.line(to: pt) }
+            }
+            line.lineWidth = 1
+            line.lineJoinStyle = .round
+            NSColor.systemOrange.setStroke()
+            line.stroke()
+        }
         let latest = all.max { $0.x < $1.x }
-        setAccessibilityLabel(
-            String(localized: "CPU 占用图，最近值 \(latest.map { PercentFormat.string(fromRatio: $0.y) } ?? "—")"))
+        if series.scale == .watts {
+            // 功率刻度画在绘制区里（随数据变化，SwiftUI 那边不读数据）。
+            for level in [1.0, 0.5] {
+                let text = Self.text(Formatting.wattsShort(top * level), Self.caption2, .secondaryLabelColor)
+                Self.draw(text, x: 2, y: y(top * level) + 1)
+            }
+            setAccessibilityLabel(String(localized: "功率图，最近值 \(latest.map { Formatting.watts($0.y) } ?? "—")"))
+        } else {
+            setAccessibilityLabel(
+                String(localized: "CPU 占用图，最近值 \(latest.map { PercentFormat.string(fromRatio: $0.y) } ?? "—")"))
+        }
     }
 }
 

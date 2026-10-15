@@ -1,4 +1,4 @@
-// 菜单栏 CPU item 的自绘 view（K32、D06、D32，CPU 模块设计 §7.1）。
+// 菜单栏 widget 的自绘 view（K32、D06、D32、D38，CPU 模块设计 §7.1，功耗与散热模块设计 §7.1）。
 //
 // - 宽度按样式的最坏情况算好，运行中不改（改宽会让 MenuBarAgent 多占 4–5% 的核）。只有用户改样式、
 //   标签开关，或拓扑决定的柱数变化时才重新定宽；
@@ -10,9 +10,9 @@ import AppKit
 import SysModel
 
 /// 菜单栏 item 的显示配置。
-struct CPUStatusItemConfiguration: Equatable {
+struct StatusItemConfiguration: Equatable {
     /// 这个 widget 显示哪一项（D38：一个 widget 一项）。
-    var widget: CPUMenuWidget = .usage
+    var widget: MenuWidget = .usage
     /// 占用 widget 的样式；其余 widget 只用上下或左右布局（图形样式按上下布局画）。
     var style: MenuBarCPUStyle = .stacked
     var showsLabel = true
@@ -24,7 +24,7 @@ struct CPUStatusItemConfiguration: Equatable {
     var coreCount = 8
 }
 
-final class CPUStatusItemView: NSView {
+final class StatusItemView: NSView {
     // 上下布局（D32）：标签与数值同一字号、同一字重（2026-10-15 用户要求上下一致，偏离记录）。
     static let stackedFontSize: CGFloat = 10
     private static let stackedLabelFont = NSFont.systemFont(ofSize: stackedFontSize, weight: .medium)
@@ -41,27 +41,38 @@ final class CPUStatusItemView: NSView {
     private static let totalBarWidth: CGFloat = 6
 
     /// 菜单栏小标签用英文缩写（D23）。
-    private static func label(_ widget: CPUMenuWidget) -> String {
+    private static func label(_ widget: MenuWidget) -> String {
         switch widget {
         case .usage: String(localized: "CPU", comment: "菜单栏小标签，保持英文缩写")
         case .frequency: String(localized: "FREQ", comment: "菜单栏小标签：CPU 频率，保持英文缩写")
         case .temperature: String(localized: "TEMP", comment: "菜单栏小标签：CPU 温度，保持英文缩写")
         case .power: String(localized: "PWR", comment: "菜单栏小标签：CPU 功耗，保持英文缩写")
+        case .systemPower: String(localized: "SYS", comment: "菜单栏小标签：整机功率，保持英文缩写")
+        case .socHotspot: String(localized: "HOT", comment: "菜单栏小标签：SoC 最热点，保持英文缩写")
+        case .socPower: String(localized: "SOC", comment: "菜单栏小标签：SoC 功率，保持英文缩写")
+        case .gpuPower: String(localized: "GPU", comment: "菜单栏小标签：GPU 功率，保持英文缩写")
+        case .fan: String(localized: "FAN", comment: "菜单栏小标签：风扇转速，保持英文缩写")
         }
     }
 
     /// 各 widget 数值的最坏情况，用来定宽。
-    private static func widestValue(_ widget: CPUMenuWidget) -> String {
+    private static func widestValue(_ widget: MenuWidget) -> String {
         switch widget {
         case .usage: "100%"
         case .frequency: "9.99G"
-        case .temperature: "125°"
-        case .power: "99.9W"
+        case .temperature, .socHotspot: "125°"
+        case .power, .systemPower, .socPower, .gpuPower: "99.9W"
+        case .fan: "9999"
         }
     }
 
+    /// 功率的显示：<10 W 一位小数，否则取整（「99.9W」与「188W」同宽）。
+    static func wattsText(_ watts: Double) -> String {
+        String(format: watts < 10 ? "%.1fW" : "%.0fW", watts)
+    }
+
     /// 实际生效的样式：非占用 widget 只有上下、左右两种。
-    static func effectiveStyle(_ c: CPUStatusItemConfiguration) -> MenuBarCPUStyle {
+    static func effectiveStyle(_ c: StatusItemConfiguration) -> MenuBarCPUStyle {
         guard c.widget != .usage else { return c.style }
         return c.style == .inline ? .inline : .stacked
     }
@@ -71,7 +82,7 @@ final class CPUStatusItemView: NSView {
     }
 
     /// 按样式的最坏情况算好的固定宽度。
-    static func fixedWidth(for c: CPUStatusItemConfiguration) -> CGFloat {
+    static func fixedWidth(for c: StatusItemConfiguration) -> CGFloat {
         let label = label(c.widget)
         let widestValue = widestValue(c.widget)
         let stackedLabel = c.showsLabel ? textWidth(label, stackedLabelFont) : 0
@@ -95,11 +106,11 @@ final class CPUStatusItemView: NSView {
     }
 
     private let store: MetricStore
-    var configuration: CPUStatusItemConfiguration {
+    var configuration: StatusItemConfiguration {
         didSet { needsDisplay = true }
     }
 
-    init(store: MetricStore, height: CGFloat, configuration: CPUStatusItemConfiguration) {
+    init(store: MetricStore, height: CGFloat, configuration: StatusItemConfiguration) {
         self.store = store
         self.configuration = configuration
         super.init(frame: NSRect(x: 0, y: 0, width: Self.fixedWidth(for: configuration), height: height))
@@ -115,8 +126,8 @@ final class CPUStatusItemView: NSView {
 
     override var isFlipped: Bool { false }
 
-    /// 非占用 widget 的数值文字；没有数据时为 nil。
-    private func valueText(_ widget: CPUMenuWidget) -> String? {
+    /// widget 的数值文字；没有数据时为 nil。
+    private func valueText(_ widget: MenuWidget) -> String? {
         switch widget {
         case .usage:
             if case .value(let ratio, _) = store.menuBarCPU { return PercentFormat.string(fromRatio: ratio) }
@@ -128,7 +139,19 @@ final class CPUStatusItemView: NSView {
         case .temperature:
             return store.latest[.cpuTemperatureMax]?.value.map { String(format: "%.0f°", $0) }
         case .power:
-            return store.latest[.cpuPowerTotal]?.value.map { String(format: $0 < 10 ? "%.1fW" : "%.0fW", $0) }
+            return store.latest[.cpuPowerTotal]?.value.map(Self.wattsText)
+        case .systemPower:
+            return store.smoothed[.powerSystem].map(Self.wattsText)
+        case .socPower:
+            return store.smoothed[.powerSoC].map(Self.wattsText)
+        case .gpuPower:
+            return store.smoothed[.powerGPU].map(Self.wattsText)
+        case .socHotspot:
+            return store.latest[.thermalSoCHotspot]?.value.map { String(format: "%.0f°", $0) }
+        case .fan:
+            // 多风扇时显示最快的一个。
+            let rpm = store.latest.compactMap { id, sample in id.fanSpeedIndex != nil ? sample.value : nil }.max()
+            return rpm.map { String(format: "%.0f", $0) }
         }
     }
 

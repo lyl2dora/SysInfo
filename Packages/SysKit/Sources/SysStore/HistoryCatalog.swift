@@ -1,6 +1,6 @@
 // 哪些指标进历史库、怎么聚合（CPU 模块设计 §6，边界稿 §5.5）。
 //
-// CPU 每分钟约 12–16 行，随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
+// CPU 每分钟约 12–16 行；功耗与散热每分钟约 6 行（整机、SoC、GPU、DRAM 功率，最热点，风扇转速），随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
 // 每簇与总功耗、1 分钟负载均值、热状态与热压力。每核、每簇占用、中断、任务数不入库。
 //
 // 两类聚合：
@@ -19,6 +19,12 @@ public enum HistoryAggregation: String, Sendable, Hashable, Codable {
     case instant
 }
 
+/// 指标属于哪个模块：各模块的「记录历史」开关分别控制（D41：记录开关在模块页）。
+public enum HistoryModule: String, Sendable, Hashable, Codable, CaseIterable {
+    case cpu
+    case power
+}
+
 /// 历史库里一个指标的说明。
 public struct HistoryMetricSpec: Sendable, Hashable {
     public var aggregation: HistoryAggregation
@@ -26,6 +32,14 @@ public struct HistoryMetricSpec: Sendable, Hashable {
     public var unit: String
     /// 产生它的采集器：用来算样本覆盖的区间（距该采集器上一次运行的时间）。
     public var collector: CollectorID
+    public var module: HistoryModule = .cpu
+
+    public init(aggregation: HistoryAggregation, unit: String, collector: CollectorID, module: HistoryModule = .cpu) {
+        self.aggregation = aggregation
+        self.unit = unit
+        self.collector = collector
+        self.module = module
+    }
 }
 
 public enum HistoryCatalog {
@@ -45,8 +59,22 @@ public enum HistoryCatalog {
             return HistoryMetricSpec(aggregation: .instant, unit: "load", collector: CPUMiscCollector.collectorID)
         case .cpuThermalState, .cpuThermalPressure:
             return HistoryMetricSpec(aggregation: .instant, unit: "level", collector: CPUMiscCollector.collectorID)
+        // 功耗与散热（功耗与散热模块设计 §6）：墙插估算、风扇目标与模式、低功耗模式不入库。
+        case .powerSystem:
+            return HistoryMetricSpec(aggregation: .instant, unit: "W", collector: PowerRailCollector.collectorID, module: .power)
+        case .powerSoC, .powerDRAM:
+            return HistoryMetricSpec(aggregation: .instant, unit: "W", collector: PowerSensorCollector.collectorID, module: .power)
+        case .powerGPU:
+            // AGX 是累计计数的差分，样本本身就是一段区间的平均功率。
+            return HistoryMetricSpec(aggregation: .interval, unit: "W", collector: GPUPowerCollector.collectorID, module: .power)
+        case .thermalSoCHotspot:
+            return HistoryMetricSpec(
+                aggregation: .instant, unit: "degC", collector: PowerSensorCollector.collectorID, module: .power)
         default:
             break
+        }
+        if id.fanSpeedIndex != nil {
+            return HistoryMetricSpec(aggregation: .instant, unit: "rpm", collector: PowerSensorCollector.collectorID, module: .power)
         }
         if id.cpuUsagePerfLevelIndex != nil {
             return HistoryMetricSpec(aggregation: .interval, unit: "ratio", collector: CPULoadCollector.collectorID)

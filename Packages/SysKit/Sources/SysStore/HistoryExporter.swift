@@ -1,8 +1,9 @@
 // 历史导出（CPU 模块设计 §6 Exporter，D30，边界稿 §5.5）。只在用户手动触发时运行。
 //
 // - CSV：一个文件夹，`system.csv` 是宽表（ISO 8601 UTC 时间，每个指标 avg、max 两列，空洞留空）、
-//   `apps.csv` 是长表、`metadata.json` 写机型、芯片、档名与核数、单位和 app 版本；
-// - JSON Lines：长表，首行是元数据；
+//   `apps.csv` 是长表、`energy.csv` 是按小时的能耗（source：integrated 为 PDTR 积分，filled 为系统累计补数，D46）、
+//   `metadata.json` 写机型、芯片、档名与核数、单位和 app 版本；
+// - JSON Lines：长表，首行是元数据，能耗为 `energy` 记录；
 // - 不导出任何设备唯一标识：库里本来就没有序列号、UUID、MAC、IP；机型标识和芯片名不是唯一标识，照常包含。
 // 调用方应先让 HistoryRecorder 提交内存里的数据（`flush()`）。
 
@@ -80,6 +81,7 @@ public enum HistoryExporter {
         }
         let rows = try store.rows(from: from, to: to, granularity: options.granularity, metrics: filter)
         let apps = options.includeApps ? try store.appRows(from: from, to: to) : []
+        let energy = try store.energyHours(from: HistoryStore.floorDiv(from, 60), to: HistoryStore.floorDiv(to - 1, 60) + 1)
         let units = Dictionary(try store.metrics().map { ($0.metric, $0.unit) }, uniquingKeysWith: { a, _ in a })
         let metricNames = Array(Set(rows.map(\.metric))).sorted()
         let metadata = makeMetadata(
@@ -95,6 +97,11 @@ public enum HistoryExporter {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(metadata).write(to: meta, options: .atomic)
             var out = [system, meta]
+            if !energy.isEmpty {
+                let energyURL = destination.appendingPathComponent("energy.csv")
+                try energyCSV(energy).write(to: energyURL, atomically: true, encoding: .utf8)
+                out.insert(energyURL, at: 1)
+            }
             if options.includeApps {
                 let appsURL = destination.appendingPathComponent("apps.csv")
                 try appsCSV(apps).write(to: appsURL, atomically: true, encoding: .utf8)
@@ -104,7 +111,8 @@ public enum HistoryExporter {
         case .jsonLines:
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try jsonLines(metadata: metadata, rows: rows, apps: apps).write(to: destination, atomically: true, encoding: .utf8)
+            try jsonLines(metadata: metadata, rows: rows, apps: apps, energy: energy)
+                .write(to: destination, atomically: true, encoding: .utf8)
             return [destination]
         }
     }
@@ -133,6 +141,7 @@ public enum HistoryExporter {
             notes: [
                 "avg/max are per-\(options.granularity.rawValue) aggregates in SI units; empty max means the samples covered windows too long to have a peak.",
                 "apps: top \(MinuteAggregator.appsPerMinute) apps per minute by CPU; cpu_cores = cpu_ns / 60e9.",
+                "energy: hourly joules; source integrated = 1 Hz PDTR integral, filled = PowerTelemetryData accumulator for periods when SysInfo was not running (may be low under heavy load).",
             ])
     }
 
@@ -177,9 +186,23 @@ public enum HistoryExporter {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    typealias EnergyHour = (hour: Int64, source: Int64, joules: Double, covered: Double)
+
+    static func sourceName(_ source: Int64) -> String { source == 0 ? "integrated" : "filled" }
+
+    static func energyCSV(_ hours: [EnergyHour]) -> String {
+        var lines = ["time,source,joules,kwh,covered_s"]
+        for h in hours {
+            lines.append(
+                [iso(h.hour * 60), sourceName(h.source), number(h.joules), number(h.joules / 3.6e6), number(h.covered)]
+                    .joined(separator: ","))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     static func jsonLines(
         metadata: HistoryExportMetadata, rows: [(minute: Int64, metric: MetricID, point: HistoryPoint)],
-        apps: [(minute: Int64, key: String, name: String, cpuNanos: Int64, energy: Int64?)]
+        apps: [(minute: Int64, key: String, name: String, cpuNanos: Int64, energy: Int64?)], energy: [EnergyHour] = []
     ) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -209,6 +232,17 @@ public enum HistoryExporter {
         }
         for a in apps {
             let line = AppLine(t: iso(a.minute), key: a.key, name: a.name, cpu_ns: a.cpuNanos, energy_nj: a.energy)
+            lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
+        }
+        struct EnergyLine: Encodable {
+            var type = "energy"
+            var t: String
+            var source: String
+            var joules: Double
+            var covered_s: Double
+        }
+        for h in energy {
+            let line = EnergyLine(t: iso(h.hour * 60), source: sourceName(h.source), joules: h.joules, covered_s: h.covered)
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
         }
         return lines.joined(separator: "\n") + "\n"

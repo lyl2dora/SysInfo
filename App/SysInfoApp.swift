@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventPump: Task<Void, Never>?
     /// 历史记录器（D30）；打开历史库失败时为 nil，app 照常运行。
     private var history: HistoryRecorder?
-    private var services: CPUServices!
+    private var services: AppServices!
 
     /// 把 SIGTERM（`make stop`、登出、`kill`）转成正常的 `NSApp.terminate`，让 applicationWillTerminate 有机会收尾。
     private var terminateSignalSource: DispatchSourceSignal?
@@ -61,11 +61,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         noteSystemBuild()
 
         let throttle = ThrottleMonitor(engine: engine, automatic: settings.autoThrottle)
+        let power = PowerCollectors(collectors)
         let history = Self.makeHistory(
-            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first,
+            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first, power: power,
             factoryDefaults: options.factoryDefaults, settings: settings)
         self.history = history
-        let services = CPUServices(collectors: CPUCollectors(collectors), history: history, engine: engine)
+        let services = AppServices(collectors: CPUCollectors(collectors), power: power, history: history, engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
         eventPump = Task {
@@ -106,10 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         panel.state.expandDetailsInitially = options.expandDetails
+        if let tab = options.panelTab.flatMap(PanelTab.init(rawValue:)) { panel.state.selectedTab = tab }
         if options.openPanel {
             panel.showWithoutSession()
         }
-        if options.openSettings || settings.visibleCPUWidgets.isEmpty {
+        if options.openSettings || settings.visibleWidgets.isEmpty {
             settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
         }
     }
@@ -160,20 +162,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
+        let settings: AppSettings = self.settings
+        // 没有风扇的机型不出现风扇 widget（风扇在自检时发现；启动自检结束后会再调一次这里）。
+        let hasFans = services?.power.hasFans ?? false
         statusItems.update(
-            settings.visibleCPUWidgets.map { CPUStatusItemConfiguration(widget: $0, settings: settings) },
-            interval: settings.cpuInterval)
+            settings.visibleWidgets.filter { $0 != .fan || hasFans }.map { StatusItemConfiguration(widget: $0, settings: settings) },
+            intervals: { settings.interval(for: $0) })
         throttle.automatic = settings.autoThrottle
-        let configuration = HistoryRecorder.Configuration(
-            recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
-            highPrecision: settings.historyHighPrecision)
+        let configuration = Self.historyConfiguration(settings)
         Task { [history] in await history?.setConfiguration(configuration) }
         panel?.updateDemands()
     }
 
+    private static func historyConfiguration(_ settings: AppSettings) -> HistoryRecorder.Configuration {
+        HistoryRecorder.Configuration(
+            recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
+            highPrecision: settings.historyHighPrecision, recordPower: settings.historyPowerEnabled,
+            recordEnergy: settings.historyEnergyEnabled)
+    }
+
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）。
     private static func makeHistory(
-        engine: SamplingEngine, appSampler: AppSampler?, factoryDefaults: Bool, settings: AppSettings
+        engine: SamplingEngine, appSampler: AppSampler?, power: PowerCollectors, factoryDefaults: Bool, settings: AppSettings
     ) -> HistoryRecorder? {
         let url: URL?
         if factoryDefaults {
@@ -188,9 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let store = try HistoryStore(url: url)
             let recorder = HistoryRecorder(
                 store: store, engine: engine, appSampler: appSampler,
-                configuration: .init(
-                    recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
-                    highPrecision: settings.historyHighPrecision))
+                power: .init(ledger: power.ledger, pmgr: power.pmgr), configuration: historyConfiguration(settings))
             Task { await recorder.start() }
             return recorder
         } catch {

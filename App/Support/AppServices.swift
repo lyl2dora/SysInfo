@@ -1,4 +1,4 @@
-// CPU 模块在 app 层共用的对象（CPU 模块设计 §7）：采集器实例、Top N 模型、历史记录器。
+// app 层共用的对象（CPU 模块设计 §7、功耗与散热模块设计 §7）：采集器实例、Top N 模型、历史记录器。
 // 面板、设置页、诊断页从这里取，不各自持有采集器。
 
 import AppKit
@@ -23,6 +23,29 @@ struct CPUCollectors {
         sensors = collectors.compactMap { $0 as? SensorCollector }.first
         apps = collectors.compactMap { $0 as? AppSampler }.first
     }
+}
+
+/// 引擎里的功耗与散热采集器实例（诊断页、面板的 30 分钟卡片要直接读它们的状态）。
+struct PowerCollectors {
+    var rail: PowerRailCollector?
+    var sensors: PowerSensorCollector?
+    var gpu: GPUPowerCollector?
+    var pmgr: PMGRBatchCollector?
+    var catalog: SensorCatalog?
+
+    init(_ collectors: [any Collector]) {
+        rail = collectors.compactMap { $0 as? PowerRailCollector }.first
+        sensors = collectors.compactMap { $0 as? PowerSensorCollector }.first
+        gpu = collectors.compactMap { $0 as? GPUPowerCollector }.first
+        pmgr = collectors.compactMap { $0 as? PMGRBatchCollector }.first
+        catalog = collectors.compactMap { $0 as? SensorCatalog }.first
+    }
+
+    /// 跨采集器的核对账本（几个功耗采集器共用同一个）。
+    var ledger: PowerLedger? { rail?.ledger }
+
+    /// 有风扇（风扇 widget 与面板风扇行只在有风扇时出现）。
+    var hasFans: Bool { !(sensors?.fans.isEmpty ?? true) }
 }
 
 /// Top N（D31，CPU 模块设计 §5.7、§7.2）：只在 CPU tab 可见且行数大于 0 时工作。
@@ -63,6 +86,9 @@ final class TopNModel {
             rows = []
             return
         }
+        // 后台历史每 10 s 扫一次 coalition，`latestWindow` 里通常已有不超过 10 s 的窗口：
+        // 立即用它组装第一版，不必等面板自己的两次扫描（约 2–3 s 的「等待数据」）。
+        if !isFallback { coalitionTick(maxAgeSeconds: Self.firstWindowMaxAge) }
         if isFallback {
             _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
             let timer = Timer(timeInterval: TimeInterval(interval), repeats: true) { [weak self] _ in
@@ -73,9 +99,16 @@ final class TopNModel {
         }
     }
 
-    /// 引擎交付了一个 `app.coalition` 结果。
-    func coalitionTick() {
+    /// 面板打开时可以直接采用的窗口的最大年龄，秒（后台历史 10 s 扫一次，留一点余量）。
+    static let firstWindowMaxAge: Double = 15
+
+    /// 引擎交付了一个 `app.coalition` 结果；或面板刚打开，用已有的窗口（不超过 `maxAgeSeconds`）。
+    func coalitionTick(maxAgeSeconds: Double? = nil) {
         guard !isFallback, !building, !isFrozen, rowCount > 0, let sampler, let window = sampler.latestWindow else { return }
+        if let maxAgeSeconds {
+            let age = Double(SampleTime.now().continuousNanos &- window.time.continuousNanos) / 1e9
+            guard age <= maxAgeSeconds else { return }
+        }
         building = true
         let builder = builder
         let rows = rowCount
@@ -162,17 +195,19 @@ final class TopNModel {
     }
 }
 
-/// CPU 模块在 app 层的共用对象。
-final class CPUServices {
+/// app 层的共用对象。
+final class AppServices {
     let collectors: CPUCollectors
+    let power: PowerCollectors
     let topN: TopNModel
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
     private let interruptDemand: DemandSlot
 
-    init(collectors: CPUCollectors, history: HistoryRecorder?, engine: SamplingEngine) {
+    init(collectors: CPUCollectors, power: PowerCollectors, history: HistoryRecorder?, engine: SamplingEngine) {
         self.collectors = collectors
+        self.power = power
         self.topN = TopNModel(sampler: collectors.apps)
         self.history = history
         self.interruptDemand = DemandSlot(engine: engine)

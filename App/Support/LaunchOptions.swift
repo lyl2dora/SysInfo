@@ -12,6 +12,8 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
     var pinPanel = false
     /// `--expand-details`：面板的「详情」与「中断来源」一开始就展开（开销测量的最重一档）。
     var expandDetails = false
+    /// `--panel-tab=<tab>`：面板一开始显示的 tab（`cpu`、`power`），截图与开销测量用。
+    var panelTab: String?
     /// `--factory-defaults`：不读写持久化的设置，只用出厂默认值（开销测量用，不改动用户的偏好）。
     var factoryDefaults = false
 
@@ -23,6 +25,7 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
         factoryDefaults = arguments.contains("--factory-defaults")
         pinPanel = arguments.contains("--pin-panel")
         expandDetails = arguments.contains("--expand-details")
+        panelTab = arguments.first { $0.hasPrefix("--panel-tab=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)
     }
 
     static let current = LaunchOptions(arguments: CommandLine.arguments)

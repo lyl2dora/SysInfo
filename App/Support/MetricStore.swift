@@ -59,6 +59,10 @@ final class MetricStore {
     }
     /// 菜单栏显示用的 CPU 总占用。
     private(set) var menuBarCPU: MenuBarReading = .noData
+    /// 菜单栏与面板概览用的平滑功率（τ = 2 s，功耗与散热模块设计 §7.1）；不可用时没有这一项。
+    private(set) var smoothed: [MetricID: Double] = [:]
+    static let smoothedIDs: Set<MetricID> = [.powerSystem, .powerSoC, .powerGPU]
+    static let powerTimeConstant: Double = 2
     /// 调度器状态（tick 数、需求、降频、各采集器健康信息）。
     var engineStatus: EngineStatus? {
         _ = revision
@@ -68,6 +72,7 @@ final class MetricStore {
     private(set) var lastTickCost: SampleCost?
 
     @ObservationIgnored private var smoother = ExponentialSmoother(timeConstant: MetricStore.menuBarTimeConstant)
+    @ObservationIgnored private var powerSmoothers: [MetricID: ExponentialSmoother] = [:]
     @ObservationIgnored private var ticksSinceLog = 0
 
     func apply(_ event: EngineEvent) {
@@ -119,6 +124,11 @@ final class MetricStore {
             }
             if sample.id == .cpuUsageTotal {
                 updateMenuBar(with: sample)
+            } else if Self.smoothedIDs.contains(sample.id) {
+                var smoother = powerSmoothers[sample.id] ?? ExponentialSmoother(timeConstant: Self.powerTimeConstant)
+                let value = smoother.update(sample.value, atNanos: sample.time.continuousNanos)
+                powerSmoothers[sample.id] = smoother
+                if smoothed[sample.id] != value { smoothed[sample.id] = value }
             }
         }
         if !cores.isEmpty {
