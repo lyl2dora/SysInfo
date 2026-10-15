@@ -10,3 +10,7 @@
 ## power-thermal/（2026-10-15，功耗与散热模块边界补测）
 - 在 M5 Pro 与 M4 Pro（macOS 27.0.1）上同时跑：`build.sh <outdir>` 编译，`orchestrate.sh <dir> <tag>` 等到 PMGR 批次边界后在 30 分钟窗口里跑负载（`ROUND=2` 为第二轮），`analyze.py` / `analyze_r2.py` / `tele.py` 分析，`costbench.c` 测真实节奏开销。
 - 结论见 `docs/design/power-thermal-boundary.md`。原始记录与输出（`out/`）按 `.gitignore` 只留在本地。
+
+## memory-module/（2026-10-16，内存模块边界复核）
+- `mem_probe.c`：活动监视器口径的页面队列（sysctl 与 host_statistics64 对照）、压力、Swap、ECC / MTE、同 uid footprint 全扫耗时、IOReport「DCS BW」通道发现（M5 组名 `PMP0`、M4 为 `PMP`）。在 M5 Pro 与 M4 Pro 上各跑一次，输出 `mem_probe_m5.txt` / `mem_probe_m4.txt` 按 `.gitignore` 只留在本地。
+- 编译：`xcrun clang -O2 -o mem_probe mem_probe.c -framework CoreFoundation`。结论见 `docs/design/memory.md` §1。
