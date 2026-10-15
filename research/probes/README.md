@@ -14,3 +14,6 @@
 ## memory-module/（2026-10-16，内存模块边界复核）
 - `mem_probe.c`：活动监视器口径的页面队列（sysctl 与 host_statistics64 对照）、压力、Swap、ECC / MTE、同 uid footprint 全扫耗时、IOReport「DCS BW」通道发现（M5 组名 `PMP0`、M4 为 `PMP`）。在 M5 Pro 与 M4 Pro 上各跑一次，输出 `mem_probe_m5.txt` / `mem_probe_m4.txt` 按 `.gitignore` 只留在本地。
 - 编译：`xcrun clang -O2 -o mem_probe mem_probe.c -framework CoreFoundation`。结论见 `docs/design/memory.md` §1。
+
+## storage-module/（2026-10-16，存储模块边界）
+- `storage_probe.c`：物理盘清单（判定规则、RAID 关系、驱动 Statistics、SMART 全字段与 Identify），SMART 读取开销（重建 plugin 与常驻 plugin），以及读 SMART 时 IOReport「NVMe Power States」的驻留。只读，不打印序列号与 UUID。结论见 `docs/design/storage.md` §1。
