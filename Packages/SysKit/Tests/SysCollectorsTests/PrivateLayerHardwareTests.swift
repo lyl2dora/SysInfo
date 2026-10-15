@@ -88,6 +88,30 @@ struct PrivateLayerHardwareTests {
         }
     }
 
+    // MARK: 温度与功耗
+
+    /// 有内置档案的芯片必须匹配上档案、出全部簇的功耗；没有档案的芯片应当显示为学习中（不写死芯片，D20）。
+    @Test func sensorCollectorUsesProfileWhenAvailable() throws {
+        let topology = CPUTopologyService.shared.refresh()
+        let collector = SensorCollector(useCalibration: false)
+        let result = collector.selfTest()
+        #expect(result.isUsable, "\(result.checks.filter { !$0.passed })")
+        let output = collector.sample(at: .now())
+        let socID = try #require(ChipIdentity.socID())
+        if ChipProfileStore.bundledProfiles().contains(where: { $0.socID == socID }) {
+            #expect(collector.profile?.profile.socID == socID)
+            #expect(result.checks.first { $0.name == "cpu.sensors.keys" }?.passed == true)
+            let power = output.samples.filter { $0.id.cpuPowerClusterKey != nil }
+            #expect(Set(power.compactMap(\.id.cpuPowerClusterKey)) == Set(topology.clusters.map(\.key)))
+            #expect(power.allSatisfy { $0.value.map { (0...200).contains($0) } ?? false })
+            for sample in output.samples where sample.id.cpuTemperatureClusterKey != nil {
+                if let v = sample.value { #expect((10...125).contains(v)) }
+            }
+        } else {
+            #expect(output.samples.first { $0.id == .cpuTemperatureMax }?.quality == .unavailable(.learning("no chip profile")))
+        }
+    }
+
     // MARK: SMC
 
     @Test func smcEnumeratesKeysAndReadsATemperature() throws {

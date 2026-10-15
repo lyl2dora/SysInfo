@@ -45,4 +45,33 @@ extension MetricID {
         guard rawValue.hasPrefix(Self.clusterFrequencyPrefix) else { return nil }
         return ClusterKey(string: String(rawValue.dropFirst(Self.clusterFrequencyPrefix.count)))
     }
+
+    private static let clusterTemperaturePrefix = "cpu.temp.cluster."
+    private static let clusterPowerPrefix = "cpu.power.cluster."
+
+    /// 一个簇的温度，°C：簇内已归簇键（代表变体）有效读数的最大值。只给有温度行的簇（D33）。
+    public static func cpuTemperatureCluster(_ key: ClusterKey) -> MetricID {
+        MetricID(clusterTemperaturePrefix + key.description)
+    }
+
+    /// CPU 最高温，°C：所有 P 簇已归簇键的最大值，不含 E 簇附近读数（D33）。
+    public static let cpuTemperatureMax: MetricID = "cpu.temp.max"
+
+    /// 一个簇的实时功耗，W：专用功耗轨之和，不含 GPU。没有专用轨时不可用（D29）。
+    public static func cpuPowerCluster(_ key: ClusterKey) -> MetricID {
+        MetricID(clusterPowerPrefix + key.description)
+    }
+
+    /// CPU 总功耗，W：各簇之和；任何一簇不可用时整体不可用，不拿部分和充数。
+    public static let cpuPowerTotal: MetricID = "cpu.power.total"
+
+    public var cpuTemperatureClusterKey: ClusterKey? {
+        guard rawValue.hasPrefix(Self.clusterTemperaturePrefix) else { return nil }
+        return ClusterKey(string: String(rawValue.dropFirst(Self.clusterTemperaturePrefix.count)))
+    }
+
+    public var cpuPowerClusterKey: ClusterKey? {
+        guard rawValue.hasPrefix(Self.clusterPowerPrefix) else { return nil }
+        return ClusterKey(string: String(rawValue.dropFirst(Self.clusterPowerPrefix.count)))
+    }
 }

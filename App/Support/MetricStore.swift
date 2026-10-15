@@ -77,7 +77,8 @@ final class MetricStore {
     // MARK: - 私有
 
     private func ingest(_ result: TickResult) {
-        lastTickCost = result.cost
+        // 阻塞通道的结果单独交付（CPU 模块设计 §5.1），它的耗时不是整个 tick 的耗时。
+        if result.lane == .inline { lastTickCost = result.cost }
         guard !result.samples.isEmpty else { return }
 
         var cores: [(index: Int, sample: Sample)] = []

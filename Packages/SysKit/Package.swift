@@ -35,6 +35,8 @@ let package = Package(
         .target(
             name: "SysCollectors",
             dependencies: ["SysModel", "CSysPrivate"],
+            // 内置芯片档案（CPU 模块设计 §4.3）。
+            resources: [.copy("Resources/ChipProfiles")],
             swiftSettings: swiftSettings
         ),
 

@@ -1,0 +1,241 @@
+{
+  "description": "M4 Pro (Mac16,11)",
+  "power": {
+    "clusterRails": {
+      "d0c0": [
+        "RP02"
+      ],
+      "d0c1": [
+        "RP05",
+        "RP06"
+      ],
+      "d0c2": [
+        "RP00",
+        "RP01"
+      ]
+    },
+    "gpuRails": [
+      "RP07",
+      "RP0b",
+      "RP0c"
+    ],
+    "sharedRails": [
+      "PPSR"
+    ]
+  },
+  "schema": 1,
+  "socID": "AppleT6041PMGR",
+  "source": "research/probes/cpu-module 2026-10-15 skeptic-thermal-power (M4 Pro) + sysinfo-cli calibrate 2026-10-15; the two P clusters share one key set: the P0/P1 split in docs/design/cpu-module-boundary.md §9.3 was a lag artifact (see docs/design/cpu-module.md deviation log)",
+  "temperature": {
+    "aliasGroups": [
+      [
+        "Tp00",
+        "Tp01"
+      ],
+      [
+        "Tp04",
+        "Tp05"
+      ],
+      [
+        "Tp0C",
+        "Tp0D"
+      ],
+      [
+        "Tp0K",
+        "Tp0L"
+      ],
+      [
+        "Tp0W",
+        "Tp0X"
+      ],
+      [
+        "Tp0a",
+        "Tp0b"
+      ],
+      [
+        "Tp08",
+        "Tp09"
+      ],
+      [
+        "Tp0G",
+        "Tp0H"
+      ],
+      [
+        "Tp0O",
+        "Tp0P"
+      ],
+      [
+        "Tp0S",
+        "Tp0T"
+      ],
+      [
+        "Tp0d",
+        "Tp0e"
+      ],
+      [
+        "Tp0l",
+        "Tp0m"
+      ],
+      [
+        "Tp0o",
+        "Tp0q"
+      ],
+      [
+        "Tp0u",
+        "Tp0v"
+      ],
+      [
+        "Te04",
+        "Te05"
+      ],
+      [
+        "Te0R",
+        "Te0S"
+      ]
+    ],
+    "clusters": {
+      "d0c1": [
+        "Tp01",
+        "Tp05",
+        "Tp09",
+        "Tp0D",
+        "Tp0H",
+        "Tp0L",
+        "Tp0P",
+        "Tp0T",
+        "Tp0X",
+        "Tp0b",
+        "Tp0e",
+        "Tp0m",
+        "Tp0q",
+        "Tp0v"
+      ],
+      "d0c2": [
+        "Tp01",
+        "Tp05",
+        "Tp09",
+        "Tp0D",
+        "Tp0H",
+        "Tp0L",
+        "Tp0P",
+        "Tp0T",
+        "Tp0X",
+        "Tp0b",
+        "Tp0e",
+        "Tp0m",
+        "Tp0q",
+        "Tp0v"
+      ]
+    },
+    "excluded": [
+      "Tp1i",
+      "Tp1j",
+      "Tp1k",
+      "Tp1m",
+      "Tp1n",
+      "Tp1o",
+      "Tp1q",
+      "Tp1t",
+      "Tp1u",
+      "Tp1v",
+      "Tp1w",
+      "Tp1x",
+      "Tp1y",
+      "Tp1z",
+      "Tp20",
+      "Tp21",
+      "Tp22",
+      "Tp23",
+      "Tp24",
+      "Tp25",
+      "Tp26",
+      "Tp27",
+      "Tp28",
+      "Tp29",
+      "Tp2A",
+      "Tp2B",
+      "Tp2C",
+      "Tp2D",
+      "Tp2E",
+      "Tp2G",
+      "Tp2I",
+      "Tp2J",
+      "Tp2K",
+      "Tp2L",
+      "Tp2M",
+      "Tp2N",
+      "Tp2O",
+      "Tp2Q",
+      "Tp2R",
+      "Tp2S",
+      "Tp2T",
+      "Tp2U",
+      "Tp2V",
+      "Tp2W",
+      "Tp2X",
+      "Tpx8",
+      "Tpx9",
+      "TpxA",
+      "TpxB",
+      "TpxC",
+      "TpxD"
+    ],
+    "nearby": {
+      "d0c0": [
+        "Te05",
+        "Te0S",
+        "Tex0",
+        "Tex2"
+      ]
+    },
+    "peaks": {
+      "d0c1": [
+        "Tp02",
+        "Tp06",
+        "Tp0A",
+        "Tp0E",
+        "Tp0M",
+        "Tp0Q",
+        "Tp0U",
+        "Tp0Y",
+        "Tp0c",
+        "Tp0f"
+      ],
+      "d0c2": [
+        "Tp02",
+        "Tp06",
+        "Tp0A",
+        "Tp0E",
+        "Tp0M",
+        "Tp0Q",
+        "Tp0U",
+        "Tp0Y",
+        "Tp0c",
+        "Tp0f"
+      ]
+    },
+    "sentinels": [
+      40.0,
+      -4.0,
+      0.0
+    ],
+    "validRange": [
+      10,
+      125
+    ]
+  },
+  "topology": {
+    "clusterLevels": {
+      "d0c0": 1,
+      "d0c1": 0,
+      "d0c2": 0
+    },
+    "cpuCountsByLevel": [
+      10,
+      4
+    ]
+  },
+  "verifiedBuilds": [
+    "26A434"
+  ]
+}

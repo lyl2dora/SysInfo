@@ -1,0 +1,124 @@
+{
+  "description": "M5 Pro (Mac17,16)",
+  "power": {
+    "clusterRails": {
+      "d0c0": [
+        "RP02"
+      ],
+      "d0c1": [
+        "RP04"
+      ],
+      "d0c2": [
+        "RP00",
+        "RP01"
+      ]
+    },
+    "gpuRails": [],
+    "sharedRails": [
+      "PPSR"
+    ]
+  },
+  "schema": 1,
+  "socID": "AppleT6050PMGR",
+  "source": "research/probes/cpu-module 2026-09-29 thermal-power + skeptic-thermal-power (M5 Pro); docs/design/cpu-module-boundary.md §2.3, §2.4; recall verified by sysinfo-cli calibrate 2026-10-15",
+  "temperature": {
+    "aliasGroups": [
+      [
+        "Tp0a",
+        "Tm0y",
+        "Tm2T"
+      ]
+    ],
+    "clusters": {
+      "d0c0": [
+        "Tm00",
+        "Tm04",
+        "Tm08",
+        "Tm0C",
+        "Tm0G",
+        "Tm0K",
+        "Tm0O",
+        "Tm0R",
+        "Tm0U",
+        "Tm0X",
+        "Tm0a",
+        "Tm0d",
+        "Tm0g",
+        "Tm0j",
+        "Tm0m",
+        "Tm0p",
+        "Tm0u",
+        "Tm1E",
+        "Tm1I"
+      ],
+      "d0c1": [
+        "Tm1M",
+        "Tm1Q",
+        "Tm1U",
+        "Tm1Y",
+        "Tm1c",
+        "Tm1g",
+        "Tm1k",
+        "Tm1o",
+        "Tm1s",
+        "Tm1x",
+        "Tm21",
+        "Tm25",
+        "Tm29",
+        "Tm2D",
+        "Tm2H",
+        "Tm2L",
+        "Tm2P",
+        "Tm2j",
+        "Tm2n"
+      ],
+      "d0c2": [
+        "Tp00",
+        "Tp04",
+        "Tp08",
+        "Tp0C",
+        "Tp0G",
+        "Tp0K",
+        "Tp0O",
+        "Tp0R",
+        "Tp0U",
+        "Tp0X",
+        "Tp0a",
+        "Tp0d",
+        "Tp0g",
+        "Tp0j",
+        "Tp0m",
+        "Tp0p",
+        "Tp0u",
+        "Tp0y"
+      ]
+    },
+    "excluded": [
+      "Tm1p",
+      "Tm0y",
+      "Tm2T"
+    ],
+    "nearby": {},
+    "peaks": {},
+    "sentinels": [],
+    "validRange": [
+      10,
+      125
+    ]
+  },
+  "topology": {
+    "clusterLevels": {
+      "d0c0": 1,
+      "d0c1": 1,
+      "d0c2": 0
+    },
+    "cpuCountsByLevel": [
+      6,
+      12
+    ]
+  },
+  "verifiedBuilds": [
+    "26A428",
+    "26A434"
+  ]
+}

@@ -5,6 +5,9 @@
 //   隔离域里同步跑完整个 tick，不经 Task 跳转，也不会落到 MainActor 上（D03、D23）。
 // - 定时器是一次性的，每个 tick 结束后按「下一个有采集器到期的 tick」重新排定（见 Schedule）。
 //   tick 网格对齐到整秒之后约 50 ms，leeway 约 100 ms，让系统合并唤醒。
+// - 阻塞通道（CPU 模块设计 §5.1）：`.blocking` 采集器在第二条串行队列上执行，和主 tick 并行，
+//   完成后回到 actor 的队列更新健康信息，并以同一个 tick 序号单独交付一个结果；
+//   上一次还没结束时本 tick 跳过它（计入 skippedBusyCount）。到期计算、降频、暂停的语义不变，仍只有一个 tick 网格。
 
 import Darwin
 import Dispatch
@@ -40,6 +43,8 @@ public actor SamplingEngine {
     // MARK: - 执行器
 
     private nonisolated let queue: DispatchSerialQueue
+    /// 阻塞通道的串行队列。
+    private nonisolated let blockingQueue: DispatchQueue
 
     public nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()
@@ -49,6 +54,8 @@ public actor SamplingEngine {
 
     /// 注册的全部采集器 ID，按 ID 排序。
     public nonisolated let collectorIDs: [CollectorID]
+    /// 自检顺序：按登记顺序。有依赖关系时由调用方安排（`cpu.load` 的自检会刷新拓扑，排在按拓扑建方案的采集器前面）。
+    private let selfTestOrder: [CollectorID]
 
     private let configuration: Configuration
     private let grid: TickGrid
@@ -63,6 +70,8 @@ public actor SamplingEngine {
     private var intervals: [CollectorID: Int] = [:]
     /// 刚获得需求、还没建立差分基线的采集器。
     private var pendingBaseline: Set<CollectorID> = []
+    /// 正在阻塞通道上采样的采集器。
+    private var blockingInFlight: Set<CollectorID> = []
 
     private var timer: (any DispatchSourceTimer)?
     private var scheduledTick: Int64?
@@ -85,10 +94,12 @@ public actor SamplingEngine {
         }
         self.collectors = byID
         self.collectorIDs = byID.keys.sorted()
+        self.selfTestOrder = collectors.map(\.id)
         self.health = byID.mapValues { HealthRecord(id: $0.id) }
         self.configuration = configuration
         self.grid = TickGrid(offsetNanos: configuration.alignmentOffsetNanos)
         self.queue = DispatchSerialQueue(label: "zone.lyl.sysinfo.sampling", qos: .utility)
+        self.blockingQueue = DispatchQueue(label: "zone.lyl.sysinfo.sampling.blocking", qos: .utility)
     }
 
     deinit {
@@ -143,7 +154,7 @@ public actor SamplingEngine {
     @discardableResult
     public func runSelfTests() -> [CollectorID: SelfTestResult] {
         var results: [CollectorID: SelfTestResult] = [:]
-        for id in collectorIDs {
+        for id in selfTestOrder {
             results[id] = runSelfTest(id)
         }
         broadcast(.status(status))
@@ -304,8 +315,14 @@ public actor SamplingEngine {
         var samples: [Sample] = []
         var recheck: [CollectorID] = []
 
+        var inlineRun: [CollectorID] = []
         for id in due {
             guard let collector = collectors[id] else { continue }
+            if collector.lane == .blocking {
+                dispatchBlocking(collector, tick: tick, time: time)
+                continue
+            }
+            inlineRun.append(id)
             let wallStart = Clocks.uptimeNanos()
             let cpuStart = Clocks.threadCPUNanos()
             let output = collector.sample(at: time)
@@ -331,7 +348,42 @@ public actor SamplingEngine {
         let cost = SampleCost(
             wallNanos: Clocks.uptimeNanos() &- tickWallStart,
             cpuNanos: Clocks.threadCPUNanos() &- tickCPUStart)
-        return TickResult(tick: tick, time: time, collectors: due, samples: samples, cost: cost, status: status)
+        guard !inlineRun.isEmpty else { return nil }
+        return TickResult(tick: tick, time: time, collectors: inlineRun, samples: samples, cost: cost, status: status)
+    }
+
+    /// 把一个阻塞采集器派到阻塞队列。上一次还没结束时跳过。
+    private func dispatchBlocking(_ collector: any Collector, tick: Int64, time: SampleTime) {
+        let id = collector.id
+        guard !blockingInFlight.contains(id) else {
+            health[id]?.health.skippedBusyCount += 1
+            return
+        }
+        blockingInFlight.insert(id)
+        blockingQueue.async { [weak self] in
+            let wallStart = Clocks.uptimeNanos()
+            let cpuStart = Clocks.threadCPUNanos()
+            let output = collector.sample(at: time)
+            let cost = SampleCost(
+                wallNanos: Clocks.uptimeNanos() &- wallStart, cpuNanos: Clocks.threadCPUNanos() &- cpuStart)
+            self?.enqueue { $0.finishBlocking(id, tick: tick, time: time, output: output, cost: cost) }
+        }
+    }
+
+    private func finishBlocking(_ id: CollectorID, tick: Int64, time: SampleTime, output: CollectorOutput, cost: SampleCost) {
+        blockingInFlight.remove(id)
+        pendingBaseline.remove(id)
+        let recheck =
+            health[id]?.apply(output, cost: cost, recheckThreshold: configuration.recheckAfterConsecutiveUnavailable) == true
+        if recheck {
+            logger.info("\(id.rawValue, privacy: .public) 连续不可用，重新自检")
+            runSelfTest(id)
+        }
+        broadcast(
+            .tick(
+                TickResult(
+                    tick: tick, time: time, collectors: [id], samples: output.samples, cost: cost, status: status,
+                    lane: .blocking)))
     }
 
     private static func wallClockNanos() -> Int64 {

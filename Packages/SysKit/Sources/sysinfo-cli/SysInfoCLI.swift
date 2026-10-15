@@ -44,6 +44,19 @@ struct SysInfoCLI {
                 case "freq": exit(runVerifyFreq(confirmed: options.flag("--yes")))
                 default: throw UsageError("未知的 verify 对象：\(what)")
                 }
+            case "sensors":
+                let options = try Options(arguments, flags: ["--json", "--raw"], values: ["--interval", "--count"])
+                let interval = try options.double("--interval", default: 2, range: 0.5...3600)
+                let count = try options.int("--count", default: 3, range: 1...1_000_000)
+                exit(runSensors(interval: interval, count: count, raw: options.flag("--raw"), json: options.flag("--json")))
+            case "calibrate":
+                let options = try Options(
+                    arguments, flags: ["--yes", "--verbose"], values: ["--save-recording", "--from-recording", "--emit-profile"])
+                exit(
+                    runCalibrate(
+                        confirmed: options.flag("--yes"), saveRecording: options.value("--save-recording"),
+                        fromRecording: options.value("--from-recording"), emitProfile: options.value("--emit-profile"),
+                        verbose: options.flag("--verbose")))
             case "topo":
                 let options = try Options(arguments, flags: ["--json"], values: [])
                 exit(runTopo(json: options.flag("--json")))
@@ -76,6 +89,11 @@ struct SysInfoCLI {
               topo [--json]                           打印 CPU 拓扑：簇、核档、三种档次依据及其是否一致
               freq [--interval 5] [--count 3] [--json]
                                                       逐次打印每簇实际频率（另附请求频率作对照）
+              sensors [--interval 2] [--count 3] [--raw] [--json]
+                                                      簇温度、CPU 最高温、簇功耗；--raw 打出每个键的原始值并标出占位值
+              calibrate [--yes] [--save-recording r.json] [--from-recording r.json] [--emit-profile p.json] [--verbose]
+                                                      传感器校准：约 58 s（CPU 负载 30 s、GPU 负载 12 s），生成芯片档案并与内置档案比对；
+                                                      不带 --yes 只打印计划；--from-recording 离线重新分析，不施加负载
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
               engine [--demand 3] [--idle 3]          经调度器采样：登记需求若干秒后注销，再等若干秒，
@@ -381,6 +399,10 @@ struct Options {
 
     func flag(_ name: String) -> Bool {
         flags.contains(name)
+    }
+
+    func value(_ name: String) -> String? {
+        values[name]
     }
 
     func double(_ name: String, default defaultValue: Double, range: ClosedRange<Double>) throws -> Double {
