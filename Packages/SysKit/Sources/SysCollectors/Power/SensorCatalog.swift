@@ -88,9 +88,12 @@ public final class SensorCatalog: Collector {
         // 档案的分组：CPU 簇键、最热点、前缀分组。
         let profile = resolveProfile()?.profile
         var groups: [String: String] = [:]
+        // 几个簇共用同一组键时（M4 Pro 的两个 P 簇，D36），分组名列出全部簇：`cpu.d0c1+d0c2`。
+        var clustersByKey: [String: [String]] = [:]
         for (cluster, keys) in profile?.temperature.clusters ?? [:] {
-            for key in keys where groups[key] == nil { groups[key] = "cpu.\(cluster)" }
+            for key in keys { clustersByKey[key, default: []].append(cluster) }
         }
+        for (key, clusters) in clustersByKey { groups[key] = "cpu." + clusters.sorted().joined(separator: "+") }
         if let hotspot = profile?.system?.hotspotKey { groups[hotspot] = "hotspot" }
         let prefixGroups = profile?.system?.catalogGroups ?? [:]
         state.withLock {

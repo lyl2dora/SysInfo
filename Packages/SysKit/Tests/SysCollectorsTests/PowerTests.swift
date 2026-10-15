@@ -152,3 +152,34 @@ private func reading(_ energyMilliJ: Int64, _ count: Int64, wall: Int64 = 0, at 
         #expect(decoded.temperature == profile.temperature)
     }
 }
+
+/// 硬件测试（功耗与散热模块设计 §9）：本机的档案键可读且读数合理、AGX 单通道订阅可建、遥测可读、Energy Model 可订阅。
+@Suite(.tags(.hardware), .hardwareOnly) struct PowerHardwareTests {
+    @Test func railAndSensorsPassSelfTest() throws {
+        _ = CPUTopologyService.shared.refresh()
+        let ledger = PowerLedger()
+        let rail = PowerRailCollector(ledger: ledger)
+        #expect(rail.selfTest().passed)
+        let sensors = PowerSensorCollector(ledger: ledger)
+        #expect(sensors.selfTest().isUsable)
+        let samples = rail.sample(at: .now()).samples + sensors.sample(at: .now()).samples
+        let system = try #require(samples.first { $0.id == .powerSystem }?.value)
+        #expect(system > 0.3 && system < 1000)
+        let soc = try #require(samples.first { $0.id == .powerSoC }?.value)
+        #expect(soc >= 0 && soc <= system)
+        #expect(TelemetryReader().read() != nil)
+    }
+
+    @Test func gpuSubscriptionAndPMGR() throws {
+        let ledger = PowerLedger()
+        let gpu = GPUPowerCollector(ledger: ledger)
+        #expect(gpu.selfTest().passed)
+        _ = gpu.sample(at: .now())
+        Thread.sleep(forTimeInterval: 0.3)
+        let watts = try #require(gpu.sample(at: .now()).samples.first?.value)
+        #expect(watts >= 0 && watts < 500)
+        let pmgr = PMGRBatchCollector(ledger: ledger)
+        #expect(pmgr.selfTest().passed)
+        #expect(pmgr.components.contains("cpu") && pmgr.components.contains("gpu"))
+    }
+}
