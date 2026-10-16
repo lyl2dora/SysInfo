@@ -152,16 +152,17 @@ struct PowerDiagnosticsSection: View {
             } else {
                 Text("还没有完整批次：开机后约每 30 分钟一次，第一次变化只建立基线。").foregroundStyle(.secondary)
             }
-            ForEach(power.ledger?.checks ?? [], id: \.name) { check in
+            // ANE 估算的对账在 GPU 部分显示（D58）。
+            ForEach((power.ledger?.checks ?? []).filter { $0.name != "ane" }, id: \.name) { check in
                 LabeledContent(check.name == "dram" ? "PZD1 ÷ PMGR DRAM" : "AGX ÷ PMGR GPU") {
-                    Text(checkText(check))
+                    Text(Self.checkText(check))
                         .foregroundStyle(check.verdict == .failed ? .red : .secondary)
                 }
             }
         }
     }
 
-    private func checkText(_ check: CrossCheckResult) -> String {
+    static func checkText(_ check: CrossCheckResult) -> String {
         let range = String(format: "%.2f–%.2f", check.range.lowerBound, check.range.upperBound)
         switch check.verdict {
         case .pending: return String(localized: "等待批次（允许 \(range)）")

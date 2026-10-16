@@ -9,7 +9,8 @@
 #   power：面板打开且在「功耗与散热」tab（--panel-tab=power，功耗与散热模块设计 §1 第 8 项）；
 #   memory：面板打开且在「内存」tab（--panel-tab=memory，Top N 5 行，内存模块设计 §10）；
 #   storage：面板打开且在「存储」tab 概览页（--panel-tab=storage，SMART 每 2 s 读全部盘，Top N 5 行，存储模块设计 §9）；
-#   storage-detail：存储 tab 的第一块盘详情页（--storage-detail=0）。
+#   storage-detail：存储 tab 的第一块盘详情页（--storage-detail=0）；
+#   gpu：面板打开且在「GPU 与加速器」tab（--panel-tab=gpu，温度 / ANE / 媒体 2 s，coalition 2 s，Top N 5 行，GPU 模块设计 §8）。
 # 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D40：用 sysinfo-cli rusage 读 app 的按档计数，把其他档的指令
 # 折算成最快档的等效时间（按单核的比例）；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
@@ -223,6 +224,7 @@ for tier in ${TIERS}; do
         memory) measure memory --factory-defaults --open-panel --pin-panel --panel-tab=memory ;;
         storage) measure storage --factory-defaults --open-panel --pin-panel --panel-tab=storage ;;
         storage-detail) measure storage-detail --factory-defaults --open-panel --pin-panel --panel-tab=storage --storage-detail=0 ;;
+        gpu) measure gpu --factory-defaults --open-panel --pin-panel --panel-tab=gpu ;;
         *) echo "未知档位：${tier}" >&2; exit 64 ;;
     esac
 done
@@ -268,6 +270,7 @@ fi
             memory) name="面板打开（内存 tab，Top N 5 行）" ;;
             storage) name="面板打开（存储 tab 概览，SMART 2 s 读全部盘，Top N 5 行）" ;;
             storage-detail) name="面板打开（存储 tab，第一块盘详情页）" ;;
+            gpu) name="面板打开（GPU 与加速器 tab，温度 / ANE / 媒体 2 s，Top N 5 行）" ;;
             *) name="${label}" ;;
         esac
         echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"

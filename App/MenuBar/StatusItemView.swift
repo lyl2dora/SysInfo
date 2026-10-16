@@ -56,7 +56,9 @@ final class StatusItemView: NSView {
         case .systemPower: String(localized: "SYS", comment: "菜单栏小标签：整机功率，保持英文缩写")
         case .socHotspot: String(localized: "HOT", comment: "菜单栏小标签：SoC 最热点，保持英文缩写")
         case .socPower: String(localized: "SOC", comment: "菜单栏小标签：SoC 功率，保持英文缩写")
-        case .gpuPower: String(localized: "GPU", comment: "菜单栏小标签：GPU 功率，保持英文缩写")
+        case .gpuPower: String(localized: "GPU", comment: "菜单栏小标签：GPU 模块的 widget，保持英文缩写")
+        case .gpuActive: String(localized: "GPU", comment: "菜单栏小标签：GPU 模块的 widget，保持英文缩写")
+        case .gpuTemperature: String(localized: "GPU", comment: "菜单栏小标签：GPU 模块的 widget，保持英文缩写")
         case .fan: String(localized: "FAN", comment: "菜单栏小标签：风扇转速，保持英文缩写")
         case .memoryUsage: String(localized: "RAM", comment: "菜单栏小标签：内存占用，保持英文缩写")
         case .memoryPressure: String(localized: "PRES", comment: "菜单栏小标签：内存压力，保持英文缩写")
@@ -81,7 +83,8 @@ final class StatusItemView: NSView {
         case .power, .systemPower, .socPower, .gpuPower: "99.9W"
         case .fan: "9999"
         case .swapUsed: "99.9G"
-        case .diskTemperature: "125°"
+        case .diskTemperature, .gpuTemperature: "125°"
+        case .gpuActive: "100%"
         case .diskThroughput: "999M"
         case .diskFree: "99.9T"
         }
@@ -192,6 +195,10 @@ final class StatusItemView: NSView {
             return store.smoothed[.powerSoC].map(Self.wattsText)
         case .gpuPower:
             return store.smoothed[.powerGPU].map(Self.wattsText)
+        case .gpuActive:
+            return store.latest[.gpuActive]?.value.map { PercentFormat.string(fromRatio: $0) }
+        case .gpuTemperature:
+            return store.latest[.gpuTemperature]?.value.map { String(format: "%.0f°", $0) }
         case .socHotspot:
             return store.latest[.thermalSoCHotspot]?.value.map { String(format: "%.0f°", $0) }
         case .fan:

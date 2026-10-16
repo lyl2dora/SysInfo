@@ -91,14 +91,24 @@ public struct TopNRow: Hashable, Codable, Sendable, Identifiable {
 
     /// 磁盘读 + 写，B/s（排序用）。
     public var diskTotal: Double { (diskRead ?? 0) + (diskWrite ?? 0) }
+    /// 窗口内的 GPU 时间占墙钟的比例（GPU Top N：coalition 槽位 8 的差分，D57 G7）；多个命令缓冲同时在飞时可能超过 1，显示前钳到 1。
+    public var gpuShare: Double?
+    /// 窗口内的 GPU 能耗功率，W（槽位 41）。
+    public var gpuWatts: Double?
+    /// 窗口内的 ANE 能耗功率，W（槽位 39，估算）。
+    public var aneWatts: Double?
 
     public init(
         id: String, kind: Kind, coalitionID: UInt64, name: String, appPath: String?, representativePID: Int32,
         memberCount: Int, cpu: Double, perfLevel0Share: Double?, energyWatts: Double?, topMember: TopNMember?,
         members: [TopNMember], residualCPU: Double?, residualCount: Int, eligibility: TerminationEligibility,
         footprint: UInt64? = nil, residualFootprint: UInt64? = nil, diskRead: Double? = nil, diskWrite: Double? = nil,
-        residualDiskRead: Double? = nil, residualDiskWrite: Double? = nil
+        residualDiskRead: Double? = nil, residualDiskWrite: Double? = nil, gpuShare: Double? = nil, gpuWatts: Double? = nil,
+        aneWatts: Double? = nil
     ) {
+        self.gpuShare = gpuShare
+        self.gpuWatts = gpuWatts
+        self.aneWatts = aneWatts
         self.diskRead = diskRead
         self.diskWrite = diskWrite
         self.residualDiskRead = residualDiskRead
@@ -123,11 +133,12 @@ public struct TopNRow: Hashable, Codable, Sendable, Identifiable {
     }
 }
 
-/// Top N 按什么排序：CPU（D31）、内存 footprint（D49）或磁盘读写（存储模块设计 §4.5）。
+/// Top N 按什么排序：CPU（D31）、内存 footprint（D49）、磁盘读写（存储模块设计 §4.5）或 GPU 时间（D57 G7）。
 public enum TopNMetric: String, Hashable, Codable, Sendable {
     case cpu
     case memory
     case disk
+    case gpu
 }
 
 /// Top N 的分组方式（D31）。

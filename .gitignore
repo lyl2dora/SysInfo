@@ -27,3 +27,4 @@ research/probes/**/*.plist
 # Claude Code local state
 .claude/*.lock
 .claude/settings.local.json
+research/probes/gpu-module/out/

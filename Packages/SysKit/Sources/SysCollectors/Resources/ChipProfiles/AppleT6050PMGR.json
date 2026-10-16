@@ -1,5 +1,26 @@
 {
   "description": "M5 Pro (Mac17,16)",
+  "gpu": {
+    "dvfsTableKey": 9,
+    "note": "M5 Pro: 42 Tg keys across two mGPU partitions, all live even when the GPU is off (idle ~45 C). Keys picked 2026-10-16 so that their max matches the max of all Tg keys (p95 diff 0, max 0.2 C).",
+    "sentinels": [
+      -4.0,
+      0.0,
+      2.2,
+      2.4
+    ],
+    "temperatureKeys": [
+      "Tg3B",
+      "Tg1o",
+      "Tg3Z",
+      "Tg3x",
+      "Tg12"
+    ],
+    "validRange": [
+      10.0,
+      130.0
+    ]
+  },
   "power": {
     "clusterRails": {
       "d0c0": [

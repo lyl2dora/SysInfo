@@ -84,6 +84,12 @@ struct HistorySettingsView: View {
                         Button("设置…") { openPage(.storage) }
                     }
                 }
+                LabeledContent("GPU 与加速器") {
+                    HStack {
+                        Text(settings.historyGPUEnabled ? "记录" : "不记录")
+                        Button("设置…") { openPage(.gpu) }
+                    }
+                }
             } header: {
                 Text("记录")
             } footer: {

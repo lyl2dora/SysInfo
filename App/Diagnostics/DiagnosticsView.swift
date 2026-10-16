@@ -3,6 +3,7 @@
 // - 功耗与散热（数据源、遥测对账、PMGR 与交叉核对、传感器目录），见 PowerDiagnosticsSection；
 // - 内存（数据路径、页面队列核对、MTE 与 ECC、DRAM 带宽），见 MemoryDiagnosticsSection；
 // - 存储（物理盘、SMART 连接、RAID 与容量组、NVMe 节流计数），见 StorageDiagnosticsSection；
+// - GPU 与加速器（档位表、各档驻留、温度键、ANE 与媒体引擎、ANE 估算对账、GPU 细节），见 GPUDiagnosticsSection；
 // - 采集器表：状态、数据路径、自检结果、最近一次和平均耗时（墙钟与线程 CPU）；
 // - 调度器：tick 数、定时器、有效需求、降频因子与原因；手动降频开关（K20，测试用）；
 // - 本进程：CPU 占用（按单核的比例，1 分钟均值）和内存 footprint。
@@ -18,6 +19,7 @@ struct DiagnosticsView: View {
     let services: AppServices
     var catalogVisibilityChanged: (Bool) -> Void = { _ in }
     var bandwidthVisibilityChanged: (Bool) -> Void = { _ in }
+    var gpuDetailsVisibilityChanged: (Bool) -> Void = { _ in }
 
     var body: some View {
         Form {
@@ -25,6 +27,7 @@ struct DiagnosticsView: View {
             PowerDiagnosticsSection(store: store, services: services, catalogVisibilityChanged: catalogVisibilityChanged)
             MemoryDiagnosticsSection(store: store, services: services, bandwidthVisibilityChanged: bandwidthVisibilityChanged)
             StorageDiagnosticsSection(store: store, services: services)
+            GPUDiagnosticsSection(store: store, services: services, detailsVisibilityChanged: gpuDetailsVisibilityChanged)
             collectorsSection
             schedulerSection
             selfUsageSection

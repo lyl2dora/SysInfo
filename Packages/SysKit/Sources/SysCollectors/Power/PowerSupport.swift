@@ -61,17 +61,19 @@ public enum TelemetryMath {
 
 // MARK: - 账本
 
-/// 功耗采集器之间共享的核对数据（功耗与散热模块设计 §4.6）：DRAM 功率的累计积分、交叉核对结论、遥测对账。
+/// 功耗采集器之间共享的核对数据（功耗与散热模块设计 §4.6）：DRAM 功率与 ANE 估算能量的累计积分、交叉核对结论、遥测对账。
 ///
 /// 几个采集器都在引擎的队列上串行运行，`Mutex` 只防 app 的诊断页同时来读。
 public final class PowerLedger: Sendable {
     /// 交叉核对的项目名。
     public enum Check: String, Sendable, CaseIterable {
         case dram, gpu
+        /// coalition 槽位 39 合计 ÷ PMGR ANE 批次（D58，实测 0.92–0.93）。
+        case ane
     }
 
     /// 允许范围（1 s 采样时）；采样更稀时 DRAM 放宽到 ±5%（10 s 矩形积分的误差）。
-    public static let ranges: [Check: ClosedRange<Double>] = [.dram: 0.98...1.02, .gpu: 0.9...1.1]
+    public static let ranges: [Check: ClosedRange<Double>] = [.dram: 0.98...1.02, .gpu: 0.9...1.1, .ane: 0.8...1.05]
     static let relaxedDRAMRange: ClosedRange<Double> = 0.95...1.05
     /// 连续失败多少次后把对应指标改为不可用。
     static let failuresToDisable = 2
@@ -89,6 +91,7 @@ public final class PowerLedger: Sendable {
 
     private struct State {
         var dram: [Checkpoint] = []
+        var ane: [Checkpoint] = []
         var checks: [Check: CrossCheckResult] = [:]
         var segments: [TelemetrySegment] = []
         var latestTelemetry: PowerTelemetryReading?
@@ -102,25 +105,43 @@ public final class PowerLedger: Sendable {
 
     /// 记一个 DRAM 功率样本：它覆盖到上一个样本的 `seconds` 秒（调用方已按采样间隔封顶）。
     func recordDRAM(watts: Double, seconds: Double, at date: Date) {
-        state.withLock { s in
-            let last = s.dram.last ?? Checkpoint(date: date, joules: 0, covered: 0, samples: 0)
-            s.dram.append(
-                Checkpoint(date: date, joules: last.joules + watts * seconds, covered: last.covered + seconds,
-                    samples: last.samples + 1))
-            let cutoff = date.addingTimeInterval(-Self.checkpointRetention)
-            if let drop = s.dram.firstIndex(where: { $0.date >= cutoff }), drop > 0 { s.dram.removeFirst(drop) }
-        }
+        state.withLock { s in Self.append(&s.dram, joules: watts * seconds, seconds: seconds, at: date) }
     }
 
     /// 两个时刻之间的 DRAM 积分：焦耳、覆盖秒数、平均采样间隔。数据不覆盖这段时间时为 nil。
     func dramIntegral(from start: Date, to end: Date) -> (joules: Double, covered: Double, meanInterval: Double)? {
-        state.withLock { s in
-            guard let first = s.dram.last(where: { $0.date <= start }), let last = s.dram.last(where: { $0.date <= end }),
-                last.samples > first.samples
-            else { return nil }
-            let covered = last.covered - first.covered
-            return (last.joules - first.joules, covered, covered / Double(last.samples - first.samples))
-        }
+        state.withLock { s in Self.integral(s.dram, from: start, to: end) }
+    }
+
+    // MARK: ANE 估算积分（D58）
+
+    /// 记一个 coalition 窗口里全部 coalition 的 ANE 能量（槽位 39 合计），窗口长 `seconds` 秒。
+    func recordANE(joules: Double, seconds: Double, at date: Date) {
+        guard seconds > 0, joules >= 0 else { return }
+        state.withLock { s in Self.append(&s.ane, joules: joules, seconds: seconds, at: date) }
+    }
+
+    /// 两个时刻之间的 ANE 估算积分。
+    func aneIntegral(from start: Date, to end: Date) -> (joules: Double, covered: Double, meanInterval: Double)? {
+        state.withLock { s in Self.integral(s.ane, from: start, to: end) }
+    }
+
+    private static func append(_ list: inout [Checkpoint], joules: Double, seconds: Double, at date: Date) {
+        let last = list.last ?? Checkpoint(date: date, joules: 0, covered: 0, samples: 0)
+        list.append(
+            Checkpoint(date: date, joules: last.joules + joules, covered: last.covered + seconds, samples: last.samples + 1))
+        let cutoff = date.addingTimeInterval(-checkpointRetention)
+        if let drop = list.firstIndex(where: { $0.date >= cutoff }), drop > 0 { list.removeFirst(drop) }
+    }
+
+    private static func integral(_ list: [Checkpoint], from start: Date, to end: Date)
+        -> (joules: Double, covered: Double, meanInterval: Double)?
+    {
+        guard let first = list.last(where: { $0.date <= start }), let last = list.last(where: { $0.date <= end }),
+            last.samples > first.samples
+        else { return nil }
+        let covered = last.covered - first.covered
+        return (last.joules - first.joules, covered, covered / Double(last.samples - first.samples))
     }
 
     // MARK: 交叉核对

@@ -2,12 +2,13 @@
 //
 // - 固定宽度，自绘 `statusItem.view`；
 // - autosaveName = "<bundle id>.cpu"（占用，沿用 M0 的名字，保住用户拖好的位置）、"<bundle id>.cpu.<项>"
-//   或 "<bundle id>.power.<项>"（功耗与散热，D44）；
+//   或 "<bundle id>.<模块>.<项>"（GPU 功率移到 GPU 模块后仍用 "<bundle id>.power.gpuPower"，保住位置，D57）；
 //   创建后显式设 isVisible = true，并启用 `.removalAllowed`；KVO 观察 isVisible，用户把 item 拖走后同步关掉设置里的开关
 //   （可见性以 app 设置为准）；
 // - 每个 widget 可见时登记它自己的需求，隐藏时注销（只在有消费者时采样）：
 //   占用 → cpu.load，频率 → cpu.freq（D19 高开销项），温度与功耗 → cpu.sensors；
-//   整机功率 → power.rail，SoC 功率、最热点、风扇 → power.sensors，GPU 功率 → power.gpu；
+//   整机功率 → power.rail，SoC 功率、最热点、风扇 → power.sensors；
+//   GPU 活跃与 GPU 功率 → power.gpu（同一个订阅，D57），GPU 温度 → gpu.temperature；
 //   内存的三个 widget → memory.vm（D49）；
 //   存储：盘温 → storage.smart（只读绑定的盘，D55），读写 → storage.io，可用空间 → storage.capacity（60 s）；
 //   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
@@ -76,7 +77,8 @@ final class StatusItemController {
         case .temperature, .power: SensorCollector.collectorID
         case .systemPower: PowerRailCollector.collectorID
         case .socHotspot, .socPower, .fan: PowerSensorCollector.collectorID
-        case .gpuPower: GPUPowerCollector.collectorID
+        case .gpuPower, .gpuActive: GPUPowerCollector.collectorID
+        case .gpuTemperature: GPUTemperatureCollector.collectorID
         case .memoryUsage, .memoryPressure, .swapUsed: MemoryCollector.collectorID
         case .diskTemperature: SMARTCollector.collectorID
         case .diskThroughput: StorageIOCollector.collectorID
@@ -134,7 +136,7 @@ final class StatusItemController {
         let item = NSStatusBar.system.statusItem(withLength: width)
         item.autosaveName =
             widget == .usage
-            ? "\(BuildInfo.bundleIdentifier).cpu" : "\(BuildInfo.bundleIdentifier).\(widget.module.rawValue).\(widget.rawValue)"
+            ? "\(BuildInfo.bundleIdentifier).cpu" : "\(BuildInfo.bundleIdentifier).\(widget.keyModule).\(widget.rawValue)"
         item.behavior = .removalAllowed
         // autosaveName 会持久化可见性；可见性以 app 设置为准（K32），创建后显式设为可见。
         item.isVisible = true

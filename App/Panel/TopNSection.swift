@@ -4,6 +4,7 @@
 // - 同 uid 的进程才有「结束」按钮，先确认，按住 ⌥ 时默认强制；组行、root、其他用户、SysInfo 自身没有按钮；
 // - 鼠标悬停在列表上时冻结排序；
 // - coalition 不可用时只列同 uid 进程，并提供手动「刷新全部」（setuid ps，只在点击时运行；内存没有，D49）；
+// - GPU 面板（D57 G7）：数值列是 GPU 时间占比，副标题列 GPU 与 ANE 能耗；成员只列名字（没有按进程的公开 GPU 计数）；
 // - 内存面板（D49）复用同一套行：数值列换成 footprint，副标题、成员、外部成员合计都按 footprint；
 // - 存储面板（存储模块设计 §4.5）同样复用：数值列是「读 / 写」速率（B/s，按 1000 换算）。
 
@@ -29,7 +30,11 @@ struct TopNSection: View {
                     Image(systemName: "pause.circle").font(.caption).foregroundStyle(.secondary).help("悬停时暂停排序")
                 }
             }
-            if model.isFallback {
+            if model.isFallback, model.metric == .gpu {
+                Text("应用活动数据不可用：没有按进程的公开 GPU 计数，无法列出")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if model.isFallback {
                 HStack {
                     Text("只列出你自己的进程（另有 \(model.hiddenCount) 个读不到）")
                         .font(.caption2)
@@ -70,6 +75,8 @@ extension TopNSection {
         case (.memory, .byProcess): String(localized: "内存最多的进程")
         case (.disk, .byApp): String(localized: "读写最多的应用")
         case (.disk, .byProcess): String(localized: "读写最多的进程")
+        case (.gpu, .byApp): String(localized: "GPU 时间最多的应用")
+        case (.gpu, .byProcess): String(localized: "GPU 时间最多的进程")
         }
     }
 
@@ -123,6 +130,15 @@ private struct TopNRowView: View {
                 if let watts = row.energyWatts {
                     Text(Formatting.watts(watts)).font(.caption2).foregroundStyle(.secondary)
                 }
+                if metric == .gpu {
+                    if let ane = row.aneWatts, ane >= 0.005 {
+                        Text("ANE \(Formatting.watts(ane))").font(.caption2).foregroundStyle(.tertiary)
+                            .help("ANE 能耗（coalition 记账，估算）")
+                    }
+                    if let watts = row.gpuWatts {
+                        Text(Formatting.watts(watts)).font(.caption2).foregroundStyle(.secondary).help("GPU 能耗")
+                    }
+                }
                 Text(rowValue)
                     .frame(width: valueWidth, alignment: .trailing)
                 if row.eligibility.isAllowed {
@@ -167,8 +183,9 @@ private struct TopNRowView: View {
                             Formatting.diskRatePair(
                                 rest.reduce(0.0) { $0 + ($1.diskRead ?? 0) }, rest.reduce(0.0) { $0 + ($1.diskWrite ?? 0) })
                         case .cpu: PercentFormat.string(fromRatio: rest.reduce(0.0) { $0 + ($1.cpu ?? 0) })
+                        case .gpu: ""
                         }
-                    Text("另有 \(rest.count) 个你的进程 · \(total)")
+                    Text(total.isEmpty ? "另有 \(rest.count) 个你的进程" : "另有 \(rest.count) 个你的进程 · \(total)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 22)
@@ -180,6 +197,7 @@ private struct TopNRowView: View {
                         case .disk:
                             row.residualDiskRead.flatMap { r in row.residualDiskWrite.map { Formatting.diskRatePair(r, $0) } }
                         case .cpu: row.residualCPU.map { PercentFormat.string(fromRatio: $0) }
+                        case .gpu: nil
                         }
                     Text("另有 \(row.residualCount) 个其他用户或 root 的进程\(residual.map { " · " + $0 } ?? "")")
                         .font(.caption2)
@@ -193,7 +211,7 @@ private struct TopNRowView: View {
     /// 数值列宽：百分比 44 pt；内存（「12.34 GB」）要宽一些；磁盘是「读 / 写」两个速率。
     private var valueWidth: CGFloat {
         switch metric {
-        case .cpu: 44
+        case .cpu, .gpu: 44
         case .memory: 62
         case .disk: 112
         }
@@ -204,6 +222,8 @@ private struct TopNRowView: View {
         case .cpu: PercentFormat.string(fromRatio: row.cpu)
         case .memory: row.footprint.map { Formatting.memory(Double($0)) } ?? "—"
         case .disk: Formatting.diskRatePair(row.diskRead ?? 0, row.diskWrite ?? 0)
+        // 多个命令缓冲同时在飞时 GPU 时间之和会超过墙钟（M5 实测 141%），钳到 100%。
+        case .gpu: PercentFormat.string(fromRatio: min(row.gpuShare ?? 0, 1))
         }
     }
 
@@ -212,6 +232,7 @@ private struct TopNRowView: View {
         case .cpu: member.cpu.map { PercentFormat.string(fromRatio: $0) }
         case .memory: member.footprint.map { Formatting.memory(Double($0)) }
         case .disk: member.diskRead.flatMap { r in member.diskWrite.map { Formatting.diskRatePair(r, $0) } }
+        case .gpu: nil  // 没有按进程的 GPU 计数，成员只列名字
         }
     }
 

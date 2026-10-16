@@ -17,3 +17,9 @@
 
 ## storage-module/（2026-10-16，存储模块边界）
 - `storage_probe.c`：物理盘清单（判定规则、RAID 关系、驱动 Statistics、SMART 全字段与 Identify），SMART 读取开销（重建 plugin 与常驻 plugin），以及读 SMART 时 IOReport「NVMe Power States」的驻留。只读，不打印序列号与 UUID。结论见 `docs/design/storage.md` §1。
+
+## gpu-module/（2026-10-16，GPU 与加速器模块边界）
+- `gpu_struct.c`：只读结构比对（IOReport GPU / 媒体 / ANE 通道、pmgr DVFS 表、AGX 与 ANE 的 IORegistry、SMC `Tg*`/`Ta*`、coalition 槽位 8/41/38/39）。
+- `gpu_watch.c`：1 Hz 记录器（GPUPH 等状态通道、GPU Energy、PMGR 批次、媒体中断、PMP 带宽、Tg/Ta、coalition、ANE 电源状态），附每段读取的线程 CPU。
+- `orchestrate.sh` 在一个 PMGR 30 分钟窗口里跑负载序列（每段 ≤60 s），`tiny.sh` 补测小 kernel，`costbench_gpu.c` 测真实节奏开销，`analyze.py` 汇总。`build.sh <outdir>` 编译全部（负载程序沿用 power-thermal/、gpu/、gpu-review/ 的源码）。
+- 结论见 `docs/design/gpu.md`。原始输出（`out/`）按 `.gitignore` 只留在本地。

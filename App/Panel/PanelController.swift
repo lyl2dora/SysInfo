@@ -11,6 +11,8 @@
 //   SoC/GPU/DRAM 功率、最热点与风扇按设置的间隔，CPU 功耗按 CPU 面板的温度与功耗间隔，PMGR 批次 60 s；
 //   在「内存」tab 时（内存模块设计 §7.2）：内存 1 s，内存 Top N 的 coalition 扫描按设置的间隔（默认 5 s）；
 //   在「存储」tab 时（存储模块设计 §4.6）：读写 1 s，SMART 按设置（默认 2 s，读全部盘），容量 10 s，磁盘 Top N 按设置；
+//   在「GPU 与加速器」tab 时（GPU 模块设计 §8）：活跃、频率与功率 1 s，温度、ANE、媒体引擎与 GPU 内存按设置（默认 2 s），
+//   coalition 扫描按 Top N 的间隔（Top N 行数为 0 时也扫，ANE 估算要用，D58）；
 //   隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
 // - 内容高度会变（展开详情、Top N 行数），面板跟着内容改高，锚定时保持顶边不动。
 
@@ -27,6 +29,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case power
     case memory
     case storage
+    case gpu
 
     var id: String { rawValue }
 
@@ -36,6 +39,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
         case .storage: String(localized: "存储")
+        case .gpu: String(localized: "GPU 与加速器")
         }
     }
 
@@ -45,6 +49,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .power: self = .power
         case .memory: self = .memory
         case .storage: self = .storage
+        case .gpu: self = .gpu
         }
     }
 }
@@ -116,6 +121,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let storageSMARTDemand: DemandSlot
     private let storageCapacityDemand: DemandSlot
     private let storageTopNDemand: DemandSlot
+    private let gpuDemand: DemandSlot
+    private let gpuDetailDemand: DemandSlot
+    private let gpuTopNDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -151,6 +159,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.storageSMARTDemand = DemandSlot(engine: engine)
         self.storageCapacityDemand = DemandSlot(engine: engine)
         self.storageTopNDemand = DemandSlot(engine: engine)
+        self.gpuDemand = DemandSlot(engine: engine)
+        self.gpuDetailDemand = DemandSlot(engine: engine)
+        self.gpuTopNDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -285,6 +296,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         }
         updateMemoryDemands(visible: visible && state.selectedTab == .memory)
         updateStorageDemands(visible: visible && state.selectedTab == .storage)
+        updateGPUDemands(visible: visible && state.selectedTab == .gpu)
         let cpuVisible = visible && state.selectedTab == .cpu
         guard cpuVisible else {
             [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
@@ -347,6 +359,32 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
 
     /// 存储 tab（存储模块设计 §4.6）：读写 1 s、SMART 按设置（默认 2 s，读全部盘）、容量 10 s、
     /// Top N 行数大于 0 时按设置的间隔扫描 coalition。
+    /// GPU 与加速器 tab（D57、D58）。
+    private func updateGPUDemands(visible: Bool) {
+        let topN = services.gpuTopN
+        guard visible else {
+            [gpuDemand, gpuDetailDemand, gpuTopNDemand].forEach { $0.set(nil) }
+            topN.setActive(false, coalitionUsable: true)
+            return
+        }
+        gpuDemand.set(Demand(collectors: [GPUPowerCollector.collectorID], interval: 1, source: .panel))
+        gpuDetailDemand.set(
+            Demand(
+                collectors: [
+                    GPUTemperatureCollector.collectorID, GPUAcceleratorCollector.collectorID, MediaEngineCollector.collectorID,
+                ], interval: settings.gpuPanelInterval, source: .panel))
+        topN.rowCount = settings.gpuTopNRows
+        topN.grouping = settings.gpuGrouping
+        topN.interval = settings.gpuTopNInterval
+        let coalitionUsable =
+            store.engineStatus?.health.first { $0.id == AppSampler.collectorID }?.status != .unavailable
+        // Top N 行数为 0 时也扫 coalition：ANE 估算功率来自同一次扫描（D58）。
+        gpuTopNDemand.set(
+            coalitionUsable
+                ? Demand(collectors: [AppSampler.collectorID], interval: settings.gpuTopNInterval, source: .panel) : nil)
+        topN.setActive(settings.gpuTopNRows > 0, coalitionUsable: coalitionUsable)
+    }
+
     private func updateStorageDemands(visible: Bool) {
         let topN = services.diskTopN
         services.storageModel.panelVisible = visible

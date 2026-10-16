@@ -21,6 +21,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case power
     case memory
     case storage
+    case gpu
     case history
     case privacy
     case diagnostics
@@ -36,6 +37,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
         case .storage: String(localized: "存储")
+        case .gpu: String(localized: "GPU 与加速器")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -51,6 +53,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .power: "bolt"
         case .memory: "memorychip"
         case .storage: "internaldrive"
+        case .gpu: "cpu.fill"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
@@ -82,6 +85,9 @@ final class SettingsController {
     private let catalogDemand: DemandSlot
     private let memoryDemand: DemandSlot
     private let bandwidthDemand: DemandSlot
+    /// GPU 诊断读数（D57）：温度、ANE、媒体每 2 s；展开「GPU 细节」时另采 gpu.diagnostics。
+    private let gpuDemand: DemandSlot
+    private let gpuDetailsDemand: DemandSlot
     /// 诊断页的存储读数（读写 2 s、SMART 2 s 读全部盘、容量 10 s，存储模块设计 §6.4）。
     private let storageDemand: DemandSlot
     private let storageCapacityDemand: DemandSlot
@@ -104,6 +110,8 @@ final class SettingsController {
         self.catalogDemand = DemandSlot(engine: engine)
         self.memoryDemand = DemandSlot(engine: engine)
         self.bandwidthDemand = DemandSlot(engine: engine)
+        self.gpuDemand = DemandSlot(engine: engine)
+        self.gpuDetailsDemand = DemandSlot(engine: engine)
         self.storageDemand = DemandSlot(engine: engine)
         self.storageCapacityDemand = DemandSlot(engine: engine)
     }
@@ -116,6 +124,7 @@ final class SettingsController {
             diagnosticsVisibilityChanged: { [weak self] visible in self?.setDiagnosticsVisible(visible) },
             catalogVisibilityChanged: { [weak self] visible in self?.setCatalogVisible(visible) },
             bandwidthVisibilityChanged: { [weak self] visible in self?.setBandwidthVisible(visible) },
+            gpuDetailsVisibilityChanged: { [weak self] visible in self?.setGPUDetailsVisible(visible) },
             runSelfTests: { [engine] in
                 Task { await engine.runSelfTests() }
             })
@@ -209,10 +218,24 @@ final class SettingsController {
         storageCapacityDemand.set(
             storageVisible ? Demand(collectors: [StorageCapacityCollector.collectorID], interval: 10, source: .diagnostics) : nil)
         services.storageModel.diagnosticsVisible = storageVisible
+        gpuDemand.set(
+            storageVisible
+                ? Demand(
+                    collectors: [
+                        GPUTemperatureCollector.collectorID, GPUAcceleratorCollector.collectorID, MediaEngineCollector.collectorID,
+                    ], interval: 2, source: .diagnostics) : nil)
         if !visible {
             catalogDemand.set(nil)
             bandwidthDemand.set(nil)
+            gpuDetailsDemand.set(nil)
         }
+    }
+
+    /// GPU 细节（PMP 带宽等）只在诊断页展开它时采（D57 G10），每 2 s。
+    private func setGPUDetailsVisible(_ visible: Bool) {
+        gpuDetailsDemand.set(
+            visible && state.isWindowOpen
+                ? Demand(collectors: [GPUDiagnosticsCollector.collectorID], interval: 2, source: .diagnostics) : nil)
     }
 
     /// DRAM 带宽只在诊断页展开它时采（D49 M3），每 2 s。
@@ -241,5 +264,6 @@ struct SettingsContext {
     let diagnosticsVisibilityChanged: (Bool) -> Void
     let catalogVisibilityChanged: (Bool) -> Void
     let bandwidthVisibilityChanged: (Bool) -> Void
+    let gpuDetailsVisibilityChanged: (Bool) -> Void
     let runSelfTests: () -> Void
 }
