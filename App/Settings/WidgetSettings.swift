@@ -155,26 +155,31 @@ struct StorageTargetPicker: View {
     var body: some View {
         let model = StorageModel.shared
         let inventory = model.inventory
+        let primaryDisk = inventory.primaryDisk
+        let bootGroup = model.resolveGroup(.primary)
+        let current = selection.wrappedValue
         Picker(widget == .diskFree ? "容量组" : "盘", selection: selection) {
+            // 「内置盘」「启动卷所在的组」跟随当前的内置盘 / 启动组；它们对应的那一项不再单独列出，避免重复。
             if widget == .diskFree {
-                Text("启动卷所在的组").tag(StorageTarget.primary)
-                ForEach(model.groups.filter { !$0.isAuxiliary }) { group in
+                Text(model.groups.first { $0.key == bootGroup }.map { "启动卷所在的组（\($0.name)）" } ?? "启动卷所在的组")
+                    .tag(StorageTarget.primary)
+                ForEach(model.groups.filter { !$0.isAuxiliary && ($0.key != bootGroup || current == .group($0.key)) }) { group in
                     Text("\(group.name)（\(Formatting.diskBytes(Double(group.totalBytes)))）").tag(StorageTarget.group(group.key))
                 }
             } else {
-                Text("内置盘").tag(StorageTarget.primary)
+                Text(primaryDisk.map { "内置盘（\($0.model)）" } ?? "内置盘").tag(StorageTarget.primary)
                 if widget == .diskTemperature {
                     Text("所有盘最高温").tag(StorageTarget.hottest)
                 }
-                ForEach(inventory.disks) { disk in
+                ForEach(inventory.disks.filter { $0.key != primaryDisk?.key || current == .disk($0.key) }) { disk in
                     Text(Self.diskLabel(disk, inventory: inventory)).tag(StorageTarget.disk(disk.key))
                 }
             }
-            if case .disk(let key) = selection.wrappedValue, inventory.disk(key) == nil {
-                Text("已断开的盘").tag(selection.wrappedValue)
+            if case .disk(let key) = current, inventory.disk(key) == nil {
+                Text("已断开的盘").tag(current)
             }
-            if case .group(let key) = selection.wrappedValue, !model.groups.contains(where: { $0.key == key }) {
-                Text("已断开的容量组").tag(selection.wrappedValue)
+            if case .group(let key) = current, !model.groups.contains(where: { $0.key == key }) {
+                Text("已断开的容量组").tag(current)
             }
         }
     }
