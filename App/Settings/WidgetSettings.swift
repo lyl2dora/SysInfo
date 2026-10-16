@@ -81,6 +81,8 @@ enum WidgetInfo {
         case .socHotspot: String(localized: "SoC 最热点")
         case .socPower: String(localized: "SoC 功率")
         case .gpuPower: String(localized: "GPU 功率")
+        case .gpuActive: String(localized: "GPU 活跃")
+        case .gpuTemperature: String(localized: "GPU 温度")
         case .fan: String(localized: "风扇转速")
         case .memoryUsage: String(localized: "内存占用")
         case .memoryPressure: String(localized: "内存压力")
@@ -98,6 +100,7 @@ enum WidgetInfo {
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
         case .storage: String(localized: "存储")
+        case .gpu: String(localized: "GPU 与加速器")
         }
     }
 
@@ -120,7 +123,11 @@ enum WidgetInfo {
         case .socPower:
             return String(localized: "SoC 功率，Apple 功耗模型口径。\(CostLabel.text(collector: PowerSensorCollector.collectorID, interval: interval, store: store))")
         case .gpuPower:
-            return String(localized: "GPU 实时功率（AGX 能量计数）。\(CostLabel.text(collector: GPUPowerCollector.collectorID, interval: interval, store: store))")
+            return String(localized: "GPU 实时功率（AGX 能量计数），约 2 秒平滑。与「GPU 活跃」读同一个订阅，同时开着不增加开销。\(CostLabel.text(collector: GPUPowerCollector.collectorID, interval: interval, store: store))")
+        case .gpuActive:
+            return String(localized: "GPU 上电并在运行的时间比例（GPUPH），不是算力占用：很小的计算任务也可能读 100%，要配合功率看。\(CostLabel.text(collector: GPUPowerCollector.collectorID, interval: interval, store: store))")
+        case .gpuTemperature:
+            return String(localized: "GPU 区域温度传感器的最高值。部分芯片（如 M4 Pro）GPU 关断时没有读数，显示「—」。\(CostLabel.text(collector: GPUTemperatureCollector.collectorID, interval: interval, store: store))")
         case .fan:
             return String(localized: "最快的风扇的实际转速。\(CostLabel.text(collector: PowerSensorCollector.collectorID, interval: interval, store: store))")
         case .memoryUsage:
@@ -203,6 +210,8 @@ enum CostLabel {
         PowerRailCollector.collectorID: 0.6,
         PowerSensorCollector.collectorID: 1.0,
         GPUPowerCollector.collectorID: 1.8,
+        // GPU 边界稿 §1.6（真实节奏，取 M4）：代表温度键 5 个约 0.5 ms
+        GPUTemperatureCollector.collectorID: 0.5,
         // 内存模块设计 §2.4：sysctl 与 host_statistics64 一次约 0.3 ms
         MemoryCollector.collectorID: 0.3,
         // 存储模块设计 §1.1、D56：每次打开 → 读 → 关闭，一块盘约 0.7–1.0 ms（盘温 widget 只读绑定的盘）；6 块盘的驱动统计约 0.8 ms

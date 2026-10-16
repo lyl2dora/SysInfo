@@ -22,6 +22,11 @@
 // - storage.interval / storage.panel.smartInterval / .topNInterval / .topNRows / .grouping / .chartSpan / .collapsedRAIDs
 //   存储的常驻间隔覆盖与面板设置（D55：面板 SMART 默认 2 s）
 // - history.storage.enabled   是否记录存储历史
+// - menubar.gpu.<widget>.visible / .color   GPU 与加速器 widget（gpuActive / gpuTemperature，D57：默认关）；
+//   GPU 功率 widget 从功耗模块移来（D57 G3），沿用旧键 menubar.power.gpuPower.visible / .color
+// - gpu.interval / gpu.panel.interval / .topNInterval / .topNRows / .grouping / .chartSpan / .chartPower
+//   GPU 与加速器的常驻间隔覆盖与面板设置
+// - history.gpu.enabled   是否记录 GPU 与加速器历史（D57 G9）
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
@@ -60,9 +65,9 @@ final class AppSettings {
         /// D41 之前的键，只读不写。
         static let legacyCPUStyle = "menubar.cpu.style"
         static let legacyCPULabel = "menubar.cpu.label"
-        static func widgetColor(_ widget: MenuWidget) -> String { "menubar.\(widget.module.rawValue).\(widget.rawValue).color" }
-        /// 功耗与散热 widget 的显示开关（CPU 四项沿用上面的旧键）。
-        static func widgetVisible(_ widget: MenuWidget) -> String { "menubar.\(widget.module.rawValue).\(widget.rawValue).visible" }
+        static func widgetColor(_ widget: MenuWidget) -> String { "menubar.\(widget.keyModule).\(widget.rawValue).color" }
+        /// 功耗与散热等模块 widget 的显示开关（CPU 四项沿用上面的旧键）。
+        static func widgetVisible(_ widget: MenuWidget) -> String { "menubar.\(widget.keyModule).\(widget.rawValue).visible" }
         static let powerInterval = "power.interval"
         static let powerPanelInterval = "power.panel.interval"
         static let powerChartSpan = "power.panel.chartSpan"
@@ -88,6 +93,14 @@ final class AppSettings {
         static let storageChartSpan = "storage.panel.chartSpan"
         static let storageCollapsedRAIDs = "storage.panel.collapsedRAIDs"
         static let historyStorage = "history.storage.enabled"
+        static let gpuInterval = "gpu.interval"
+        static let gpuPanelInterval = "gpu.panel.interval"
+        static let gpuTopNInterval = "gpu.panel.topNInterval"
+        static let gpuTopNRows = "gpu.panel.topNRows"
+        static let gpuGrouping = "gpu.panel.grouping"
+        static let gpuChartSpan = "gpu.panel.chartSpan"
+        static let gpuChartShowsPower = "gpu.panel.chartPower"
+        static let historyGPU = "history.gpu.enabled"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -392,6 +405,51 @@ final class AppSettings {
         didSet { persist(historyStorageEnabled, Key.historyStorage) }
     }
 
+    // MARK: GPU 与加速器（D57、D58）
+
+    /// GPU 模块的常驻间隔覆盖；nil 表示跟随全局默认（D25）。
+    var gpuIntervalOverride: SamplingInterval? {
+        didSet { persist(gpuIntervalOverride?.rawValue ?? 0, Key.gpuInterval) }
+    }
+
+    /// GPU 模块实际使用的常驻间隔。
+    var gpuInterval: SamplingInterval { gpuIntervalOverride ?? globalInterval }
+
+    /// 面板 GPU tab 里温度、ANE、媒体引擎与 GPU 内存的间隔（默认 2 s）；活跃、频率与功率固定每秒。
+    var gpuPanelInterval: Int {
+        didSet { persist(gpuPanelInterval, Key.gpuPanelInterval) }
+    }
+
+    /// 面板 GPU Top N 的间隔（默认 2 s；同时决定 ANE 估算的刷新）。
+    var gpuTopNInterval: Int {
+        didSet { persist(gpuTopNInterval, Key.gpuTopNInterval) }
+    }
+
+    /// GPU Top N 行数（0/3/5/8/10，默认 5）。
+    var gpuTopNRows: Int {
+        didSet { persist(gpuTopNRows, Key.gpuTopNRows) }
+    }
+
+    /// GPU Top N 分组方式（默认按应用，D31）。
+    var gpuGrouping: TopNGrouping {
+        didSet { persist(gpuGrouping.rawValue, Key.gpuGrouping) }
+    }
+
+    /// GPU 图的默认跨度。
+    var gpuChartSpan: ChartSpan {
+        didSet { persist(gpuChartSpan.rawValue, Key.gpuChartSpan) }
+    }
+
+    /// GPU 图画功率（W）而不是活跃（%）。两者纵轴不同，不叠加，二选一（默认活跃）。
+    var gpuChartShowsPower: Bool {
+        didSet { persist(gpuChartShowsPower, Key.gpuChartShowsPower) }
+    }
+
+    /// 是否记录 GPU 与加速器历史（默认开）。
+    var historyGPUEnabled: Bool {
+        didSet { persist(historyGPUEnabled, Key.historyGPU) }
+    }
+
     /// 某个模块实际使用的常驻间隔。
     func interval(for module: MenuModule) -> SamplingInterval {
         switch module {
@@ -399,6 +457,7 @@ final class AppSettings {
         case .power: powerInterval
         case .memory: memoryInterval
         case .storage: storageInterval
+        case .gpu: gpuInterval
         }
     }
 
@@ -474,6 +533,14 @@ final class AppSettings {
         storageChartSpan = defaults?.string(forKey: Key.storageChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
         storageCollapsedRAIDs = Set(defaults?.stringArray(forKey: Key.storageCollapsedRAIDs) ?? [])
         historyStorageEnabled = defaults?.object(forKey: Key.historyStorage) as? Bool ?? true
+        gpuIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.gpuInterval)) }
+        gpuPanelInterval = Self.int(defaults, Key.gpuPanelInterval, choices: Self.panelIntervals) ?? 2
+        gpuTopNInterval = Self.int(defaults, Key.gpuTopNInterval, choices: Self.panelIntervals) ?? 2
+        gpuTopNRows = Self.int(defaults, Key.gpuTopNRows, choices: Self.topNRowChoices) ?? 5
+        gpuGrouping = defaults?.string(forKey: Key.gpuGrouping).flatMap(TopNGrouping.init(rawValue:)) ?? .byApp
+        gpuChartSpan = defaults?.string(forKey: Key.gpuChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
+        gpuChartShowsPower = defaults?.object(forKey: Key.gpuChartShowsPower) as? Bool ?? false
+        historyGPUEnabled = defaults?.object(forKey: Key.historyGPU) as? Bool ?? true
     }
 
     private static func int(_ defaults: UserDefaults?, _ key: String, in range: ClosedRange<Int>) -> Int? {
@@ -627,7 +694,6 @@ enum MenuWidget: String, CaseIterable, Identifiable {
     case systemPower
     case socHotspot
     case socPower
-    case gpuPower
     case fan
     // 内存（D49）
     case memoryUsage
@@ -637,17 +703,25 @@ enum MenuWidget: String, CaseIterable, Identifiable {
     case diskTemperature
     case diskThroughput
     case diskFree
+    // GPU 与加速器（D57）：GPU 功率从功耗与散热移来（G3）
+    case gpuActive
+    case gpuPower
+    case gpuTemperature
 
     var id: String { rawValue }
 
     var module: MenuModule {
         switch self {
         case .usage, .frequency, .temperature, .power: .cpu
-        case .systemPower, .socHotspot, .socPower, .gpuPower, .fan: .power
+        case .systemPower, .socHotspot, .socPower, .fan: .power
         case .memoryUsage, .memoryPressure, .swapUsed: .memory
         case .diskTemperature, .diskThroughput, .diskFree: .storage
+        case .gpuActive, .gpuPower, .gpuTemperature: .gpu
         }
     }
+
+    /// 偏好键里的模块段：GPU 功率移到 GPU 模块后沿用原来的 `menubar.power.gpuPower.*`，已有用户的开关与颜色不丢。
+    var keyModule: String { self == .gpuPower ? MenuModule.power.rawValue : module.rawValue }
 
     static func widgets(of module: MenuModule) -> [MenuWidget] { allCases.filter { $0.module == module } }
 
@@ -661,6 +735,7 @@ enum MenuModule: String, CaseIterable, Identifiable {
     case power
     case memory
     case storage
+    case gpu
 
     var id: String { rawValue }
 }

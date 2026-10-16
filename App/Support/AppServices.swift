@@ -76,6 +76,22 @@ struct StorageCollectors {
     ]
 }
 
+/// 引擎里的 GPU 与加速器采集器实例（诊断页读档位表、温度键、媒体底数与细节读数，D57）。
+/// GPU 活跃、频率与功率由 `PowerCollectors.gpu`（`power.gpu`）一并输出。
+struct GPUCollectors {
+    var temperature: GPUTemperatureCollector?
+    var accelerators: GPUAcceleratorCollector?
+    var media: MediaEngineCollector?
+    var details: GPUDiagnosticsCollector?
+
+    init(_ collectors: [any Collector]) {
+        temperature = collectors.compactMap { $0 as? GPUTemperatureCollector }.first
+        accelerators = collectors.compactMap { $0 as? GPUAcceleratorCollector }.first
+        media = collectors.compactMap { $0 as? MediaEngineCollector }.first
+        details = collectors.compactMap { $0 as? GPUDiagnosticsCollector }.first
+    }
+}
+
 /// 存储的结构状态（存储模块设计 §6）：物理盘清单与容量组变化时才更新，面板据此决定有几行；
 /// 另负责 widget 绑定的解析与 SMART 焦点盘（D55）。
 @Observable
@@ -189,6 +205,10 @@ final class TopNModel {
             case .memory: refreshFallback()  // footprint 是当前值，不需要基线
             case .disk: _ = fallbackSampler.sampleDisk(rows: rowCount)  // 建立基线
             case .cpu: _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
+            case .gpu:
+                // 没有按进程的公开 GPU 计数，不回退（D57 G7）：列表留空，由界面提示。
+                rows = []
+                return
             }
             let timer = Timer(timeInterval: TimeInterval(interval), repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshFallback() }
@@ -215,6 +235,10 @@ final class TopNModel {
         }
         if metric == .disk {
             diskTick(window)
+            return
+        }
+        if metric == .gpu {
+            gpuTick(window)
             return
         }
         building = true
@@ -271,6 +295,22 @@ final class TopNModel {
         }
     }
 
+    /// GPU：用最近一个窗口的槽位 8 / 41 / 39 差分组装（D57 G7）。
+    private func gpuTick(_ window: AppActivityWindow) {
+        building = true
+        let builder = builder
+        let rows = rowCount
+        let grouping = grouping
+        Task.detached(priority: .utility) { [weak self] in
+            let built = builder.buildGPU(window: window, rows: rows, grouping: grouping)
+            await MainActor.run {
+                guard let self else { return }
+                self.building = false
+                if !self.isFrozen, self.isActive { self.rows = built }
+            }
+        }
+    }
+
     private func refreshFallback() {
         guard !building, !isFrozen else { return }
         building = true
@@ -282,7 +322,7 @@ final class TopNModel {
                 switch metric {
                 case .memory: sampler.sampleMemory(rows: rows)
                 case .disk: sampler.sampleDisk(rows: rows)
-                case .cpu: sampler.sample(rows: rows)
+                case .cpu, .gpu: sampler.sample(rows: rows)
                 }
             await MainActor.run {
                 guard let self else { return }
@@ -361,6 +401,9 @@ final class AppServices {
     let storage: StorageCollectors
     let storageModel = StorageModel.shared
     let diskTopN: TopNModel
+    /// GPU 与加速器（D57）：采集器与按 GPU 时间的 Top N。
+    let gpu: GPUCollectors
+    let gpuTopN: TopNModel
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
@@ -368,8 +411,10 @@ final class AppServices {
 
     init(
         collectors: CPUCollectors, power: PowerCollectors, memory: MemoryCollectors, storage: StorageCollectors,
-        history: HistoryRecorder?, engine: SamplingEngine
+        gpu: GPUCollectors, history: HistoryRecorder?, engine: SamplingEngine
     ) {
+        self.gpu = gpu
+        self.gpuTopN = TopNModel(sampler: collectors.apps, metric: .gpu)
         self.collectors = collectors
         self.power = power
         self.memory = memory
@@ -395,6 +440,7 @@ final class AppServices {
             topN.coalitionTick()
             memoryTopN.coalitionTick()
             diskTopN.coalitionTick()
+            gpuTopN.coalitionTick()
         }
         if !StorageCollectors.ids.isDisjoint(with: result.collectors) {
             storageModel.refresh(

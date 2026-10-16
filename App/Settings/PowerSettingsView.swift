@@ -1,6 +1,6 @@
 // 设置的「功耗与散热」页（功耗与散热模块设计 §7.3，D41、D44–D46）。
 //
-// 按 D41 的模块页结构分节：菜单栏（5 个 widget；没有风扇的机型不列风扇）、采集、面板、历史。
+// 按 D41 的模块页结构分节：菜单栏（4 个 widget；没有风扇的机型不列风扇；GPU 功率移到 GPU 页，D57）、采集、面板、历史。
 
 import SwiftUI
 import SysCollectors
@@ -23,6 +23,11 @@ struct PowerSettingsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("功率值做约 2 秒的平滑。自定义颜色不随浅色 / 深色菜单栏切换。")
+                    HStack(spacing: 4) {
+                        Text("GPU 功率 widget 在 GPU 模块里。")
+                        Button("在「GPU 与加速器」页设置") { openPage(.gpu) }
+                            .buttonStyle(.link)
+                    }
                     HStack(spacing: 4) {
                         Text("排版和小标签对所有模块统一生效。")
                         Button("在「菜单栏」页设置") { openPage(.menuBar) }

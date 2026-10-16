@@ -61,6 +61,8 @@ private struct SettingsSplitView: View {
         case .storage:
             StorageSettingsView(
                 settings: context.settings, store: context.store, model: context.services.storageModel, openPage: openPage)
+        case .gpu:
+            GPUSettingsView(settings: context.settings, store: context.store, openPage: openPage)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
@@ -69,7 +71,8 @@ private struct SettingsSplitView: View {
             DiagnosticsView(
                 store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests,
                 services: context.services, catalogVisibilityChanged: context.catalogVisibilityChanged,
-                bandwidthVisibilityChanged: context.bandwidthVisibilityChanged)
+                bandwidthVisibilityChanged: context.bandwidthVisibilityChanged,
+                gpuDetailsVisibilityChanged: context.gpuDetailsVisibilityChanged)
                 .onAppear { context.diagnosticsVisibilityChanged(true) }
                 .onDisappear { context.diagnosticsVisibilityChanged(false) }
         case .about:
@@ -159,6 +162,8 @@ private struct MenuBarSettingsView: View {
                     Button("内存") { openPage(.memory) }
                         .buttonStyle(.link)
                     Button("存储") { openPage(.storage) }
+                        .buttonStyle(.link)
+                    Button("GPU 与加速器") { openPage(.gpu) }
                         .buttonStyle(.link)
                 }
             }

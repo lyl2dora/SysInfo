@@ -19,7 +19,7 @@ enum DisplayNames {
         case "app.self": String(localized: "本进程开销")
         case "power.rail": String(localized: "整机功率")
         case "power.sensors": String(localized: "SoC 功率、最热点与风扇")
-        case "power.gpu": String(localized: "GPU 功率")
+        case "power.gpu": String(localized: "GPU 功率与活跃")
         case "power.pmgr": String(localized: "30 分钟分部件能耗")
         case "sensors.catalog": String(localized: "传感器目录")
         case "memory.vm": String(localized: "内存")
@@ -27,6 +27,10 @@ enum DisplayNames {
         case "storage.io": String(localized: "磁盘读写")
         case "storage.smart": String(localized: "NVMe SMART")
         case "storage.capacity": String(localized: "容量与 RAID")
+        case "gpu.temperature": String(localized: "GPU 温度")
+        case "gpu.accelerators": String(localized: "ANE 状态与 GPU 内存")
+        case "gpu.media": String(localized: "媒体引擎")
+        case "gpu.diagnostics": String(localized: "GPU 细节")
         default: id.rawValue
         }
     }
@@ -62,6 +66,15 @@ enum DisplayNames {
         case "storage.smart.plausible": String(localized: "SMART 读数合理")
         case "storage.capacity.mounts": String(localized: "读取本地挂载点")
         case "storage.capacity.groups": String(localized: "找到容量组")
+        case "power.gpu.gpuph": String(localized: "找到 GPUPH 性能档通道")
+        case "power.gpu.dvfs": String(localized: "找到 GPU 档位表")
+        case "gpu.temperature.smc": String(localized: "打开 SMC")
+        case "gpu.temperature.keys": String(localized: "找到 GPU 温度键")
+        case "gpu.accelerators.ane": String(localized: "读取 ANE 电源状态")
+        case "gpu.accelerators.memory": String(localized: "读取 GPU 内存统计")
+        case "gpu.accelerators.any": String(localized: "至少一项可读")
+        case "gpu.media.ioreport", "gpu.diagnostics.ioreport": String(localized: "IOReport 可用")
+        case "gpu.media.channels": String(localized: "找到媒体引擎中断通道")
         default: name
         }
     }
@@ -82,6 +95,8 @@ enum DisplayNames {
                 String(localized: "菜单栏内存")
             } else if source.rawValue.hasPrefix("menubar.storage.") {
                 String(localized: "菜单栏存储")
+            } else if source.rawValue.hasPrefix("menubar.gpu.") {
+                String(localized: "菜单栏 GPU")
             } else {
                 source.rawValue
             }
