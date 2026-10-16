@@ -58,7 +58,7 @@ final class StatusItemView: NSView {
         case .socPower: String(localized: "SOC", comment: "菜单栏小标签：SoC 功率，保持英文缩写")
         case .gpuPower: String(localized: "GPU", comment: "菜单栏小标签：GPU 功率，保持英文缩写")
         case .fan: String(localized: "FAN", comment: "菜单栏小标签：风扇转速，保持英文缩写")
-        case .memoryUsage: String(localized: "MEM", comment: "菜单栏小标签：内存占用，保持英文缩写")
+        case .memoryUsage: String(localized: "RAM", comment: "菜单栏小标签：内存占用，保持英文缩写")
         case .memoryPressure: String(localized: "PRES", comment: "菜单栏小标签：内存压力，保持英文缩写")
         case .swapUsed: String(localized: "SWAP", comment: "菜单栏小标签：Swap 用量，保持英文缩写")
         case .diskTemperature: String(localized: "SSD", comment: "菜单栏小标签：盘温，保持英文缩写")

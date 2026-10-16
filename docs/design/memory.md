@@ -127,7 +127,7 @@ M5 上 sysctl 的空闲比 `vm_stat` 的「Pages free」稳定地少约 65 MiB�
 
 | widget | 小标签 | 数值 | 定宽依据 |
 |---|---|---|---|
-| `memoryUsage` | MEM | 「64%」或「40.8G」 | 「100%」/「99.9G」 |
+| `memoryUsage` | RAM（2026-10-16 由 MEM 改名）| 「64%」或「40.8G」 | 「100%」/「99.9G」 |
 | `memoryPressure` | PRES | 「6%」 | 「100%」 |
 | `swapUsed` | SWAP | 「0.0G」 | 「99.9G」 |
 
