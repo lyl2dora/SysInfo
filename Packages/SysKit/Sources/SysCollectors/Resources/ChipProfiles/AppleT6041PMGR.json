@@ -1,5 +1,26 @@
 {
   "description": "M4 Pro (Mac16,11)",
+  "gpu": {
+    "dvfsTableKey": 9,
+    "note": "M4 Pro: 22 Tg keys in 11 pairs (the second key reads +6.2/6.4 C or equal); only the lower key of each pair is used. All keys hold placeholders (-4, 0, 2.2, 2.4) while the GPU is powered off.",
+    "sentinels": [
+      -4.0,
+      0.0,
+      2.2,
+      2.4
+    ],
+    "temperatureKeys": [
+      "Tg1U",
+      "Tg1k",
+      "Tg0j",
+      "Tg1c",
+      "Tg0K"
+    ],
+    "validRange": [
+      10.0,
+      130.0
+    ]
+  },
   "power": {
     "clusterRails": {
       "d0c0": [

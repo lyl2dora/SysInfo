@@ -9,6 +9,8 @@
 //   外部成员合计 = coalition 合计 − 同 uid 之和（footprint 是当前值，不涉及窗口内成员变化）；
 // - 磁盘（存储模块设计 §4.5）：按 coalition 6/7 号槽（累计读写字节，含 root 成员）的窗口差分排序；
 //   同 uid 成员用 `ri_diskio_bytesread/written` 差分拆分，外部成员归入残差（只在窗口内成员没有变化时才算，钳到 ≥0）；
+// - GPU（D57 G7）：按 coalition 槽位 8（GPU 时间）的窗口差分排序，附槽位 41（GPU 能耗）与 39（ANE 能耗）。
+//   没有按进程的公开 GPU 计数，成员只列名字不拆数值；按进程视图里多成员 coalition 保持一行；
 // - 名称按开机期间唯一 id 缓存（PROC_PIDUNIQIDENTIFIERINFO），pid 复用不会张冠李戴；
 // - 只为排在前面的 coalition 读成员和进程信息，扫描本身由 AppSampler 完成。
 
@@ -403,6 +405,56 @@ public final class TopNBuilder: Sendable {
             let seconds = Double(now - previous.nanos) / 1e9
             return (Double(read - previous.read) / seconds, Double(written - previous.written) / seconds)
         }
+    }
+
+    // MARK: - GPU（D57 G7）
+
+    /// 按窗口内的 GPU 时间生成 Top N 行。GPU 时间为 0 但有 ANE 能耗的也列出（排在 GPU 之后，按 ANE 能耗）。
+    public func buildGPU(window: AppActivityWindow, rows: Int, grouping: TopNGrouping) -> [TopNRow] {
+        guard rows > 0 else { return [] }
+        let table = ProcessTable.snapshot()
+        let elapsed = Double(window.elapsedNanos)
+        guard elapsed > 0 else { return [] }
+        let sorted = window.coalitions
+            .filter { $0.gpuNanos > 0 || $0.aneEnergyNanojoules > 0 }
+            .sorted { a, b in
+                a.gpuNanos != b.gpuNanos ? a.gpuNanos > b.gpuNanos : a.aneEnergyNanojoules > b.aneEnergyNanojoules
+            }
+        var out: [TopNRow] = []
+        for delta in sorted.prefix(rows) {
+            let pids = CoalitionReader.members(of: delta.id, tasksHint: Int(delta.tasks)) ?? []
+            var row = gpuRow(delta, pids: pids, table: table, elapsed: elapsed)
+            if grouping == .byProcess, row.memberCount <= 1 {
+                row.kind = .process
+                row.id = "p\(row.representativePID)"
+            }
+            out.append(row)
+        }
+        pruneCaches(alive: Set(table.keys))
+        return out
+    }
+
+    private func gpuRow(_ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double) -> TopNRow {
+        let ownUID = getuid()
+        let entries = pids.compactMap { table[$0] }
+        let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
+        let representative = Self.representative(infos)
+        let seconds = elapsed / 1e9
+        let members: [TopNMember] = infos.filter { $0.0.uid == ownUID }.map { entry, info in
+            TopNMember(
+                pid: entry.pid, name: info.name, path: info.path, cpu: nil,
+                eligibility: ProcessControl.eligibility(uid: entry.uid, pid: entry.pid))
+        }
+        let isKernel = pids.contains(0)
+        return TopNRow(
+            id: "c\(delta.id)", kind: .coalition, coalitionID: delta.id,
+            name: isKernel ? "kernel_task" : (representative?.1.name ?? "cid \(delta.id)"),
+            appPath: representative?.1.appPath, representativePID: representative?.0.pid ?? pids.first ?? 0,
+            memberCount: max(pids.count, Int(delta.tasks)), cpu: 0, perfLevel0Share: nil, energyWatts: nil, topMember: nil,
+            members: members, residualCPU: nil, residualCount: entries.count - members.count,
+            eligibility: entries.count == 1 ? ProcessControl.eligibility(uid: entries[0].uid, pid: entries[0].pid) : .group,
+            gpuShare: Double(delta.gpuNanos) / elapsed, gpuWatts: Double(delta.gpuEnergyNanojoules) / 1e9 / seconds,
+            aneWatts: Double(delta.aneEnergyNanojoules) / 1e9 / seconds)
     }
 
     // MARK: - 缓存

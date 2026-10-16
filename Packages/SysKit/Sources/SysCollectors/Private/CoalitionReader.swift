@@ -41,6 +41,14 @@ public struct CoalitionUsage: Hashable, Sendable {
     /// 累计磁盘读 / 写字节（6、7 号槽，含 root 成员；存储模块设计 §4.5，调研报告 disk-review/coal_validate）。
     public var diskBytesRead: UInt64 { slot(6) }
     public var diskBytesWritten: UInt64 { slot(7) }
+    /// GPU 时间，纳秒（slot 8，与 Metal 自报的命令缓冲执行时间吻合，调研报告 §1.8）。
+    public var gpuNanos: UInt64 { slot(8) }
+    /// ANE 时间，mach tick（slot 38，饱和测试推定；GPU 边界稿 §1.3 两台换算后都不超过 100%）。
+    public var aneTicks: UInt64 { slot(38) }
+    /// ANE 能耗，nJ（slot 39；全部 coalition 之和 ÷ PMGR ANE 批次 = 0.92–0.93，D58）。
+    public var aneEnergyNanojoules: UInt64 { slot(39) }
+    /// GPU 能耗，nJ（slot 41；全部 coalition 之和与 AGX「GPU Energy」逐焦耳相等）。
+    public var gpuEnergyNanojoules: UInt64 { slot(41) }
     public var energyNanojoules: UInt64 { slot(11) }
     public var perfLevel0Ticks: UInt64 { slot(22) }
     public var instructions: UInt64 { slot(31) }

@@ -4,7 +4,7 @@
 // - 只订阅顶层通道（按档案 pmgrComponents，没有档案时按 PMGRNaming 推出）与 AGX「GPU Energy」，不订阅几百个子通道；
 // - 有 ≥3 个 PMGR 通道同时变化即为新批次。批次 = 本次快照 − 上一次变化时的快照；开机后第一次变化只建基线；
 // - 每个批次顺带做交叉核对（D44 §7）：AGX ÷ PMGR GPU 在 0.9–1.1；PZD1 积分 ÷ PMGR DRAM 在 0.98–1.02
-//   （采样稀于 1.5 s 时放宽到 ±5%）。结论记进账本，连续两次失败时对应指标改为不可用；
+//   （采样稀于 1.5 s 时放宽到 ±5%）；coalition 槽位 39 积分 ÷ PMGR ANE 在 0.8–1.05（D58）。结论记进账本，连续两次失败时对应指标改为不可用；
 // - 状态（上一次变化的快照与最近一批）可以导出、恢复：历史库持久化它，重启后能立即显示上一批，
 //   同一次开机里也不必再等两个批次。
 
@@ -195,11 +195,22 @@ public final class PMGRBatchCollector: Collector {
     /// GPU 核对需要的最低窗口均值，W：空闲时 GPU 只有几十毫瓦，比值会飘（M5 空闲实测 1.074，满载 1.002），
     /// 低于它时这一批不下结论，免得误判后停用 GPU 功率。
     static let minimumGPUWatts = 0.3
+    /// ANE 核对的最低窗口均值，W（D58）：空闲时 ANE 批次只有零点几焦耳，比值没有意义。
+    static let minimumANEWatts = 0.05
 
     func crossCheck(_ batch: PMGRBatch) {
         if let pmgr = batch.joules["gpu"], pmgr > 1, let agx = batch.agxJoules {
             let enough = pmgr / batch.seconds >= Self.minimumGPUWatts
             ledger.record(.gpu, ratio: enough ? agx / pmgr : nil, range: PowerLedger.ranges[.gpu]!, at: batch.end)
+        }
+        // ANE 估算（D58）：coalition 扫描不常驻（面板 Top N、历史的每应用记录），覆盖不足 90% 时不下结论。
+        if let pmgr = batch.joules["ane"], pmgr > 0 {
+            let integral = ledger.aneIntegral(from: batch.start, to: batch.end)
+            let enough = pmgr / batch.seconds >= Self.minimumANEWatts
+            let covered = integral.map { $0.covered >= batch.seconds * 0.9 } ?? false
+            ledger.record(
+                .ane, ratio: enough && covered ? integral.map { $0.joules / pmgr } : nil, range: PowerLedger.ranges[.ane]!,
+                at: batch.end)
         }
         if let pmgr = batch.joules["dram"], pmgr > 1 {
             let integral = ledger.dramIntegral(from: batch.start, to: batch.end)

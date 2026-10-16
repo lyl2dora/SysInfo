@@ -23,11 +23,13 @@ public struct ChipProfile: Codable, Hashable, Sendable {
     public var power: PowerProfile
     /// 整机与 SoC 级的键（功耗与散热模块，D44）。可选：旧档案、本机校准结果没有这一段时视为没有。
     public var system: SystemProfile?
+    /// GPU 的档位表与温度键（GPU 与加速器模块，D57）。可选：没有这一段时按运行时推断，质量标 inferred。
+    public var gpu: GPUChipProfile?
 
     public init(
         schema: Int = ChipProfile.currentSchema, socID: String, description: String, verifiedBuilds: [String],
         source: String, topology: TopologyExpectation, temperature: TemperatureProfile, power: PowerProfile,
-        system: SystemProfile? = nil
+        system: SystemProfile? = nil, gpu: GPUChipProfile? = nil
     ) {
         self.schema = schema
         self.socID = socID
@@ -38,6 +40,7 @@ public struct ChipProfile: Codable, Hashable, Sendable {
         self.temperature = temperature
         self.power = power
         self.system = system
+        self.gpu = gpu
     }
 }
 
@@ -152,5 +155,33 @@ public struct SystemProfile: Codable, Hashable, Sendable {
         self.pmgrComponents = pmgrComponents
         self.catalogGroups = catalogGroups
         self.placeholders = placeholders
+    }
+}
+
+/// GPU 的档位表与温度键（GPU 模块设计 §6，D57）。取值全部来自实测（GPU 边界稿 §1）。
+public struct GPUChipProfile: Codable, Hashable, Sendable {
+    /// GPU DVFS 表的键号 k（pmgr `voltage-states<k>-sram`）：P*k* 取表中第 *k* 个非零频率。
+    public var dvfsTableKey: Int?
+    /// GPU 温度的代表键（显示其中有效读数的最大值）。M4 的成对键只列较低的一侧。
+    public var temperatureKeys: [String]
+    /// 断电占位值：读数精确等于其中之一即为无读数（M4 实测 −4、0、2.2、2.4）。
+    public var sentinels: [Double]
+    /// 合理范围（°C），超出即为无读数。
+    public var validRange: [Double]
+    /// 给诊断页看的说明，不做本地化。
+    public var note: String?
+
+    public init(dvfsTableKey: Int?, temperatureKeys: [String], sentinels: [Double], validRange: [Double], note: String?) {
+        self.dvfsTableKey = dvfsTableKey
+        self.temperatureKeys = temperatureKeys
+        self.sentinels = sentinels
+        self.validRange = validRange
+        self.note = note
+    }
+
+    /// 读数是否有效（不是占位值、在合理范围内）。
+    public func isValid(_ value: Double) -> Bool {
+        guard !sentinels.contains(value), validRange.count == 2 else { return false }
+        return value >= validRange[0] && value <= validRange[1]
     }
 }

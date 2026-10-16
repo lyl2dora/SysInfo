@@ -7,6 +7,7 @@
 // - power、pmgr：功耗与散热（Power.swift）；
 // - memory、memtop、verify memory、verify memtop：内存（Memory.swift）；
 // - storage、smart、disktop、verify storage：存储（Storage.swift）；
+// - gpu、gputop：GPU 与加速器（GPU.swift）；
 // - history：历史库的统计、导出与实录（History.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
@@ -120,6 +121,21 @@ struct SysInfoCLI {
                         rows: try options.int("--rows", default: 10, range: 1...100),
                         grouping: options.flag("--by-process") ? .byProcess : .byApp, fallback: options.flag("--fallback"),
                         json: options.flag("--json")))
+            case "gpu":
+                let options = try Options(arguments, flags: ["--json", "--diag"], values: ["--interval", "--count"])
+                exit(
+                    runGPU(
+                        interval: try options.double("--interval", default: 1, range: 0.5...3600),
+                        count: try options.int("--count", default: 5, range: 1...1_000_000), diagnostics: options.flag("--diag"),
+                        json: options.flag("--json")))
+            case "gputop":
+                let options = try Options(arguments, flags: ["--json", "--by-process"], values: ["--interval", "--count", "--rows"])
+                exit(
+                    runGPUTopN(
+                        count: try options.int("--count", default: 1, range: 1...1_000_000),
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        rows: try options.int("--rows", default: 10, range: 1...100),
+                        grouping: options.flag("--by-process") ? .byProcess : .byApp, json: options.flag("--json")))
             case "storage":
                 let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count"])
                 exit(
@@ -204,6 +220,11 @@ struct SysInfoCLI {
                                                       按内存 footprint 的 Top N（按应用或按进程）
               verify memory                           与 vm_stat、memory_pressure -Q 各运行一次的结果对照
               verify memtop                           按进程的内存 Top N 与 top -l 1 -o mem 对照
+              gpu [--interval 1] [--count 5] [--diag] [--json]
+                                                      GPU 活跃、频率、功率、温度，ANE 上电与估算功率，媒体引擎活动，GPU 内存；
+                                                      --diag 另打印各档驻留、PWRCTRL、节流、PMP 带宽、ANE 中断、Device Utilization %
+              gputop [--interval 2] [--count 1] [--rows 10] [--by-process] [--json]
+                                                      按 GPU 时间的 Top N（coalition 槽位 8），附 GPU 与 ANE 能耗
               storage [--interval 1] [--count 3] [--json]
                                                       物理盘清单、RAID 组、容量组，以及每盘读写、IOPS、延迟、温度与寿命
               smart [--json]                          每块物理盘的 NVMe SMART 全字段

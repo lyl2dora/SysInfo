@@ -1,7 +1,8 @@
 // 哪些指标进历史库、怎么聚合（CPU 模块设计 §6，边界稿 §5.5）。
 //
 // CPU 每分钟约 12–16 行；功耗与散热每分钟约 6 行（整机、SoC、GPU、DRAM 功率，最热点，风扇转速）；
-// 内存每分钟 13 行（已用、占用率、App、联动、被压缩、已缓存、Swap、压力与等级、页入 / 页出、换入 / 换出），随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
+// 内存每分钟 13 行（已用、占用率、App、联动、被压缩、已缓存、Swap、压力与等级、页入 / 页出、换入 / 换出）；
+// GPU 与加速器每分钟 3 行（GPU 活跃、GPU 温度、ANE 上电比例），随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
 // 每簇与总功耗、1 分钟负载均值、热状态与热压力。每核、每簇占用、中断、任务数不入库。
 //
 // 两类聚合：
@@ -26,6 +27,7 @@ public enum HistoryModule: String, Sendable, Hashable, Codable, CaseIterable {
     case power
     case memory
     case storage
+    case gpu
 }
 
 /// 历史库里一个指标的说明。
@@ -83,6 +85,15 @@ public enum HistoryCatalog {
         case .memoryPageInRate, .memoryPageOutRate, .memorySwapInRate, .memorySwapOutRate:
             // 两次读数之间的平均速率，样本本身就是一段区间。
             return HistoryMetricSpec(aggregation: .interval, unit: "1/s", collector: MemoryCollector.collectorID, module: .memory)
+        // GPU 与加速器（GPU 模块设计 §7，D57 G9）：GPU 功率已由功耗模块记录；频率、GPU 内存、媒体引擎、ANE 估算不入库。
+        case .gpuActive:
+            // GPUPH 驻留的差分：样本本身就是一段区间的平均值。
+            return HistoryMetricSpec(aggregation: .interval, unit: "ratio", collector: GPUPowerCollector.collectorID, module: .gpu)
+        case .gpuTemperature:
+            return HistoryMetricSpec(aggregation: .instant, unit: "degC", collector: GPUTemperatureCollector.collectorID, module: .gpu)
+        case .anePowered:
+            // 0 / 1 的瞬时状态；分钟均值即这一分钟里上电的比例。
+            return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: GPUAcceleratorCollector.collectorID, module: .gpu)
         default:
             break
         }

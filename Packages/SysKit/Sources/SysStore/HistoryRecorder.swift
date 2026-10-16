@@ -36,11 +36,14 @@ public actor HistoryRecorder {
         public var recordMemory: Bool
         /// 记录存储指标（存储模块设计 §5）：后台每 60 s。
         public var recordStorage: Bool
+        /// 记录 GPU 与加速器指标（D57 G9）：GPU 活跃、温度、ANE 上电，后台每 10 s。
+        public var recordGPU: Bool
 
         public init(
             recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false, recordPower: Bool = true,
-            recordEnergy: Bool = true, recordMemory: Bool = true, recordStorage: Bool = true
+            recordEnergy: Bool = true, recordMemory: Bool = true, recordStorage: Bool = true, recordGPU: Bool = true
         ) {
+            self.recordGPU = recordGPU
             self.recordSystem = recordSystem
             self.recordApps = recordApps
             self.highPrecision = highPrecision
@@ -227,6 +230,13 @@ public actor HistoryRecorder {
                     collectors: [MemoryCollector.collectorID], interval: Self.sensorInterval, source: .history,
                     tier: .background))
         }
+        if configuration.recordGPU {
+            demands.append(
+                Demand(
+                    collectors: [
+                        GPUPowerCollector.collectorID, GPUTemperatureCollector.collectorID, GPUAcceleratorCollector.collectorID,
+                    ], interval: Self.sensorInterval, source: .history, tier: .background))
+        }
         if configuration.recordStorage {
             demands.append(
                 Demand(
@@ -261,6 +271,7 @@ public actor HistoryRecorder {
         if configuration.recordPower { modules.insert(.power) }
         if configuration.recordMemory { modules.insert(.memory) }
         if configuration.recordStorage { modules.insert(.storage) }
+        if configuration.recordGPU { modules.insert(.gpu) }
         if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
         if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
             energy.ingest(watts: watts, at: sample.time)

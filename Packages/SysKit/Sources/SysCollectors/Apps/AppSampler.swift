@@ -33,6 +33,11 @@ public struct CoalitionDelta: Hashable, Sendable {
     /// 磁盘读 / 写字节（存储模块设计 §4.5）。
     public var diskReadBytes: UInt64 = 0
     public var diskWrittenBytes: UInt64 = 0
+    /// GPU 时间（纳秒）、GPU 能耗（nJ）、ANE 时间（纳秒）、ANE 能耗（nJ）（GPU 模块设计 §5，D57、D58）。
+    public var gpuNanos: UInt64 = 0
+    public var gpuEnergyNanojoules: UInt64 = 0
+    public var aneNanos: UInt64 = 0
+    public var aneEnergyNanojoules: UInt64 = 0
     /// 窗口内成员有没有变化（tasks_started / tasks_exited 变了）。残差归因只在没有变化时做（边界稿 §5.3）。
     public var membershipChanged: Bool
     /// 窗口开始时还不存在（新出现的 coalition）。
@@ -63,6 +68,8 @@ public struct AppActivityWindow: Hashable, Sendable {
     public var slotsTrusted: Bool = true
 
     public var totalCPUNanos: UInt64 { coalitions.reduce(0) { $0 &+ $1.cpuNanos } }
+    /// 全部 coalition 的 ANE 能耗之和，nJ（ANE 功率估算，D58）。
+    public var totalANEEnergyNanojoules: UInt64 { coalitions.reduce(0) { $0 &+ $1.aneEnergyNanojoules } }
 }
 
 public final class AppSampler: Collector {
@@ -92,8 +99,12 @@ public final class AppSampler: Collector {
     static let retainedWindowLimit = 64
 
     private let state = Mutex(State())
+    /// ANE 估算的对账账本（D58）：每个窗口的槽位 39 合计记进去，PMGR 批次到来时核对。
+    public let ledger: PowerLedger?
 
-    public init() {}
+    public init(ledger: PowerLedger? = nil) {
+        self.ledger = ledger
+    }
 
     /// 最近一个窗口；还没有两次扫描时为 nil。
     public var latestWindow: AppActivityWindow? { state.withLock { $0.latest } }
@@ -218,10 +229,23 @@ public final class AppSampler: Collector {
                 s.retained.append(window)
                 if s.retained.count > Self.retainedWindowLimit { s.retained.removeFirst(s.retained.count - Self.retainedWindowLimit) }
             }
-            return CollectorOutput(
-                samples: Self.summarySamples(window, slotsTrusted: s.slotsTrusted, at: time),
-                status: s.warnings ? .degraded : .ok, dataPath: Self.dataPath)
+            var samples = Self.summarySamples(window, slotsTrusted: s.slotsTrusted, at: time)
+            samples.append(aneSample(window, at: time))
+            return CollectorOutput(samples: samples, status: s.warnings ? .degraded : .ok, dataPath: Self.dataPath)
         }
+    }
+
+    /// ANE 功率（估算，D58）：全部 coalition 槽位 39 的差分合计 ÷ 窗口长度。同时记进账本，供 PMGR 批次对账；
+    /// 对账连续失败时显示不可用。不看 S4（S4 核对的是 CPU 能耗等槽位，进程在读取间隙里跑动时会偶发不过），
+    /// 槽位 39 的可信度由 PMGR 批次对账判断。
+    private func aneSample(_ window: AppActivityWindow, at time: SampleTime) -> Sample {
+        let seconds = Double(window.elapsedNanos) / 1e9
+        let joules = Double(window.totalANEEnergyNanojoules) / 1e9
+        ledger?.recordANE(joules: joules, seconds: seconds, at: time.wallClock)
+        if ledger?.isDisabled(.ane) == true {
+            return .unavailable(.anePowerEstimated, reason: .selfTestFailed("cross-check"), at: time)
+        }
+        return Sample(id: .anePowerEstimated, value: joules / seconds, quality: .estimated, time: time)
     }
 
     public func resetBaseline() {
@@ -255,6 +279,10 @@ public final class AppSampler: Collector {
                     energyNanojoules: d(now.energyNanojoules, before?.energyNanojoules),
                     diskReadBytes: d(now.diskBytesRead, before?.diskBytesRead),
                     diskWrittenBytes: d(now.diskBytesWritten, before?.diskBytesWritten),
+                    gpuNanos: d(now.gpuNanos, before?.gpuNanos),
+                    gpuEnergyNanojoules: d(now.gpuEnergyNanojoules, before?.gpuEnergyNanojoules),
+                    aneNanos: timebase.nanoseconds(fromTicks: d(now.aneTicks, before?.aneTicks)),
+                    aneEnergyNanojoules: d(now.aneEnergyNanojoules, before?.aneEnergyNanojoules),
                     membershipChanged: before.map {
                         $0.tasksStarted != now.tasksStarted || $0.tasksExited != now.tasksExited
                     } ?? true,
