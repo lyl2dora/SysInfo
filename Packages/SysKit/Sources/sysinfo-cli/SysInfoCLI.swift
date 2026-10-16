@@ -6,6 +6,7 @@
 // - freq、verify freq：每簇频率，以及按档与内核计数对照（Freq.swift）；
 // - power、pmgr：功耗与散热（Power.swift）；
 // - memory、memtop、verify memory、verify memtop：内存（Memory.swift）；
+// - storage、smart、disktop、verify storage：存储（Storage.swift）；
 // - history：历史库的统计、导出与实录（History.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
@@ -50,6 +51,7 @@ struct SysInfoCLI {
                     exit(await runVerifyPassive(seconds: try options.double("--seconds", default: 30, range: 10...60), load: options.flag("--yes")))
                 case "memory": exit(runVerifyMemory())
                 case "memtop": exit(runVerifyMemoryTopN(rows: 10))
+                case "storage": exit(runVerifyStorage(seconds: Int(try options.double("--seconds", default: 5, range: 1...60))))
                 default: throw UsageError("未知的 verify 对象：\(what)")
                 }
             case "topn":
@@ -118,6 +120,24 @@ struct SysInfoCLI {
                         rows: try options.int("--rows", default: 10, range: 1...100),
                         grouping: options.flag("--by-process") ? .byProcess : .byApp, fallback: options.flag("--fallback"),
                         json: options.flag("--json")))
+            case "storage":
+                let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count"])
+                exit(
+                    runStorage(
+                        interval: try options.double("--interval", default: 1, range: 0.5...3600),
+                        count: try options.int("--count", default: 3, range: 1...1_000_000), json: options.flag("--json")))
+            case "disktop":
+                let options = try Options(arguments, flags: ["--json", "--by-process", "--fallback"], values: ["--interval", "--count", "--rows"])
+                exit(
+                    runDiskTopN(
+                        count: try options.int("--count", default: 1, range: 1...1_000_000),
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        rows: try options.int("--rows", default: 10, range: 1...100),
+                        grouping: options.flag("--by-process") ? .byProcess : .byApp, fallback: options.flag("--fallback"),
+                        json: options.flag("--json")))
+            case "smart":
+                let options = try Options(arguments, flags: ["--json"], values: [])
+                exit(runSMART(json: options.flag("--json")))
             case "pmgr":
                 let options = try Options(arguments, flags: ["--watch"], values: ["--timeout"])
                 exit(runPMGR(watch: options.flag("--watch"), timeout: try options.double("--timeout", default: 1900, range: 60...7200)))
@@ -184,6 +204,12 @@ struct SysInfoCLI {
                                                       按内存 footprint 的 Top N（按应用或按进程）
               verify memory                           与 vm_stat、memory_pressure -Q 各运行一次的结果对照
               verify memtop                           按进程的内存 Top N 与 top -l 1 -o mem 对照
+              storage [--interval 1] [--count 3] [--json]
+                                                      物理盘清单、RAID 组、容量组，以及每盘读写、IOPS、延迟、温度与寿命
+              smart [--json]                          每块物理盘的 NVMe SMART 全字段
+              disktop [--interval 2] [--count 1] [--rows 10] [--by-process] [--fallback] [--json]
+                                                      按磁盘读写的 Top N（按应用或按进程）；--fallback 为同 uid 回退
+              verify storage [--seconds 5]            每盘读写与 iostat -d 同一时间窗对照，容量组可用空间与 df -k 对照
               pmgr [--watch] [--timeout 1900]         PMGR 订阅的部件；--watch 等到下一个 30 分钟批次，打印分部件明细与交叉核对
               catalog [--samples 4] [--all] [--json]  传感器目录：全部 T/V/I/P/F 数值键的质量（有效 / 占位 / 恒定 / 非温度）与已验证分组
               history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）

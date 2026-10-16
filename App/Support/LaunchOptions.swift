@@ -12,8 +12,10 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
     var pinPanel = false
     /// `--expand-details`：面板的「详情」与「中断来源」一开始就展开（开销测量的最重一档）。
     var expandDetails = false
-    /// `--panel-tab=<tab>`：面板一开始显示的 tab（`cpu`、`power`），截图与开销测量用。
+    /// `--panel-tab=<tab>`：面板一开始显示的 tab（`cpu`、`power`、`memory`、`storage`），截图与开销测量用。
     var panelTab: String?
+    /// `--storage-detail=<n>`：存储 tab 直接打开第 n 块盘（从 0 起，按面板顺序）的详情页，截图与开销测量用。
+    var storageDetailIndex: Int?
     /// `--factory-defaults`：不读写持久化的设置，只用出厂默认值（开销测量用，不改动用户的偏好）。
     var factoryDefaults = false
     /// `--single-instance`：在 Debug 版上也按日用版的单实例规则执行（D48），截图自查与测试用。
@@ -29,6 +31,8 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
         pinPanel = arguments.contains("--pin-panel")
         expandDetails = arguments.contains("--expand-details")
         panelTab = arguments.first { $0.hasPrefix("--panel-tab=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)
+        storageDetailIndex = arguments.first { $0.hasPrefix("--storage-detail=") }?.split(separator: "=", maxSplits: 1).last
+            .flatMap { Int($0) }
     }
 
     static let current = LaunchOptions(arguments: CommandLine.arguments)

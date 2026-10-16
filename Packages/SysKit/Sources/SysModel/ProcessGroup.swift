@@ -29,10 +29,16 @@ public struct TopNMember: Hashable, Codable, Sendable {
     public var eligibility: TerminationEligibility
     /// 内存 footprint，字节（内存 Top N，D49）；CPU Top N 里为 nil。
     public var footprint: UInt64?
+    /// 窗口内的磁盘读 / 写，B/s（磁盘 Top N，存储模块设计 §4.5）；第一次出现、还没有差分时为 nil。
+    public var diskRead: Double?
+    public var diskWrite: Double?
 
     public init(
-        pid: Int32, name: String, path: String?, cpu: Double?, eligibility: TerminationEligibility, footprint: UInt64? = nil
+        pid: Int32, name: String, path: String?, cpu: Double?, eligibility: TerminationEligibility, footprint: UInt64? = nil,
+        diskRead: Double? = nil, diskWrite: Double? = nil
     ) {
+        self.diskRead = diskRead
+        self.diskWrite = diskWrite
         self.pid = pid
         self.name = name
         self.path = path
@@ -76,13 +82,27 @@ public struct TopNRow: Hashable, Codable, Sendable, Identifiable {
     public var footprint: UInt64?
     /// 外部成员（root 与其他用户）合计的 footprint：coalition 合计减去同 uid 成员之和，钳到 ≥0。
     public var residualFootprint: UInt64?
+    /// 窗口内的磁盘读 / 写，B/s（磁盘 Top N：coalition 6/7 号槽的差分）；其他 Top N 里为 nil。
+    public var diskRead: Double?
+    public var diskWrite: Double?
+    /// 外部成员合计的磁盘读写，B/s（与 CPU 的残差同样只在窗口内成员没有变化时才算）。
+    public var residualDiskRead: Double?
+    public var residualDiskWrite: Double?
+
+    /// 磁盘读 + 写，B/s（排序用）。
+    public var diskTotal: Double { (diskRead ?? 0) + (diskWrite ?? 0) }
 
     public init(
         id: String, kind: Kind, coalitionID: UInt64, name: String, appPath: String?, representativePID: Int32,
         memberCount: Int, cpu: Double, perfLevel0Share: Double?, energyWatts: Double?, topMember: TopNMember?,
         members: [TopNMember], residualCPU: Double?, residualCount: Int, eligibility: TerminationEligibility,
-        footprint: UInt64? = nil, residualFootprint: UInt64? = nil
+        footprint: UInt64? = nil, residualFootprint: UInt64? = nil, diskRead: Double? = nil, diskWrite: Double? = nil,
+        residualDiskRead: Double? = nil, residualDiskWrite: Double? = nil
     ) {
+        self.diskRead = diskRead
+        self.diskWrite = diskWrite
+        self.residualDiskRead = residualDiskRead
+        self.residualDiskWrite = residualDiskWrite
         self.footprint = footprint
         self.residualFootprint = residualFootprint
         self.id = id
@@ -103,10 +123,11 @@ public struct TopNRow: Hashable, Codable, Sendable, Identifiable {
     }
 }
 
-/// Top N 按什么排序：CPU（D31）或内存 footprint（D49）。
+/// Top N 按什么排序：CPU（D31）、内存 footprint（D49）或磁盘读写（存储模块设计 §4.5）。
 public enum TopNMetric: String, Hashable, Codable, Sendable {
     case cpu
     case memory
+    case disk
 }
 
 /// Top N 的分组方式（D31）。

@@ -58,6 +58,9 @@ private struct SettingsSplitView: View {
                 settings: context.settings, store: context.store, services: context.services, openPage: openPage)
         case .memory:
             MemorySettingsView(settings: context.settings, store: context.store, openPage: openPage)
+        case .storage:
+            StorageSettingsView(
+                settings: context.settings, store: context.store, model: context.services.storageModel, openPage: openPage)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
@@ -154,6 +157,8 @@ private struct MenuBarSettingsView: View {
                     Button("功耗与散热") { openPage(.power) }
                         .buttonStyle(.link)
                     Button("内存") { openPage(.memory) }
+                        .buttonStyle(.link)
+                    Button("存储") { openPage(.storage) }
                         .buttonStyle(.link)
                 }
             }

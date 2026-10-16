@@ -25,6 +25,7 @@ public enum HistoryModule: String, Sendable, Hashable, Codable, CaseIterable {
     case cpu
     case power
     case memory
+    case storage
 }
 
 /// 历史库里一个指标的说明。
@@ -84,6 +85,29 @@ public enum HistoryCatalog {
             return HistoryMetricSpec(aggregation: .interval, unit: "1/s", collector: MemoryCollector.collectorID, module: .memory)
         default:
             break
+        }
+        // 存储（存储模块设计 §5）：每盘读写、温度、寿命、备用块、介质错误、累计读写；每组已用与可用。
+        // IOPS、延迟、critical warning 不入库。
+        if let (_, metric) = id.storageDiskMetric {
+            switch metric {
+            case .read, .write:
+                // 驱动计数的差分：样本本身就是一段区间的平均速率。
+                return HistoryMetricSpec(aggregation: .interval, unit: "B/s", collector: StorageIOCollector.collectorID, module: .storage)
+            case .temp:
+                return HistoryMetricSpec(aggregation: .instant, unit: "degC", collector: SMARTCollector.collectorID, module: .storage)
+            case .life, .spare:
+                return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: SMARTCollector.collectorID, module: .storage)
+            case .mediaErrors:
+                return HistoryMetricSpec(aggregation: .instant, unit: "count", collector: SMARTCollector.collectorID, module: .storage)
+            case .dataRead, .dataWritten:
+                return HistoryMetricSpec(aggregation: .instant, unit: "B", collector: SMARTCollector.collectorID, module: .storage)
+            case .readOps, .writeOps, .readLatency, .writeLatency, .warning:
+                return nil
+            }
+        }
+        if let (_, metric) = id.storageGroupMetric, metric != .total {
+            return HistoryMetricSpec(
+                aggregation: .instant, unit: "B", collector: StorageCapacityCollector.collectorID, module: .storage)
         }
         if id.fanSpeedIndex != nil {
             return HistoryMetricSpec(aggregation: .instant, unit: "rpm", collector: PowerSensorCollector.collectorID, module: .power)

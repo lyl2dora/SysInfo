@@ -20,6 +20,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case cpu
     case power
     case memory
+    case storage
     case history
     case privacy
     case diagnostics
@@ -34,6 +35,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
+        case .storage: String(localized: "存储")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -48,6 +50,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .cpu: "cpu"
         case .power: "bolt"
         case .memory: "memorychip"
+        case .storage: "internaldrive"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
@@ -79,6 +82,9 @@ final class SettingsController {
     private let catalogDemand: DemandSlot
     private let memoryDemand: DemandSlot
     private let bandwidthDemand: DemandSlot
+    /// 诊断页的存储读数（读写 2 s、SMART 2 s 读全部盘、容量 10 s，存储模块设计 §6.4）。
+    private let storageDemand: DemandSlot
+    private let storageCapacityDemand: DemandSlot
 
     private var openSettingsAction: (() -> Void)?
     private weak var window: NSWindow?
@@ -98,6 +104,8 @@ final class SettingsController {
         self.catalogDemand = DemandSlot(engine: engine)
         self.memoryDemand = DemandSlot(engine: engine)
         self.bandwidthDemand = DemandSlot(engine: engine)
+        self.storageDemand = DemandSlot(engine: engine)
+        self.storageCapacityDemand = DemandSlot(engine: engine)
     }
 
     /// 把 Settings 场景挂到 NSApplication 上（启动时调用一次）。
@@ -193,6 +201,14 @@ final class SettingsController {
         memoryDemand.set(
             visible && state.isWindowOpen
                 ? Demand(collectors: [MemoryCollector.collectorID], interval: 2, source: .diagnostics) : nil)
+        let storageVisible = visible && state.isWindowOpen
+        storageDemand.set(
+            storageVisible
+                ? Demand(collectors: [StorageIOCollector.collectorID, SMARTCollector.collectorID], interval: 2, source: .diagnostics)
+                : nil)
+        storageCapacityDemand.set(
+            storageVisible ? Demand(collectors: [StorageCapacityCollector.collectorID], interval: 10, source: .diagnostics) : nil)
+        services.storageModel.diagnosticsVisible = storageVisible
         if !visible {
             catalogDemand.set(nil)
             bandwidthDemand.set(nil)

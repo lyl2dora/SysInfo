@@ -10,6 +10,7 @@
 //   按设置的间隔；在「功耗与散热」tab 时（功耗与散热模块设计 §4.7）：整机功率与杂项（热状态）1 s，
 //   SoC/GPU/DRAM 功率、最热点与风扇按设置的间隔，CPU 功耗按 CPU 面板的温度与功耗间隔，PMGR 批次 60 s；
 //   在「内存」tab 时（内存模块设计 §7.2）：内存 1 s，内存 Top N 的 coalition 扫描按设置的间隔（默认 5 s）；
+//   在「存储」tab 时（存储模块设计 §4.6）：读写 1 s，SMART 按设置（默认 2 s，读全部盘），容量 10 s，磁盘 Top N 按设置；
 //   隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
 // - 内容高度会变（展开详情、Top N 行数），面板跟着内容改高，锚定时保持顶边不动。
 
@@ -25,6 +26,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case cpu
     case power
     case memory
+    case storage
 
     var id: String { rawValue }
 
@@ -33,6 +35,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
+        case .storage: String(localized: "存储")
         }
     }
 
@@ -41,6 +44,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .cpu: self = .cpu
         case .power: self = .power
         case .memory: self = .memory
+        case .storage: self = .storage
         }
     }
 }
@@ -52,6 +56,8 @@ final class PanelState {
     var isPinned = false
     /// 「详情」与「中断来源」一开始是否展开（`--expand-details`）。
     var expandDetailsInitially = false
+    /// 存储 tab 的单盘详情页（D54）：nil 为概览页。换模块、关闭面板时回到概览。
+    var storageDetail: DiskKey?
 }
 
 /// 面板顶栏按钮的动作。
@@ -106,6 +112,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let pmgrDemand: DemandSlot
     private let memoryDemand: DemandSlot
     private let memoryTopNDemand: DemandSlot
+    private let storageDemand: DemandSlot
+    private let storageSMARTDemand: DemandSlot
+    private let storageCapacityDemand: DemandSlot
+    private let storageTopNDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -137,6 +147,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.pmgrDemand = DemandSlot(engine: engine)
         self.memoryDemand = DemandSlot(engine: engine)
         self.memoryTopNDemand = DemandSlot(engine: engine)
+        self.storageDemand = DemandSlot(engine: engine)
+        self.storageSMARTDemand = DemandSlot(engine: engine)
+        self.storageCapacityDemand = DemandSlot(engine: engine)
+        self.storageTopNDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -168,7 +182,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         sessionItem = statusItem
         statusItems?.activeItem = statusItem
         if let widget = statusItems?.widget(for: statusItem) {
-            state.selectedTab = PanelTab(widget.module)
+            let tab = PanelTab(widget.module)
+            if tab != state.selectedTab { state.storageDetail = nil }
+            state.selectedTab = tab
         }
         if switching, presentation == .anchored {
             swapInPlace()
@@ -268,6 +284,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             [powerDemand, powerSensorDemand, pmgrDemand].forEach { $0.set(nil) }
         }
         updateMemoryDemands(visible: visible && state.selectedTab == .memory)
+        updateStorageDemands(visible: visible && state.selectedTab == .storage)
         let cpuVisible = visible && state.selectedTab == .cpu
         guard cpuVisible else {
             [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
@@ -328,6 +345,37 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         }
     }
 
+    /// 存储 tab（存储模块设计 §4.6）：读写 1 s、SMART 按设置（默认 2 s，读全部盘）、容量 10 s、
+    /// Top N 行数大于 0 时按设置的间隔扫描 coalition。
+    private func updateStorageDemands(visible: Bool) {
+        let topN = services.diskTopN
+        services.storageModel.panelVisible = visible
+        guard visible else {
+            [storageDemand, storageSMARTDemand, storageCapacityDemand, storageTopNDemand].forEach { $0.set(nil) }
+            topN.setActive(false, coalitionUsable: true)
+            return
+        }
+        storageDemand.set(Demand(collectors: [StorageIOCollector.collectorID], interval: 1, source: .panel))
+        storageSMARTDemand.set(
+            Demand(collectors: [SMARTCollector.collectorID], interval: settings.storageSMARTInterval, source: .panel))
+        storageCapacityDemand.set(Demand(collectors: [StorageCapacityCollector.collectorID], interval: 10, source: .panel))
+        topN.rowCount = state.storageDetail == nil ? settings.storageTopNRows : 0
+        topN.grouping = settings.storageGrouping
+        topN.interval = settings.storageTopNInterval
+        let coalitionUsable =
+            store.engineStatus?.health.first { $0.id == AppSampler.collectorID }?.status != .unavailable
+        if topN.rowCount > 0 {
+            storageTopNDemand.set(
+                coalitionUsable
+                    ? Demand(collectors: [AppSampler.collectorID], interval: settings.storageTopNInterval, source: .panel)
+                    : nil)
+            topN.setActive(true, coalitionUsable: coalitionUsable)
+        } else {
+            storageTopNDemand.set(nil)
+            topN.setActive(false, coalitionUsable: coalitionUsable)
+        }
+    }
+
     // MARK: - 私有
 
     private func showAnchored() {
@@ -366,6 +414,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         guard presentation != .hidden else { return }
         presentation = .hidden
         state.isPinned = false
+        state.storageDetail = nil
         removeGlobalMonitor()
         removeLocalMonitor()
         panel?.orderOut(nil)

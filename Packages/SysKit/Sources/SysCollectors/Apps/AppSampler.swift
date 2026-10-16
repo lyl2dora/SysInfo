@@ -30,6 +30,9 @@ public struct CoalitionDelta: Hashable, Sendable {
     public var cycles: UInt64
     public var perfLevel0Cycles: UInt64
     public var energyNanojoules: UInt64
+    /// 磁盘读 / 写字节（存储模块设计 §4.5）。
+    public var diskReadBytes: UInt64 = 0
+    public var diskWrittenBytes: UInt64 = 0
     /// 窗口内成员有没有变化（tasks_started / tasks_exited 变了）。残差归因只在没有变化时做（边界稿 §5.3）。
     public var membershipChanged: Bool
     /// 窗口开始时还不存在（新出现的 coalition）。
@@ -250,6 +253,8 @@ public final class AppSampler: Collector {
                     perfLevel0Nanos: timebase.nanoseconds(fromTicks: d(now.perfLevel0Ticks, before?.perfLevel0Ticks)),
                     cycles: d(now.cycles, before?.cycles), perfLevel0Cycles: d(now.perfLevel0Cycles, before?.perfLevel0Cycles),
                     energyNanojoules: d(now.energyNanojoules, before?.energyNanojoules),
+                    diskReadBytes: d(now.diskBytesRead, before?.diskBytesRead),
+                    diskWrittenBytes: d(now.diskBytesWritten, before?.diskBytesWritten),
                     membershipChanged: before.map {
                         $0.tasksStarted != now.tasksStarted || $0.tasksExited != now.tasksExited
                     } ?? true,

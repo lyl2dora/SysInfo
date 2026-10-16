@@ -19,10 +19,12 @@ struct ChartSeries: Equatable {
     static let cpuUsage = ChartSeries(metric: .cpuUsageTotal, overlay: nil, collector: CPULoadCollector.collectorID, scale: .unit)
 }
 
-/// 纵轴：0–1 的比例（刻度由 SwiftUI 画），或功率（瓦，按数据自动取整，刻度由绘制区自己画）。
+/// 纵轴：0–1 的比例（刻度由 SwiftUI 画），或功率（瓦）、磁盘速率（B/s，按 1000 换算），
+/// 后两者按数据自动取整，刻度由绘制区自己画。
 enum ChartScale: Equatable {
     case unit
     case watts
+    case bytesPerSecond
 }
 
 struct HistoryChart: View {
@@ -58,7 +60,7 @@ struct HistoryChart: View {
                 Text("历史库不可用").font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .task(id: TaskKey(span: current, overlay: series.overlay)) {
+        .task(id: TaskKey(span: current, metric: series.metric, overlay: series.overlay)) {
             guard current.usesHistory else { return }
             while !Task.isCancelled {
                 await load()
@@ -69,6 +71,8 @@ struct HistoryChart: View {
 
     private struct TaskKey: Equatable {
         var span: ChartSpan
+        /// 存储详情页换一块盘时主指标会变，要重读。
+        var metric: MetricID
         var overlay: MetricID?
     }
 

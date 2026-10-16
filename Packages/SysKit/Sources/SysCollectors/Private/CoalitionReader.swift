@@ -38,6 +38,9 @@ public struct CoalitionUsage: Hashable, Sendable {
 
     public var tasksStarted: UInt64 { slot(0) }
     public var tasksExited: UInt64 { slot(1) }
+    /// 累计磁盘读 / 写字节（6、7 号槽，含 root 成员；存储模块设计 §4.5，调研报告 disk-review/coal_validate）。
+    public var diskBytesRead: UInt64 { slot(6) }
+    public var diskBytesWritten: UInt64 { slot(7) }
     public var energyNanojoules: UInt64 { slot(11) }
     public var perfLevel0Ticks: UInt64 { slot(22) }
     public var instructions: UInt64 { slot(31) }

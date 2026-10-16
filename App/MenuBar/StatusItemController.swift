@@ -9,6 +9,7 @@
 //   占用 → cpu.load，频率 → cpu.freq（D19 高开销项），温度与功耗 → cpu.sensors；
 //   整机功率 → power.rail，SoC 功率、最热点、风扇 → power.sensors，GPU 功率 → power.gpu；
 //   内存的三个 widget → memory.vm（D49）；
+//   存储：盘温 → storage.smart（只读绑定的盘，D55），读写 → storage.io，可用空间 → storage.capacity（60 s）；
 //   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
 // - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）。
 
@@ -60,7 +61,7 @@ final class StatusItemController {
                 apply(configuration, to: entry)
                 entry.demand.set(
                     Demand(
-                        collectors: [Self.collector(for: widget)], interval: intervals(widget.module).rawValue,
+                        collectors: [Self.collector(for: widget)], interval: Self.interval(for: widget, moduleInterval: intervals(widget.module)),
                         source: Self.source(widget)))
             } else {
                 remove(widget)
@@ -77,7 +78,15 @@ final class StatusItemController {
         case .socHotspot, .socPower, .fan: PowerSensorCollector.collectorID
         case .gpuPower: GPUPowerCollector.collectorID
         case .memoryUsage, .memoryPressure, .swapUsed: MemoryCollector.collectorID
+        case .diskTemperature: SMARTCollector.collectorID
+        case .diskThroughput: StorageIOCollector.collectorID
+        case .diskFree: StorageCapacityCollector.collectorID
         }
+    }
+
+    /// 采样间隔：可用空间变化慢，固定 60 s（存储模块设计 §4.6）；其余按所属模块的常驻间隔。
+    static func interval(for widget: MenuWidget, moduleInterval: SamplingInterval) -> Int {
+        widget == .diskFree ? 60 : moduleInterval.rawValue
     }
 
     static func source(_ widget: MenuWidget) -> DemandSource {
@@ -170,6 +179,19 @@ extension StatusItemConfiguration {
             widget: widget, style: settings.renderStyle(for: widget), showsLabel: settings.menuBarShowsLabel,
             color: settings.color(for: widget), levelCount: max(topology?.perfLevels.count ?? 2, 1),
             coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8,
-            memoryShowsBytes: settings.memoryUsagePresentation == .bytes)
+            memoryShowsBytes: settings.memoryUsagePresentation == .bytes,
+            storageKey: Self.storageKey(widget: widget, settings: settings),
+            storageHottest: widget == .diskTemperature && settings.diskTemperatureTarget == .hottest)
+    }
+
+    /// 存储 widget 绑定的盘或组（D54）：内置盘、启动组按当前清单解析；其余 widget 为 nil。
+    private static func storageKey(widget: MenuWidget, settings: AppSettings) -> DiskKey? {
+        let model = StorageModel.shared
+        switch widget {
+        case .diskTemperature: return model.resolveDisk(settings.diskTemperatureTarget)
+        case .diskThroughput: return model.resolveDisk(settings.diskThroughputTarget)
+        case .diskFree: return model.resolveGroup(settings.diskFreeTarget)
+        default: return nil
+        }
     }
 }

@@ -78,6 +78,12 @@ struct HistorySettingsView: View {
                         Button("设置…") { openPage(.memory) }
                     }
                 }
+                LabeledContent("存储") {
+                    HStack {
+                        Text(settings.historyStorageEnabled ? "记录" : "不记录")
+                        Button("设置…") { openPage(.storage) }
+                    }
+                }
             } header: {
                 Text("记录")
             } footer: {

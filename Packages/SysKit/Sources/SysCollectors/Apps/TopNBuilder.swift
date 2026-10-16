@@ -7,6 +7,8 @@
 // - 按进程：单成员 coalition 直接是一个进程；多成员的拆成同 uid 成员，外部成员合成一个分不开的组行；
 // - 内存（D49）：按 coalition 的 footprint（slot 40，成员之和）排序，同 uid 成员用 `ri_phys_footprint` 拆分，
 //   外部成员合计 = coalition 合计 − 同 uid 之和（footprint 是当前值，不涉及窗口内成员变化）；
+// - 磁盘（存储模块设计 §4.5）：按 coalition 6/7 号槽（累计读写字节，含 root 成员）的窗口差分排序；
+//   同 uid 成员用 `ri_diskio_bytesread/written` 差分拆分，外部成员归入残差（只在窗口内成员没有变化时才算，钳到 ≥0）；
 // - 名称按开机期间唯一 id 缓存（PROC_PIDUNIQIDENTIFIERINFO），pid 复用不会张冠李戴；
 // - 只为排在前面的 coalition 读成员和进程信息，扫描本身由 AppSampler 完成。
 
@@ -87,6 +89,8 @@ public final class TopNBuilder: Sendable {
         var names: [UInt64: NameInfo] = [:]
         /// 唯一 id → (rusage CPU tick, 读取时的单调时钟纳秒)。
         var memberCPU: [UInt64: (ticks: UInt64, nanos: UInt64)] = [:]
+        /// 唯一 id → (rusage 磁盘读、写字节, 读取时的单调时钟纳秒)。
+        var memberDisk: [UInt64: (read: UInt64, written: UInt64, nanos: UInt64)] = [:]
     }
 
     private let state = Mutex(State())
@@ -281,6 +285,126 @@ public final class TopNBuilder: Sendable {
         return out
     }
 
+    // MARK: - 磁盘（存储模块设计 §4.5）
+
+    /// 按窗口内的磁盘读 + 写生成 Top N 行。
+    public func buildDisk(window: AppActivityWindow, rows: Int, grouping: TopNGrouping) -> [TopNRow] {
+        guard rows > 0 else { return [] }
+        let table = ProcessTable.snapshot()
+        let elapsed = Double(window.elapsedNanos)
+        guard elapsed > 0 else { return [] }
+        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let sorted = window.coalitions
+            .filter { $0.diskReadBytes > 0 || $0.diskWrittenBytes > 0 }
+            .sorted { $0.diskReadBytes &+ $0.diskWrittenBytes > $1.diskReadBytes &+ $1.diskWrittenBytes }
+        var out: [TopNRow] = []
+        for delta in sorted.prefix(grouping == .byApp ? rows : rows * 3) {
+            let pids = CoalitionReader.members(of: delta.id, tasksHint: Int(delta.tasks)) ?? []
+            let row = diskRow(delta, pids: pids, table: table, elapsed: elapsed, now: now)
+            switch grouping {
+            case .byApp: out.append(row)
+            case .byProcess: out.append(contentsOf: diskProcessRows(from: row))
+            }
+        }
+        if grouping == .byProcess { out.sort { $0.diskTotal > $1.diskTotal } }
+        pruneCaches(alive: Set(table.keys))
+        return Array(out.prefix(rows))
+    }
+
+    private func diskRow(
+        _ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double, now: UInt64
+    ) -> TopNRow {
+        let ownUID = getuid()
+        let entries = pids.compactMap { table[$0] }
+        let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
+        let representative = Self.representative(infos)
+        let seconds = elapsed / 1e9
+        let read = Double(delta.diskReadBytes) / seconds
+        let write = Double(delta.diskWrittenBytes) / seconds
+        var members: [TopNMember] = []
+        var sameRead = 0.0
+        var sameWrite = 0.0
+        var allMeasured = true
+        for (entry, info) in infos where entry.uid == ownUID {
+            let io = measureDisk(pid: entry.pid, now: now)
+            if let io {
+                sameRead += io.read
+                sameWrite += io.write
+            } else {
+                allMeasured = false
+            }
+            members.append(
+                TopNMember(
+                    pid: entry.pid, name: info.name, path: info.path, cpu: nil,
+                    eligibility: ProcessControl.eligibility(uid: entry.uid, pid: entry.pid), diskRead: io?.read,
+                    diskWrite: io?.write))
+        }
+        members.sort { ($0.diskRead ?? 0) + ($0.diskWrite ?? 0) > ($1.diskRead ?? 0) + ($1.diskWrite ?? 0) }
+        let foreign = entries.count - members.count
+        let residualKnown = foreign > 0 && !delta.membershipChanged && allMeasured
+        let top = members.first.flatMap { m -> TopNMember? in
+            guard entries.count > 1, m.pid != representative?.0.pid, (m.diskRead ?? 0) + (m.diskWrite ?? 0) > 0 else { return nil }
+            return m
+        }
+        let isKernel = pids.contains(0)
+        return TopNRow(
+            id: "c\(delta.id)", kind: .coalition, coalitionID: delta.id,
+            name: isKernel ? "kernel_task" : (representative?.1.name ?? "cid \(delta.id)"),
+            appPath: representative?.1.appPath, representativePID: representative?.0.pid ?? pids.first ?? 0,
+            memberCount: max(pids.count, Int(delta.tasks)), cpu: 0, perfLevel0Share: nil, energyWatts: nil, topMember: top,
+            members: members, residualCPU: nil, residualCount: foreign,
+            eligibility: entries.count == 1 ? ProcessControl.eligibility(uid: entries[0].uid, pid: entries[0].pid) : .group,
+            diskRead: read, diskWrite: write, residualDiskRead: residualKnown ? max(read - sameRead, 0) : nil,
+            residualDiskWrite: residualKnown ? max(write - sameWrite, 0) : nil)
+    }
+
+    /// 按进程视图（磁盘）：单成员 coalition 就是一个进程；多成员的拆成同 uid 成员，外部成员合成一个组行。
+    private func diskProcessRows(from row: TopNRow) -> [TopNRow] {
+        if row.memberCount <= 1 {
+            var single = row
+            single.kind = .process
+            single.id = "p\(row.representativePID)"
+            return [single]
+        }
+        var out: [TopNRow] = row.members.compactMap { m in
+            guard (m.diskRead ?? 0) + (m.diskWrite ?? 0) > 0 else { return nil }
+            return TopNRow(
+                id: "p\(m.pid)", kind: .process, coalitionID: row.coalitionID, name: m.name,
+                appPath: m.path.flatMap(Self.outermostApp(in:)), representativePID: m.pid, memberCount: 1, cpu: 0,
+                perfLevel0Share: nil, energyWatts: nil, topMember: nil, members: [], residualCPU: nil, residualCount: 0,
+                eligibility: m.eligibility, diskRead: m.diskRead, diskWrite: m.diskWrite)
+        }
+        if row.residualCount > 0 {
+            let measuredRead = out.reduce(0) { $0 + ($1.diskRead ?? 0) }
+            let measuredWrite = out.reduce(0) { $0 + ($1.diskWrite ?? 0) }
+            let read = row.residualDiskRead ?? max((row.diskRead ?? 0) - measuredRead, 0)
+            let write = row.residualDiskWrite ?? max((row.diskWrite ?? 0) - measuredWrite, 0)
+            if read + write > 0 {
+                out.append(
+                    TopNRow(
+                        id: "g\(row.coalitionID)", kind: .group, coalitionID: row.coalitionID, name: row.name,
+                        appPath: row.appPath, representativePID: row.representativePID, memberCount: row.residualCount, cpu: 0,
+                        perfLevel0Share: nil, energyWatts: nil, topMember: nil, members: [], residualCPU: nil,
+                        residualCount: row.residualCount, eligibility: .group, diskRead: read, diskWrite: write))
+            }
+        }
+        return out
+    }
+
+    /// 同 uid 成员在两次 build 之间的磁盘读写（B/s）；第一次见到时只记基线。
+    private func measureDisk(pid: pid_t, now: UInt64) -> (read: Double, write: Double)? {
+        guard let unique = ProcessPrivateInfo.uniqueID(of: pid), let r = ProcessInfoReader.rusage(of: pid) else { return nil }
+        let read = r.ri_diskio_bytesread
+        let written = r.ri_diskio_byteswritten
+        return state.withLock { s in
+            defer { s.memberDisk[unique] = (read, written, now) }
+            guard let previous = s.memberDisk[unique], now > previous.nanos, read >= previous.read, written >= previous.written
+            else { return nil }
+            let seconds = Double(now - previous.nanos) / 1e9
+            return (Double(read - previous.read) / seconds, Double(written - previous.written) / seconds)
+        }
+    }
+
     // MARK: - 缓存
 
     private func name(of entry: ProcessEntry) -> NameInfo {
@@ -331,6 +455,7 @@ public final class TopNBuilder: Sendable {
         state.withLock { s in
             if s.names.count > 4096 { s.names.removeAll(keepingCapacity: true) }
             if s.memberCPU.count > 4096 { s.memberCPU.removeAll(keepingCapacity: true) }
+            if s.memberDisk.count > 4096 { s.memberDisk.removeAll(keepingCapacity: true) }
         }
         _ = alive
     }

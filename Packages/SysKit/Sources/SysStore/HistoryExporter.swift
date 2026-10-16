@@ -68,6 +68,8 @@ struct HistoryExportMetadata: Encodable {
     var epochs: [Epoch]
     var qualityCodes: [String]
     var notes: [String]
+    /// 存储指标里的加盐键 → 「型号 + 位置」（存储模块设计 §3.1）；没有存储指标时为空。
+    var storageDevices: [String: String] = [:]
 }
 
 public enum HistoryExporter {
@@ -134,6 +136,11 @@ public enum HistoryExporter {
                 start: iso(e.startMinute), model: e.model, chip: e.chip, osBuild: e.osBuild,
                 topology: try? decoder.decode(EpochTopology.self, from: Data(e.topologyJSON.utf8)))
         }
+        let storageDevices = (try? store.decoded([String: String].self, forKey: HistoryRecorder.storageLabelsKey)) ?? [:]
+        let usedKeys = Set(metrics.compactMap { m -> String? in
+            let id = MetricID(m.name)
+            return id.storageDiskMetric?.key.rawValue ?? id.storageGroupMetric?.key.rawValue
+        })
         return HistoryExportMetadata(
             appVersion: options.appVersion, exportedAt: iso(Date()), from: iso(options.from), to: iso(options.to),
             granularity: options.granularity.rawValue, metrics: metrics, epochs: epochs,
@@ -142,7 +149,8 @@ public enum HistoryExporter {
                 "avg/max are per-\(options.granularity.rawValue) aggregates in SI units; empty max means the samples covered windows too long to have a peak.",
                 "apps: top \(MinuteAggregator.appsPerMinute) apps per minute by CPU; cpu_cores = cpu_ns / 60e9.",
                 "energy: hourly joules; source integrated = 1 Hz PDTR integral, filled = PowerTelemetryData accumulator for periods when SysInfo was not running (may be low under heavy load).",
-            ])
+                "storage: disk and volume-group keys are locally salted hashes (no serial numbers); storageDevices maps them to model and position.",
+            ], storageDevices: storageDevices.filter { usedKeys.contains($0.key) })
     }
 
     static func csvField(_ s: String) -> String {

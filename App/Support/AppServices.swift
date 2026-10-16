@@ -59,6 +59,84 @@ struct MemoryCollectors {
     }
 }
 
+/// 引擎里的存储采集器实例（面板读清单、SMART 全字段与累计错误，诊断页读连接状态，D54）。
+struct StorageCollectors {
+    var io: StorageIOCollector?
+    var smart: SMARTCollector?
+    var capacity: StorageCapacityCollector?
+
+    init(_ collectors: [any Collector]) {
+        io = collectors.compactMap { $0 as? StorageIOCollector }.first
+        smart = collectors.compactMap { $0 as? SMARTCollector }.first
+        capacity = collectors.compactMap { $0 as? StorageCapacityCollector }.first
+    }
+
+    static let ids: Set<CollectorID> = [
+        StorageIOCollector.collectorID, SMARTCollector.collectorID, StorageCapacityCollector.collectorID,
+    ]
+}
+
+/// 存储的结构状态（存储模块设计 §6）：物理盘清单与容量组变化时才更新，面板据此决定有几行；
+/// 另负责 widget 绑定的解析与 SMART 焦点盘（D55）。
+@Observable
+final class StorageModel {
+    /// 菜单栏 widget 的显示配置要在没有 AppServices 的地方（设置页预览）解析绑定，所以有一个共享实例。
+    static let shared = StorageModel()
+
+    private(set) var inventory: StorageInventory = .empty
+    private(set) var groups: [CapacityGroup] = []
+
+    /// 面板存储 tab 可见、诊断页打开：这两种情况下每次读全部盘的 SMART。
+    @ObservationIgnored var panelVisible = false { didSet { applyFocus() } }
+    @ObservationIgnored var diagnosticsVisible = false { didSet { applyFocus() } }
+    /// 菜单栏 widget 需要的盘：nil 表示要全部盘（「所有盘最高温」），空集表示没有 widget 要 SMART。
+    @ObservationIgnored var widgetFocus: Set<DiskKey>? = [] { didSet { applyFocus() } }
+    @ObservationIgnored weak var smart: SMARTCollector?
+    /// 清单或容量组变了（盘插拔、RAID 状态变化）：菜单栏 widget 的绑定要重新解析。
+    @ObservationIgnored var onStructureChange: (() -> Void)?
+
+    func refresh(inventory: StorageInventory, groups: [CapacityGroup]?) {
+        var changed = false
+        if inventory != self.inventory {
+            self.inventory = inventory
+            changed = true
+        }
+        if let groups, groups.map(Self.structure) != self.groups.map(Self.structure) || groups.count != self.groups.count {
+            self.groups = groups
+            changed = true
+        } else if let groups {
+            self.groups = groups  // 只有数值变化：不触发结构变化回调
+        }
+        if changed { onStructureChange?() }
+    }
+
+    /// 结构比较只看组的身份与卷，不看数值。
+    private static func structure(_ group: CapacityGroup) -> [String] {
+        [group.key.rawValue, group.name, group.isAuxiliary ? "a" : "p"] + group.volumes.map { $0.bsdName ?? $0.name }
+    }
+
+    /// 盘温 / 读写 widget 实际绑定的盘：内置盘、指定的盘（不在了也保留键，显示「—」）。
+    func resolveDisk(_ target: StorageTarget) -> DiskKey? {
+        switch target {
+        case .primary, .hottest, .group: inventory.primaryDisk?.key
+        case .disk(let key): key
+        }
+    }
+
+    /// 可用空间 widget 实际绑定的容量组：启动组、指定的组。
+    func resolveGroup(_ target: StorageTarget) -> DiskKey? {
+        switch target {
+        case .group(let key): key
+        default: (groups.first { $0.isBoot && !$0.isAuxiliary } ?? groups.first { !$0.isAuxiliary })?.key
+        }
+    }
+
+    private func applyFocus() {
+        let focus: Set<DiskKey>? = panelVisible || diagnosticsVisible ? nil : widgetFocus
+        smart?.setFocus(focus)
+    }
+}
+
 /// Top N（D31，CPU 模块设计 §5.7、§7.2）：只在所属 tab 可见且行数大于 0 时工作。
 /// CPU 与内存（D49）各用一个实例，共用同一次 coalition 扫描；内存按 footprint 排序，不需要差分。
 /// 组装（libproc 查询、名称解析）在后台执行，不占 MainActor（D03、D23）。
@@ -107,10 +185,10 @@ final class TopNModel {
         // 立即用它组装第一版，不必等面板自己的两次扫描（约 2–3 s 的「等待数据」）。
         if !isFallback { coalitionTick(maxAgeSeconds: Self.firstWindowMaxAge) }
         if isFallback {
-            if metric == .memory {
-                refreshFallback()  // footprint 是当前值，不需要基线
-            } else {
-                _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
+            switch metric {
+            case .memory: refreshFallback()  // footprint 是当前值，不需要基线
+            case .disk: _ = fallbackSampler.sampleDisk(rows: rowCount)  // 建立基线
+            case .cpu: _ = fallbackSampler.sample(rows: rowCount)  // 建立基线
             }
             let timer = Timer(timeInterval: TimeInterval(interval), repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshFallback() }
@@ -134,6 +212,10 @@ final class TopNModel {
         if let maxAgeSeconds {
             let age = Double(SampleTime.now().continuousNanos &- window.time.continuousNanos) / 1e9
             guard age <= maxAgeSeconds else { return }
+        }
+        if metric == .disk {
+            diskTick(window)
+            return
         }
         building = true
         let builder = builder
@@ -173,14 +255,35 @@ final class TopNModel {
         }
     }
 
+    /// 磁盘：用最近一个窗口的 6/7 号槽差分组装（存储模块设计 §4.5）。
+    private func diskTick(_ window: AppActivityWindow) {
+        building = true
+        let builder = builder
+        let rows = rowCount
+        let grouping = grouping
+        Task.detached(priority: .utility) { [weak self] in
+            let built = builder.buildDisk(window: window, rows: rows, grouping: grouping)
+            await MainActor.run {
+                guard let self else { return }
+                self.building = false
+                if !self.isFrozen, self.isActive { self.rows = built }
+            }
+        }
+    }
+
     private func refreshFallback() {
         guard !building, !isFrozen else { return }
         building = true
         let sampler = fallbackSampler
         let rows = rowCount
-        let memory = metric == .memory
+        let metric = metric
         Task.detached(priority: .utility) { [weak self] in
-            let result = memory ? sampler.sampleMemory(rows: rows) : sampler.sample(rows: rows)
+            let result =
+                switch metric {
+                case .memory: sampler.sampleMemory(rows: rows)
+                case .disk: sampler.sampleDisk(rows: rows)
+                case .cpu: sampler.sample(rows: rows)
+                }
             await MainActor.run {
                 guard let self else { return }
                 self.building = false
@@ -254,18 +357,25 @@ final class AppServices {
     /// 内存面板的 Top N（D49）。
     let memoryTopN: TopNModel
     let memory: MemoryCollectors
+    /// 存储（D54）：采集器、结构状态与按磁盘 IO 的 Top N。
+    let storage: StorageCollectors
+    let storageModel = StorageModel.shared
+    let diskTopN: TopNModel
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
     private let interruptDemand: DemandSlot
 
     init(
-        collectors: CPUCollectors, power: PowerCollectors, memory: MemoryCollectors, history: HistoryRecorder?,
-        engine: SamplingEngine
+        collectors: CPUCollectors, power: PowerCollectors, memory: MemoryCollectors, storage: StorageCollectors,
+        history: HistoryRecorder?, engine: SamplingEngine
     ) {
         self.collectors = collectors
         self.power = power
         self.memory = memory
+        self.storage = storage
+        self.diskTopN = TopNModel(sampler: collectors.apps, metric: .disk)
+        storageModel.smart = storage.smart
         self.topN = TopNModel(sampler: collectors.apps)
         self.memoryTopN = TopNModel(sampler: collectors.apps, metric: .memory)
         self.history = history
@@ -284,6 +394,12 @@ final class AppServices {
         if result.collectors.contains(AppSampler.collectorID) {
             topN.coalitionTick()
             memoryTopN.coalitionTick()
+            diskTopN.coalitionTick()
+        }
+        if !StorageCollectors.ids.isDisjoint(with: result.collectors) {
+            storageModel.refresh(
+                inventory: DiskInventory.shared.inventory,
+                groups: result.collectors.contains(StorageCapacityCollector.collectorID) ? storage.capacity?.latestGroups : nil)
         }
     }
 }

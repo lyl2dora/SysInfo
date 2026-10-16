@@ -27,9 +27,12 @@ struct PanelRootView: View {
                 PowerPanelView(store: store, services: services, settings: settings)
             case .memory:
                 MemoryPanelView(store: store, services: services, settings: settings)
+            case .storage:
+                StoragePanelView(store: store, services: services, settings: settings, state: state)
             }
         }
         .onChange(of: state.selectedTab) { onTabChange() }
+        .onChange(of: state.storageDetail) { onTabChange() }
         .padding(14)
         // 顶部对齐：内容先变、窗口下一轮才改高时，只是底边伸缩，整块内容不会上下跳（SwiftUI 默认把内容居中）。
         .frame(width: PanelController.width)
