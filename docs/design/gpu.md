@@ -1,6 +1,6 @@
 # GPU 与加速器模块：能力边界（讨论稿）
 
-> 日期：2026-10-16。状态：**待用户拍板**（§3 的 G1–G10）。拍板后结论追加为 D 条目，§4 起再补实现规格。
+> 日期：2026-10-16。§3 的 G1–G10 已由用户全部按推荐确认，见 `docs/decisions.md` D57–D59。§4 起是实现规格，§9 是偏离记录。
 > 证据：`research/probes/gpu-module/`（2026-10-16，M5 Pro 与 M4 Pro 同步实测，macOS 27.0.1 26A434）；早期只在 M5 上测过的 `research/probes/gpu/`、`gpu-review/`（2026-09-28）。
 > 「M5」「M4」分别指开发机 Mac17,16 与对照机 Mac16,11。
 
@@ -185,6 +185,62 @@
 
 ### 不做
 FPS、显示器列表（D13 范围里没有使用者）；`Device Utilization %` 作任何主指标；按 pid 的 AGX `AppUsage`（会高估，且与 coalition 重复）；给媒体引擎估算实时瓦数。
+
+## 4. 数据模型（`SysModel/GPUMetrics.swift`，发布后不改名）
+
+| MetricID | 含义 | 单位 / 质量 | 采集器 |
+|---|---|---|---|
+| `gpu.active` | GPUPH 非 OFF 驻留比例 | 0…1，measured | `power.gpu` |
+| `gpu.frequency` | 活跃期间的平均频率（驻留加权） | Hz；档案表 measured，推断表 inferred；GPU 全程关断时 unavailable(`deviceIdle`) | `power.gpu` |
+| `gpu.temperature` | 代表键有效读数的最大值 | °C；档案 measured，未知芯片 inferred；全是占位值时 unavailable(`sensorPowerGated`) | `gpu.temperature` |
+| `ane.powered` | ANE 是否上电 | 0 / 1 | `gpu.accelerators` |
+| `gpu.memory.inUse` / `gpu.memory.allocated` | AGX `PerformanceStatistics` | B | `gpu.accelerators` |
+| `ane.power.estimated` | 全部 coalition 槽位 39 差分合计 ÷ 墙钟 | W，estimated；对账连续失败时 unavailable | `app.coalition`（汇总样本） |
+| `media.encode.rate` / `media.decode.rate` / `media.prores.rate` | ave / avd / apr 一级中断，减去学到的空闲底数 | 次/秒，relative | `gpu.media` |
+
+`power.gpu`（GPU 功率）继续由功耗模块定义，GPU 模块复用。
+
+## 5. 采集器
+
+- **`power.gpu`（改）**：订阅从「AGX `GPU Energy`」一个通道扩成「`GPU Energy` + `GPU Stats / GPUPH`」两个通道（同一 AGX 驱动，合并订阅，§1.6）。每次采样同时输出 `power.gpu`、`gpu.active`、`gpu.frequency`。自检新增 `power.gpu.gpuph`（找到 GPUPH 且状态名首个为 OFF）与 `power.gpu.dvfs`（档位表，advisory）。GPUPH 缺失时只影响活跃与频率，功率照常。诊断读数：最近一次各档驻留、平均档位、档位表来源。
+- **`gpu.temperature`（新，阻塞通道）**：读档案 `gpu.temperatureKeys`，占位值与合理范围取档案 `gpu.sentinels` / `gpu.validRange`。没有档案时自检枚举全部 `Tg*`（flt），占位值用 `[-4, 0, 2.2, 2.4]` 加「< 10 °C」。
+- **`gpu.accelerators`（新，inline）**：IORegistry 读 `H11ANEIn` 的 `IOPowerManagement.CurrentPowerState` 与 AGX 的 `PerformanceStatistics`（0.25–0.42 ms）。找不到 ANE 节点的芯片不输出 `ane.powered`。
+- **`gpu.media`（新，inline）**：IOReport「Interrupt Statistics (by index)」组，子组名以 `ave`、`avd`、`apr` 开头（后跟空格与序号）、通道名「First Level Interrupt Handler Count」的通道。每个引擎的空闲底数 = 最近 120 个样本的最小值（样本不足 10 个时为 0），输出减去底数后的速率（钳到 ≥0）。
+- **`gpu.diagnostics`（新，inline，只在诊断页展开「GPU 细节」时有需求）**：GPU Stats 的 PWRCTRL / GPU_CLTM / PZRSDNCY，PMP 组（运行时按「`PMP` 前缀 + 子组 AF BW」发现）里 AGX / ANE / AVE / AVD 的 RD+WR 加权档位，ANE 中断（`ane0` 子组，M5 上缺失），`Device Utilization %` 原值。
+- **`app.coalition`（改）**：增量里加 GPU 时间（槽位 8，ns）、GPU 能耗（41）、ANE 时间（38，mach tick → ns）、ANE 能耗（39）。汇总样本加 `ane.power.estimated`；每个窗口的槽位 39 合计记进账本（`PowerLedger.recordANE`）。
+- **`power.pmgr`（改）**：批次到来时加一项 `ane` 核对：账本里批次窗口内的 ANE 积分 ÷ PMGR ANE 批次，范围 0.8–1.05，最低窗口均值 0.05 W，覆盖 ≥90%。
+
+## 6. 芯片档案（`gpu` 段，可选）
+
+```json
+"gpu": {
+  "dvfsTableKey": 9,
+  "temperatureKeys": ["Tg3B", "Tg1o", "Tg3Z", "Tg3x", "Tg12"],
+  "sentinels": [-4, 0, 2.2, 2.4],
+  "validRange": [10, 130],
+  "note": "…"
+}
+```
+
+- M5：`Tg3B`、`Tg1o`、`Tg3Z`、`Tg3x`、`Tg12`。M4：`Tg1U`、`Tg1k`、`Tg0j`、`Tg1c`、`Tg0K`（成对键中的较低变体）。
+- 选法：按 2026-10-16 实测（`out/*/gw_*_temps.csv`），贪心加键，直到「选中键最大值」与「全部有效键最大值」逐秒之差的 p95 为 0，最大差 ≤0.2 °C。M4 成对键先剔除较高的一侧（+6.2 / +6.4 °C）。
+
+## 7. 历史
+
+- `gpu.active`、`gpu.temperature`、`ane.powered`（分钟均值即上电比例）进历史库，模块 `gpu`。后台每 10 s 采 `power.gpu`、`gpu.temperature`、`gpu.accelerators`。
+- 设置「记录 GPU 与加速器历史」默认开。
+
+## 8. App
+
+- **菜单栏**：`gpuActive`（「GPU 23%」）、`gpuPower`（从功耗模块移来，标签与样式不变）、`gpuTemperature`（「GPU 61°」）。三个都属于 `MenuModule.gpu`，出厂关。已有用户的 `menubar.power.gpuPower.*` 偏好键照旧读取，不迁移键名。
+- **面板**（`PanelTab.gpu`）：概览（活跃大字 + 频率、功率、温度）→ 历史图（活跃，可叠加功率）→ 加速器卡片（ANE 开 / 关与估算功率、媒体引擎三行活动强度、GPU 内存）→ Top N（按 GPU 时间）。需求：面板可见时 `power.gpu` 1 s，`gpu.temperature`、`gpu.accelerators`、`gpu.media` 按「面板：温度与加速器」间隔（默认 2 s），Top N 按自己的间隔（默认 2 s）。
+- **设置页**「GPU 与加速器」：菜单栏（3 个 widget）、采集、面板（Top N 行数与分组、图表跨度、叠加功率）、历史。功耗与散热页的菜单栏节去掉 GPU 功率，加一行「GPU 功率 widget 在『GPU 与加速器』页」的链接。
+- **诊断页**「GPU 与加速器」：数据路径与档位表来源、各档驻留、温度键来源、ANE 对账比值；「GPU 细节」折叠组展开时才采 `gpu.diagnostics`。
+- **CLI**：`sysinfo-cli gpu [--count N] [--interval S]`，逐秒打印活跃、频率、功率、温度、ANE、媒体引擎、GPU 内存；`--diag` 另打印细节通道。
+
+## 9. 偏离记录
+
+（实现中出现的偏离按日期追加于此。）
 
 ## 附：复现
 
