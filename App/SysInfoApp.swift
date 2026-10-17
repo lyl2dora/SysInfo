@@ -194,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        panel.state.storageDetail = disks[index].key
+        panel.state.path = [.disk(disks[index].key)]
     }
 
     // MARK: - 菜单动作

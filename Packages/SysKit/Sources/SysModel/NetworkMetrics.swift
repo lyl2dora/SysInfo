@@ -110,7 +110,7 @@ extension UnavailableReason {
 }
 
 /// 接口类型（D60：按控制器与 SC 类型在运行时判断，不按名字写死）。
-public enum NetworkInterfaceKind: String, Hashable, Codable, Sendable {
+public enum NetworkInterfaceKind: String, CaseIterable, Hashable, Codable, Sendable {
     case ethernet
     case wifi
     /// SC 类型为 Bridge 的网桥（Thunderbolt Bridge）。

@@ -457,6 +457,52 @@ public final class TopNBuilder: Sendable {
             aneWatts: Double(delta.aneEnergyNanojoules) / 1e9 / seconds)
     }
 
+    // MARK: - 应用详情（D64）
+
+    /// 一个 coalition 的应用详情：各域的值取自同一个窗口与最近一次 footprint 扫描；成员是全部同 uid 进程，
+    /// 每个成员都量 CPU、footprint 与磁盘读写（成员 CPU 与磁盘第一次见到时只记基线，为 nil）。
+    /// coalition 已经没有成员（应用退出）时返回 nil。
+    public func detail(
+        coalitionID: UInt64, window: AppActivityWindow?, footprints: CoalitionFootprints?, slotsTrusted: Bool
+    ) -> AppDetail? {
+        let delta = window?.coalitions.first { $0.id == coalitionID }
+        let footprint = footprints?.coalitions.first { $0.id == coalitionID }
+        let hint = Int(delta?.tasks ?? footprint?.tasks ?? 0)
+        guard let pids = CoalitionReader.members(of: coalitionID, tasksHint: hint), !pids.isEmpty else { return nil }
+        let table = ProcessTable.snapshot()
+        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let ownUID = getuid()
+        let entries = pids.compactMap { table[$0] }
+        let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
+        let representative = Self.representative(infos)
+        var members: [TopNMember] = []
+        for (entry, info) in infos where entry.uid == ownUID {
+            let disk = measureDisk(pid: entry.pid, now: now)
+            members.append(
+                TopNMember(
+                    pid: entry.pid, name: info.name, path: info.path, cpu: measure(pid: entry.pid, now: now),
+                    eligibility: ProcessControl.eligibility(uid: entry.uid, pid: entry.pid),
+                    footprint: ProcessInfoReader.rusage(of: entry.pid)?.ri_phys_footprint, diskRead: disk?.read,
+                    diskWrite: disk?.write))
+        }
+        members.sort { a, b in
+            (a.cpu ?? -1) != (b.cpu ?? -1) ? (a.cpu ?? -1) > (b.cpu ?? -1) : (a.footprint ?? 0) > (b.footprint ?? 0)
+        }
+        let elapsed = Double(window?.elapsedNanos ?? 0)
+        func rate(_ value: UInt64?) -> Double { elapsed > 0 ? Double(value ?? 0) / elapsed : 0 }
+        let isKernel = pids.contains(0)
+        pruneCaches(alive: Set(table.keys))
+        return AppDetail(
+            coalitionID: coalitionID, name: isKernel ? "kernel_task" : (representative?.1.name ?? "cid \(coalitionID)"),
+            appPath: representative?.1.appPath, representativePID: representative?.0.pid ?? pids.first ?? 0,
+            memberCount: max(pids.count, hint), cpu: rate(delta?.cpuNanos),
+            energyWatts: slotsTrusted && elapsed > 0 ? rate(delta?.energyNanojoules) : nil, footprint: footprint?.bytes,
+            diskRead: rate(delta?.diskReadBytes) * 1e9, diskWrite: rate(delta?.diskWrittenBytes) * 1e9,
+            gpuShare: rate(delta?.gpuNanos), gpuWatts: rate(delta?.gpuEnergyNanojoules),
+            aneWatts: rate(delta?.aneEnergyNanojoules), members: members, residualCount: entries.count - members.count,
+            eligibility: entries.count == 1 ? ProcessControl.eligibility(uid: entries[0].uid, pid: entries[0].pid) : .group)
+    }
+
     // MARK: - 缓存
 
     private func name(of entry: ProcessEntry) -> NameInfo {

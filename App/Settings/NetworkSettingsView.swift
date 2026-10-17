@@ -82,7 +82,7 @@ struct NetworkSettingsView: View {
                         Text(HistoryChart.title(span)).tag(span)
                     }
                 }
-                Toggle("展开虚拟接口", isOn: $settings.networkShowsVirtual)
+                Toggle("虚拟接口列表只看活跃", isOn: $settings.networkVirtualActiveOnly)
             }
 
             Section {

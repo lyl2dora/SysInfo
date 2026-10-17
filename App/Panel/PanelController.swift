@@ -65,8 +65,8 @@ final class PanelState {
     var isPinned = false
     /// 「详情」与「中断来源」一开始是否展开（`--expand-details`）。
     var expandDetailsInitially = false
-    /// 存储 tab 的单盘详情页（D54）：nil 为概览页。换模块、关闭面板时回到概览。
-    var storageDetail: DiskKey?
+    /// 二级页（D64）：空为模块主页。换模块、关闭面板时清空。
+    var path: [PanelRoute] = []
 }
 
 /// 面板顶栏按钮的动作。
@@ -131,6 +131,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let networkDemand: DemandSlot
     private let wifiDemand: DemandSlot
     private let latencyDemand: DemandSlot
+    private let appDetailDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -172,6 +173,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.networkDemand = DemandSlot(engine: engine)
         self.wifiDemand = DemandSlot(engine: engine)
         self.latencyDemand = DemandSlot(engine: engine)
+        self.appDetailDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -204,7 +206,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         statusItems?.activeItem = statusItem
         if let widget = statusItems?.widget(for: statusItem) {
             let tab = PanelTab(widget.module)
-            if tab != state.selectedTab { state.storageDetail = nil }
+            if tab != state.selectedTab { state.path = [] }
             state.selectedTab = tab
         }
         if switching, presentation == .anchored {
@@ -289,6 +291,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     func updateDemands() {
         requestFit()  // Top N 行数等设置可能变了
         let visible = presentation != .hidden
+        updateAppDetailDemand(visible: visible)
         let powerVisible = visible && state.selectedTab == .power
         if powerVisible {
             powerDemand.set(
@@ -322,14 +325,14 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         sensorDemand.set(
             Demand(collectors: [SensorCollector.collectorID], interval: settings.panelSensorInterval, source: .panel))
         let topN = services.topN
-        topN.rowCount = settings.panelTopNRows
+        topN.rowCount = state.path.isEmpty ? settings.panelTopNRows : 0
         topN.grouping = settings.panelGrouping
         topN.interval = settings.panelTopNInterval
         let topology = CPUTopologyService.shared.current
         topN.showsPerfLevel0 = topology?.quality.isOK == true && topology?.perfLevels.count == 2
         let coalitionUsable =
             store.engineStatus?.health.first { $0.id == AppSampler.collectorID }?.status != .unavailable
-        if settings.panelTopNRows > 0 {
+        if topN.rowCount > 0 {
             topNDemand.set(
                 coalitionUsable
                     ? Demand(collectors: [AppSampler.collectorID], interval: settings.panelTopNInterval, source: .panel)
@@ -351,12 +354,12 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             return
         }
         memoryDemand.set(Demand(collectors: [MemoryCollector.collectorID], interval: 1, source: .panel))
-        topN.rowCount = settings.memoryTopNRows
+        topN.rowCount = state.path.isEmpty ? settings.memoryTopNRows : 0
         topN.grouping = settings.memoryGrouping
         topN.interval = settings.memoryTopNInterval
         let coalitionUsable =
             store.engineStatus?.health.first { $0.id == AppSampler.collectorID }?.status != .unavailable
-        if settings.memoryTopNRows > 0 {
+        if topN.rowCount > 0 {
             memoryTopNDemand.set(
                 coalitionUsable
                     ? Demand(collectors: [AppSampler.collectorID], interval: settings.memoryTopNInterval, source: .panel)
@@ -368,8 +371,24 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         }
     }
 
-    /// 存储 tab（存储模块设计 §4.6）：读写 1 s、SMART 按设置（默认 2 s，读全部盘）、容量 10 s、
-    /// Top N 行数大于 0 时按设置的间隔扫描 coalition。
+    /// 应用详情页（D64）：可见时按所属模块 Top N 的间隔扫描 coalition，离开即停。
+    private func updateAppDetailDemand(visible: Bool) {
+        guard visible, case .app(let route) = state.path.last else {
+            appDetailDemand.set(nil)
+            services.appDetail.show(nil)
+            return
+        }
+        let interval =
+            switch route.metric {
+            case .cpu: settings.panelTopNInterval
+            case .memory: settings.memoryTopNInterval
+            case .disk: settings.storageTopNInterval
+            case .gpu: settings.gpuTopNInterval
+            }
+        appDetailDemand.set(Demand(collectors: [AppSampler.collectorID], interval: interval, source: .panel))
+        services.appDetail.show(route.coalitionID)
+    }
+
     /// GPU 与加速器 tab（D57、D58）。
     private func updateGPUDemands(visible: Bool) {
         let topN = services.gpuTopN
@@ -384,7 +403,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 collectors: [
                     GPUTemperatureCollector.collectorID, GPUAcceleratorCollector.collectorID, MediaEngineCollector.collectorID,
                 ], interval: settings.gpuPanelInterval, source: .panel))
-        topN.rowCount = settings.gpuTopNRows
+        topN.rowCount = state.path.isEmpty ? settings.gpuTopNRows : 0
         topN.grouping = settings.gpuGrouping
         topN.interval = settings.gpuTopNInterval
         let coalitionUsable =
@@ -393,7 +412,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         gpuTopNDemand.set(
             coalitionUsable
                 ? Demand(collectors: [AppSampler.collectorID], interval: settings.gpuTopNInterval, source: .panel) : nil)
-        topN.setActive(settings.gpuTopNRows > 0, coalitionUsable: coalitionUsable)
+        topN.setActive(topN.rowCount > 0, coalitionUsable: coalitionUsable)
     }
 
     /// 网络 tab（网络模块设计 §7，D60、D61）。
@@ -412,6 +431,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 : nil)
     }
 
+    /// 存储 tab（存储模块设计 §4.6）：读写 1 s、SMART 按设置（默认 2 s，读全部盘）、容量 10 s、
+    /// 主页上 Top N 行数大于 0 时按设置的间隔扫描 coalition。
     private func updateStorageDemands(visible: Bool) {
         let topN = services.diskTopN
         services.storageModel.panelVisible = visible
@@ -424,7 +445,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         storageSMARTDemand.set(
             Demand(collectors: [SMARTCollector.collectorID], interval: settings.storageSMARTInterval, source: .panel))
         storageCapacityDemand.set(Demand(collectors: [StorageCapacityCollector.collectorID], interval: 10, source: .panel))
-        topN.rowCount = state.storageDetail == nil ? settings.storageTopNRows : 0
+        topN.rowCount = state.path.isEmpty ? settings.storageTopNRows : 0
         topN.grouping = settings.storageGrouping
         topN.interval = settings.storageTopNInterval
         let coalitionUsable =
@@ -479,7 +500,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         guard presentation != .hidden else { return }
         presentation = .hidden
         state.isPinned = false
-        state.storageDetail = nil
+        state.path = []
         removeGlobalMonitor()
         removeLocalMonitor()
         panel?.orderOut(nil)
@@ -631,6 +652,14 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         guard presentation == .anchored, timestamp >= shownAt else { return }
         let location = NSEvent.mouseLocation
         if let anchor = statusItems?.anchorWindow?.frame, anchor.contains(location) {
+            if !state.path.isEmpty {
+                // D64：在二级页时再次点击同一个 widget 回到模块主页，不关闭。
+                Log.panel.info("再次点击 item，回到模块主页")
+                state.path = []
+                // 无 session 的面板：系统随后为这次点击开的 session 要接管，而不是被当成「关闭」。
+                if sessionItem == nil { switchRequestedAt = ProcessInfo.processInfo.systemUptime }
+                return
+            }
             Log.panel.info("再次点击 item，关闭面板")
             if sessionItem == nil {
                 // 无 session 的面板：系统随后会为这次点击开启新 session，didBegin 里把它取消。
@@ -650,8 +679,12 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         switch event.type {
         case .keyDown where event.keyCode == 53:  // Esc
             guard presentation != .hidden, event.window === panel else { return event }
-            Log.panel.info("Esc，关闭面板")
-            close()
+            if state.pop() {
+                Log.panel.info("Esc，回退一层")
+            } else {
+                Log.panel.info("Esc，关闭面板")
+                close()
+            }
             return nil
         case .leftMouseDown, .rightMouseDown:
             // 本 app 的其他窗口（如设置窗口）上的点击也算「点别处」。
