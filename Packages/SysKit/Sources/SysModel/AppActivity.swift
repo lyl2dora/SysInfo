@@ -87,6 +87,10 @@ public struct AppActivityRow: Hashable, Sendable, Identifiable {
     public var aneJoules: Double?
     /// 时段内有记录的分钟数（应用活跃的分钟）。
     public var activeMinutes: Int?
+    /// 能耗只合计了已知的分钟（有分钟的槽位核对未通过），偏低。
+    public var energyPartial: Bool
+    /// 时段内阻止睡眠（含显示器睡眠）的时长，秒（D69，断言区间的并集按条累加，同一时刻多条会重复计）。
+    public var sleepPreventionSeconds: Double?
 
     /// 持有的电源断言（D69）：「现在」档是当前的，历史时段是时段内出现过的。
     public var assertions: [PowerAssertion]
@@ -97,8 +101,11 @@ public struct AppActivityRow: Hashable, Sendable, Identifiable {
         cpuTimeNanos: UInt64? = nil, watts: Double? = nil, gpuShare: Double? = nil, aneWatts: Double? = nil,
         diskRead: Double? = nil, diskWrite: Double? = nil, wakeups: Double? = nil, pageins: Double? = nil,
         perfLevel0Share: Double? = nil, footprint: UInt64? = nil, energyJoules: Double? = nil, gpuTimeNanos: UInt64? = nil,
-        aneJoules: Double? = nil, activeMinutes: Int? = nil, assertions: [PowerAssertion] = []
+        aneJoules: Double? = nil, activeMinutes: Int? = nil, energyPartial: Bool = false, sleepPreventionSeconds: Double? = nil,
+        assertions: [PowerAssertion] = []
     ) {
+        self.energyPartial = energyPartial
+        self.sleepPreventionSeconds = sleepPreventionSeconds
         self.id = id
         self.key = key
         self.name = name

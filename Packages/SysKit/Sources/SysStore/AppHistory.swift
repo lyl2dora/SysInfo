@@ -13,8 +13,10 @@ public struct AppTotal: Hashable, Sendable {
     public var key: String
     public var name: String
     public var cpuNanos: Int64
-    /// CPU + GPU + ANE 能耗，nJ；时段内有分钟的 CPU 能耗不可信时为 nil。
+    /// CPU + GPU + ANE 能耗，nJ：只合计能耗已知的分钟；一分钟都不知道时为 nil。
     public var energyNanojoules: Int64?
+    /// 时段内每一分钟的 CPU 能耗都已知（槽位核对未通过的分钟记为空，D30）。为 false 时 `energyNanojoules` 偏低。
+    public var energyComplete: Bool
     public var gpuNanos: Int64
     public var gpuEnergyNanojoules: Int64
     public var aneEnergyNanojoules: Int64
@@ -25,6 +27,26 @@ public struct AppTotal: Hashable, Sendable {
     public var footprintPeak: Int64
     /// 有记录的分钟数。
     public var minutes: Int
+
+    public init(
+        key: String, name: String, cpuNanos: Int64, energyNanojoules: Int64?, gpuNanos: Int64, gpuEnergyNanojoules: Int64,
+        aneEnergyNanojoules: Int64, diskReadBytes: Int64, diskWrittenBytes: Int64, wakeups: Int64, footprintPeak: Int64,
+        minutes: Int, energyComplete: Bool = true
+    ) {
+        self.key = key
+        self.name = name
+        self.cpuNanos = cpuNanos
+        self.energyNanojoules = energyNanojoules
+        self.energyComplete = energyComplete
+        self.gpuNanos = gpuNanos
+        self.gpuEnergyNanojoules = gpuEnergyNanojoules
+        self.aneEnergyNanojoules = aneEnergyNanojoules
+        self.diskReadBytes = diskReadBytes
+        self.diskWrittenBytes = diskWrittenBytes
+        self.wakeups = wakeups
+        self.footprintPeak = footprintPeak
+        self.minutes = minutes
+    }
 }
 
 /// 详情图表的一个桶。
@@ -65,10 +87,10 @@ extension HistoryStore {
         try db.statement(
             """
             SELECT p.key, p.name, SUM(a.cpu_ns),
-                   CASE WHEN COUNT(a.energy_nj) = COUNT(*) THEN SUM(a.energy_nj) + SUM(COALESCE(a.gpu_nj, 0)) + SUM(COALESCE(a.ane_nj, 0)) END,
+                   CASE WHEN COUNT(a.energy_nj) > 0 THEN SUM(a.energy_nj) + SUM(COALESCE(a.gpu_nj, 0)) + SUM(COALESCE(a.ane_nj, 0)) END,
                    SUM(COALESCE(a.gpu_ns, 0)), SUM(COALESCE(a.gpu_nj, 0)), SUM(COALESCE(a.ane_nj, 0)),
                    SUM(COALESCE(a.disk_r, 0)), SUM(COALESCE(a.disk_w, 0)), SUM(COALESCE(a.wakeups, 0)),
-                   MAX(COALESCE(a.footprint, 0)), COUNT(*)
+                   MAX(COALESCE(a.footprint, 0)), COUNT(*), COUNT(a.energy_nj) = COUNT(*)
             FROM app_minute a JOIN app p ON p.id = a.app
             WHERE a.t >= ? AND a.t < ? GROUP BY a.app ORDER BY 3 DESC
             """
@@ -76,7 +98,8 @@ extension HistoryStore {
             AppTotal(
                 key: $0.text(0), name: $0.text(1), cpuNanos: $0.int(2), energyNanojoules: $0.optionalInt(3), gpuNanos: $0.int(4),
                 gpuEnergyNanojoules: $0.int(5), aneEnergyNanojoules: $0.int(6), diskReadBytes: $0.int(7),
-                diskWrittenBytes: $0.int(8), wakeups: $0.int(9), footprintPeak: $0.int(10), minutes: Int($0.int(11)))
+                diskWrittenBytes: $0.int(8), wakeups: $0.int(9), footprintPeak: $0.int(10), minutes: Int($0.int(11)),
+                energyComplete: $0.int(12) != 0)
         }
     }
 
@@ -154,6 +177,7 @@ extension AppTotal {
             id: key, key: key, name: name, appPath: appPath, isApp: isApp, cpuTimeNanos: UInt64(max(cpuNanos, 0)),
             diskRead: Double(diskReadBytes), diskWrite: Double(diskWrittenBytes), wakeups: Double(wakeups),
             footprint: UInt64(max(footprintPeak, 0)), energyJoules: energy, gpuTimeNanos: UInt64(max(gpuNanos, 0)),
-            aneJoules: Double(aneEnergyNanojoules) / 1e9, activeMinutes: minutes, assertions: assertions)
+            aneJoules: Double(aneEnergyNanojoules) / 1e9, activeMinutes: minutes, energyPartial: energy != nil && !energyComplete,
+            assertions: assertions)
     }
 }

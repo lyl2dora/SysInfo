@@ -77,7 +77,13 @@ struct CPUSettingsView: View {
 
             Section {
                 Toggle("记录 CPU 历史", isOn: $settings.historyCPUEnabled)
-                Toggle("记录每应用 CPU", isOn: $settings.historyAppsEnabled)
+                LabeledContent("每应用数据") {
+                    HStack(spacing: 6) {
+                        Text(settings.historyAppsEnabled ? "记录中" : "未记录").foregroundStyle(.secondary)
+                        Button("在「应用活动」页设置") { openPage(.appActivity) }
+                            .buttonStyle(.link)
+                    }
+                }
                 Toggle(isOn: $settings.historyHighPrecision) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("后台高精度历史")

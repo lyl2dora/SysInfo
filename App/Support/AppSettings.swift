@@ -41,7 +41,10 @@
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
 // - cpu.panel.topNRows / .grouping / .chartSpan / .splitUserSystem   面板显示
-// - history.cpu.enabled / history.apps.enabled / history.cpu.highPrecision   是否记录历史与后台高精度（D30、D19）
+// - history.cpu.enabled / history.apps.enabled / history.cpu.highPrecision   是否记录历史与后台高精度（D30、D19）；
+//   history.apps.enabled 同时管每应用数据（D68）与电源断言（D69），在「应用活动」页编辑
+// - appActivity.interval   应用活动窗口「现在」档的采样间隔，秒：1 / 2 / 5（D67：默认 2）
+// - appActivity.columns   应用活动表格的列显示与顺序（TableColumnCustomization 的 JSON）
 
 import Foundation
 import Observation
@@ -130,6 +133,8 @@ final class AppSettings {
         static let latencyInterval = "network.latency.interval"
         static let publicIPService = "network.publicIP.service"
         static let historyNetwork = "history.network.enabled"
+        static let appActivityInterval = "appActivity.interval"
+        static let appActivityColumns = "appActivity.columns"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -590,6 +595,16 @@ final class AppSettings {
         didSet { persist(historyNetworkEnabled, Key.historyNetwork) }
     }
 
+    /// 应用活动窗口「现在」档的采样间隔（D67：默认 2 s，可选 1 / 5）。
+    var appActivityInterval: Int {
+        didSet { persist(appActivityInterval, Key.appActivityInterval) }
+    }
+
+    /// 应用活动表格的列显示与顺序。只是界面状态，不触发 onChange。
+    var appActivityColumns: Data? {
+        didSet { defaults?.set(appActivityColumns, forKey: Key.appActivityColumns) }
+    }
+
     static let latencyIntervals = [2, 5, 10]
 
     /// 某个模块实际使用的常驻间隔。
@@ -705,6 +720,8 @@ final class AppSettings {
         latencyInterval = Self.int(defaults, Key.latencyInterval, choices: Self.latencyIntervals) ?? 5
         publicIPService = defaults?.string(forKey: Key.publicIPService) ?? ""
         historyNetworkEnabled = defaults?.object(forKey: Key.historyNetwork) as? Bool ?? true
+        appActivityInterval = Self.int(defaults, Key.appActivityInterval, choices: Self.panelIntervals) ?? 2
+        appActivityColumns = defaults?.data(forKey: Key.appActivityColumns)
     }
 
     private static func int(_ defaults: UserDefaults?, _ key: String, in range: ClosedRange<Int>) -> Int? {

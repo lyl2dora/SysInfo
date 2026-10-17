@@ -66,6 +66,9 @@ private struct SettingsSplitView: View {
         case .network:
             NetworkSettingsView(
                 settings: context.settings, store: context.store, model: context.services.networkModel, openPage: openPage)
+        case .appActivity:
+            AppActivitySettingsView(
+                settings: context.settings, store: context.store, services: context.services, openPage: openPage)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:

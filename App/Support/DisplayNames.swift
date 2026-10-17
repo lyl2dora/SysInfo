@@ -14,6 +14,7 @@ enum DisplayNames {
         case "cpu.misc": String(localized: "负载均值与中断")
         case "cpu.sensors": String(localized: "温度与功耗")
         case "app.coalition": String(localized: "应用活动")
+        case "app.assertions": String(localized: "电源断言")
         case "cpu.irq.devices": String(localized: "中断来源")
         case "cpu.freq.cores": String(localized: "逐核频率")
         case "app.self": String(localized: "本进程开销")
@@ -75,6 +76,9 @@ enum DisplayNames {
         case "gpu.accelerators.any": String(localized: "至少一项可读")
         case "gpu.media.ioreport", "gpu.diagnostics.ioreport": String(localized: "IOReport 可用")
         case "gpu.media.channels": String(localized: "找到媒体引擎中断通道")
+        case "app.coalition.slots": String(localized: "辅助槽位与成员 rusage 一致")
+        case "app.assertions.read": String(localized: "读取电源断言")
+        case "app.assertions.notify": String(localized: "断言变化通知（自建断言验证）")
         default: name
         }
     }
@@ -208,6 +212,13 @@ enum Formatting {
         case ..<1000: return String(format: "%.0f Wh", wh)
         default: return String(format: "%.2f kWh", wh / 1000)
         }
+    }
+
+    /// 应用的能耗：小于 1 Wh 时用 mWh（「12 mWh」「0.4 mWh」），否则同 `energy`。
+    static func appEnergy(_ joules: Double) -> String {
+        let mwh = joules / 3.6
+        guard mwh < 1000 else { return energy(joules) }
+        return mwh < 10 ? String(format: "%.1f mWh", mwh) : String(format: "%.0f mWh", mwh)
     }
 
     /// 转速：「1000 rpm」。

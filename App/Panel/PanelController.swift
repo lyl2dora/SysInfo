@@ -100,6 +100,8 @@ final class PanelState {
 /// 面板顶栏按钮的动作。
 struct PanelActions {
     var openActivityMonitor: () -> Void
+    /// 打开应用活动窗口（D67）。
+    var openAppActivity: () -> Void
     var pin: () -> Void
     var close: () -> Void
     var openSettings: () -> Void
@@ -635,6 +637,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private func installContent(in panel: PanelWindow) -> NSSize {
         let actions = PanelActions(
             openActivityMonitor: { [weak self] in self?.openActivityMonitor() },
+            openAppActivity: { [services] in services.openAppActivity(nil, nil) },
             pin: { [weak self] in self?.pin() },
             close: { [weak self] in self?.close() },
             // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。

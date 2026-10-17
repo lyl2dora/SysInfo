@@ -4,7 +4,9 @@
 // - 数据只用各模块的常驻采集器（PanelController.updateOverviewDemands 登记）：不扫 Top N、不读全部盘 SMART、
 //   不读 CoreWLAN。盘温取盘温 widget 绑定的盘最近一次读数（没开盘温 widget 时可能是历史每分钟那次读的）；
 // - 「今日流量」读历史库（主接口），每 60 s 一次；
-// - 卡片顺序与切换器一致（D65 MG3）；「最耗能的 3 个应用」卡片等应用活动上线后再加。
+// - 卡片顺序与切换器一致（D65 MG3）；
+// - 底部「最耗能的应用」卡片（D70）：复用后台历史已有的 10 s coalition 扫描，显示最近 60 s 按功率（CPU + GPU + ANE）
+//   的前 3，不另外采样；关掉「记录每应用数据」时不出现。点击打开应用活动窗口，按功率排序。
 
 import AppKit
 import SwiftUI
@@ -20,6 +22,8 @@ struct OverviewPanelView: View {
     let select: (PanelTab) -> Void
 
     @State private var todayTraffic: Double?
+    @State private var topEnergy: [(key: String, name: String, watts: Double)] = []
+    @Environment(\.openAppActivity) private var openAppActivity
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -42,11 +46,56 @@ struct OverviewPanelView: View {
                 .accessibilityLabel(Text(tab.title))
                 .help("查看\(tab.title)")
             }
+            if services.history != nil, settings.historyAppsEnabled {
+                Button {
+                    openAppActivity(.power)
+                } label: {
+                    PanelCard { energyCard }.contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("打开应用活动窗口，按功率排序")
+            }
         }
         .task {
             while !Task.isCancelled {
                 await loadTodayTraffic()
                 try? await Task.sleep(for: .seconds(60))
+            }
+        }
+        .task(id: settings.historyAppsEnabled) {
+            while !Task.isCancelled, settings.historyAppsEnabled, let history = services.history {
+                topEnergy = await history.recentTopEnergy(limit: Self.energyRows)
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
+    }
+
+    static let energyRows = 3
+
+    /// 定高：标题 + 3 个行位（D64）。
+    private var energyCard: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("最耗能的应用").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("最近 1 分钟").font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            ForEach(0..<Self.energyRows, id: \.self) { index in
+                HStack(spacing: 6) {
+                    if index < topEnergy.count {
+                        let app = topEnergy[index]
+                        AppIcon(path: services.appActivity?.appPath(forKey: app.key))
+                        Text(app.name).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(Formatting.watts(app.watts)).monospacedDigit()
+                    } else {
+                        Color.clear.frame(width: 16, height: 16)
+                        Text(index == 0 && topEnergy.isEmpty ? String(localized: "等待数据…") : " ").foregroundStyle(.tertiary)
+                        Spacer()
+                    }
+                }
+                .font(.caption)
             }
         }
     }

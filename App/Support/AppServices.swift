@@ -13,6 +13,8 @@ struct CPUCollectors {
     var frequency: CPUFrequencyCollector?
     var sensors: SensorCollector?
     var apps: AppSampler?
+    /// 电源断言（D69）：应用活动窗口与历史记录共用。
+    var assertions: PowerAssertionCollector?
     var interrupts: InterruptDeviceCollector?
     var cores: CoreFrequencyCollector?
 
@@ -22,6 +24,7 @@ struct CPUCollectors {
         frequency = collectors.compactMap { $0 as? CPUFrequencyCollector }.first
         sensors = collectors.compactMap { $0 as? SensorCollector }.first
         apps = collectors.compactMap { $0 as? AppSampler }.first
+        assertions = collectors.compactMap { $0 as? PowerAssertionCollector }.first
     }
 }
 
@@ -551,6 +554,10 @@ final class AppServices {
     let networkModel = NetworkModel.shared
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
+    /// 应用活动窗口的数据（D67）；由 AppDelegate 在创建窗口控制器时填上。
+    var appActivity: AppActivityModel?
+    /// 打开应用活动窗口：按哪一列排序、哪个时间段（nil 为保持）。
+    var openAppActivity: (AppActivityColumn?, AppActivityRange?) -> Void = { _, _ in }
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
     private let interruptDemand: DemandSlot
 
@@ -589,6 +596,7 @@ final class AppServices {
             diskTopN.coalitionTick()
             gpuTopN.coalitionTick()
             appDetail.tick()
+            appActivity?.coalitionTick()
         }
         if result.collectors.contains(NetworkIOCollector.collectorID), let io = network.io {
             networkModel.refresh(io.lastState)

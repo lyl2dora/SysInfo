@@ -308,6 +308,8 @@ public actor HistoryRecorder {
             // 自检之后断言通知可能变得可用或不可用：轮询需求随之增减（D69）。
             let wantsPolling = configuration.recordApps && assertions != nil && assertions?.isEventDriven != true
             if wantsPolling != assertionPolling { await applyDemands() }
+            // 自检刚读过一次断言：用它核对（启动时记录器可能早于自检开始，拿不到第一次快照；事件驱动只在变化时交付）。
+            if configuration.recordApps, let latest = assertions?.latestSnapshot { ingestAssertions(latest) }
             return
         }
         guard case .tick(let result) = event else { return }
