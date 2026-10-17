@@ -113,3 +113,30 @@ D65 MG5 规定总览「只用常驻采集器，不扫 Top N」，而这张卡片
 - 身份按 bundle id / 可执行文件路径合并（`AppIdentity`），已退出应用照常出现在历史时段里。
 - 表格排序固定按用户选的列，「现在」档每次刷新不重排已选中行的位置（选中行保持可见）。
 - 窗口不占菜单栏 widget；不进出厂默认开销预算（窗口关闭时为 0）。
+
+## 3. 实现方案（D67–D70 拍板后）
+
+### 3.1 采集层（SysCollectors）
+- `CoalitionUsage` / `CoalitionDelta` 补字段：唤醒（槽位 4 + 5）、pageins（49）的差分，footprint（40）与累计 CPU 时间的当前值。全表与历史都从同一个窗口取，不另做扫描。
+- `AppActivityBuilder`：把一个窗口变成全表行（`AppActivityRow`）。身份按 cid 缓存（名字、.app 路径、bundle 键、是否 App、代表 pid），只解析新 cid；成员数取 `proc_listcoalitions` 的 tasks。计算全在后台（utility），不碰 MainActor。
+- `PowerAssertionCollector`（`app.assertions`，inline）：
+  - `sample()` 用公开的 `IOPMCopyAssertionsByProcess` 读当前断言，归类、合并重复、按 `AssertionOnBehalfOfPID` 改归属，pid → coalition；输出断言快照（不出数值样本）。
+  - `selfTest()`：符号解析（`csp_pm_assertion_notify_register`，dlsym `IOPMAssertionNotify`）→ 登记 → 自建并释放一次 `PreventUserIdleDisplaySleep` 断言（名字「SysInfo self-test」）→ 1 s 内是否收到 `anychange`。通过则进入事件驱动；不过时状态降级，由历史记录器改为每 60 s 登记需求轮询。
+  - 事件驱动：`notify_register_dispatch` 在采集器自己的串行队列上回调，回调里读一次快照，经回调交给订阅方（历史记录器）。同一 100 ms 内的多次通知合并。
+- 私有符号只有 `IOPMAssertionNotify` 一个，放 `CSysPrivate/pm.c`，D35 的 dlsym 方式。
+
+### 3.2 历史层（SysStore，schema v3）
+- `app_minute` 加列：`gpu_ns`、`gpu_nj`、`ane_nj`、`disk_r`、`disk_w`、`wakeups`、`footprint`（都可空，旧行为空）。
+- `MinuteAggregator` 每应用桶扩到全部列；`take()` 每分钟取「CPU、功率、GPU、ANE、磁盘、唤醒、footprint 各前 10」的并集，另写一行 `__other__`（其余合计；footprint 取和）。
+- 记录器为每个窗口解析「各列前 16 的并集」的身份（原来只看 CPU 前 16）。
+- 新表 `power_assertion(id, app, type, name, holder, start_s, end_s)`：快照比较得到开始 / 结束；启动时把上次运行遗留的未结束行按上次提交时刻收尾（标记 `end_estimated`）。保留期同分钟级。
+- 查询：`appTotals(from:to:)`（按应用汇总各列；footprint 取最大）、`appSeries(app:metric:)`（详情图表）、`assertionSpans(from:to:)`。导出加新列与断言表。
+- 记录器另维护最近 60 s 的每应用功率（从它收到的窗口算），给总览卡片用（D70），不额外采样。
+
+### 3.3 app 层
+- `AppActivityModel`：窗口可见时登记 `app.coalition` + `app.assertions` 需求（默认 2 s）；历史时段读记录器；排序、搜索、分类、选中保持。
+- `AppActivityWindowController`：标准 `NSWindow` + SwiftUI（侧栏：时间段与分类；主体：`Table`；右侧：应用详情 inspector）。打开期间与设置窗口共用一个「前台窗口计数」决定 `.regular` / `.accessory`。
+- 入口：各 Top N 底部「在应用活动中查看全部 ›」（按该模块列排序）、面板顶栏按钮、总览「最耗能的 3 个应用」卡片（D70）。
+- 设置：新增「应用活动」模块页（采集间隔、列的默认显示、是否记录每应用数据与电源断言）；「记录每应用数据」从 CPU 页移来（D41：一处可编辑，CPU 页改为只读引用）。诊断页加断言数据源状态。
+- 启动参数 `--open-app-activity[=<时间段>]`，截图与开销测量用。
+- CLI：`apps`（现在 / 历史时段全表）、`assertions`（当前断言与自检）。
