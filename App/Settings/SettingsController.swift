@@ -169,9 +169,11 @@ final class SettingsController {
             NotificationCenter.default.removeObserver(observer)
         }
         self.window = window
-        // Settings 场景默认是偏好设置式的高工具栏，侧栏按钮会落在标题下方一整行里；
-        // 改成统一样式，标题与工具栏同一行，侧栏按钮紧挨红绿灯。
+        // Settings 场景默认是偏好设置式的高工具栏，侧栏按钮会落在标题下方一整行里。改成统一样式的透明标题栏：
+        // 标题栏横贯整个窗口，只放红绿灯、侧栏开关和居中的页名；内容延伸到标题栏下，滚动时从工具栏下方经过。
         window.toolbarStyle = .unified
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
         windowObservers = [
             NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main

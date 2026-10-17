@@ -28,32 +28,21 @@ private struct SettingsSplitView: View {
 
     var body: some View {
         @Bindable var state = context.state
-        // 不用 NavigationSplitView：它在统一样式的标题栏下给侧栏留了最小宽度（红绿灯在侧栏里），
-        // 收起成图标栏时宽度改不下来；自己排两栏，宽度完全由收起状态决定。
-        HStack(spacing: 0) {
-            List(SettingsPage.allCases, selection: $state.selection) { page in
-                Group {
-                    if state.sidebarCompact {
-                        // 收起时只留图标，名字放进提示与辅助功能标签。
-                        Image(systemName: page.symbol)
-                            .frame(maxWidth: .infinity)
-                            .help(page.title)
-                            .accessibilityLabel(page.title)
-                    } else {
-                        Label(page.title, systemImage: page.symbol)
-                    }
-                }
-                .tag(page)
-            }
-            .listStyle(.sidebar)
-            .frame(width: state.sidebarCompact ? 56 : 180)
-            Divider()
+        // 不用 NavigationSplitView：它在统一样式的标题栏下给侧栏留了最小宽度（红绿灯在侧栏里），收起成图标栏时
+        // 宽度改不下来。自己排：标题栏横贯，侧栏是标题栏下方的浮动玻璃面板，内容延伸到标题栏下。
+        HStack(alignment: .top, spacing: 8) {
+            SettingsSidebar(selection: $state.selection, compact: state.sidebarCompact)
+                .padding([.leading, .bottom], 8)
             detail(for: state.selection ?? .general)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Form 自带的背景比窗口背景浅：隐藏它，渐隐带才能与底色一致、静止时不显出一条。
+                .scrollContentBackground(.hidden)
+                .overlay(alignment: .top) { TitlebarFade() }
         }
-        .navigationTitle(state.selection?.title ?? "")
+        // 整个窗口（含标题栏下）统一用窗口背景色，侧栏玻璃面板浮在上面，左右两栏之间不出现色差。
+        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .toolbar {
-            // 侧栏开关放在标题栏红绿灯右侧；收起时保留图标栏而不是整栏隐藏。
+            // 侧栏开关紧挨红绿灯，展开与收起时位置不变。
             ToolbarItem(placement: .navigation) {
                 Button {
                     state.sidebarCompact.toggle()
@@ -63,7 +52,15 @@ private struct SettingsSplitView: View {
                 .help(state.sidebarCompact ? "展开边栏" : "收起边栏")
                 .accessibilityLabel(state.sidebarCompact ? "展开边栏" : "收起边栏")
             }
+            // 页名居中：标题栏不属于任何一栏，页名不会看成侧栏的标题。
+            ToolbarItem(placement: .principal) {
+                Text((state.selection ?? .general).title)
+                    .font(.headline)
+            }
         }
+        // 窗口标题（「SysInfo 设置」）不显示：页名已经在中间。只在 NSWindow 上设 titleVisibility，
+        // SwiftUI 重建工具栏时会把它放回来。
+        .toolbar(removing: .title)
     }
 
     private func openPage(_ page: SettingsPage) {
@@ -110,6 +107,74 @@ private struct SettingsSplitView: View {
         case .about:
             AboutView()
         }
+    }
+}
+
+/// 内容滚到标题栏下面时的渐隐带：标题栏高度内先实后虚。Form 底层的滚动视图不吃 scrollEdgeEffectStyle，
+/// 不加这条的话滚上去的文字会和红绿灯、页名叠在一起。
+private struct TitlebarFade: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let height = proxy.safeAreaInsets.top + 10
+            LinearGradient(
+                stops: [
+                    .init(color: Color(nsColor: .windowBackgroundColor), location: 0),
+                    .init(color: Color(nsColor: .windowBackgroundColor), location: 0.6),
+                    .init(color: Color(nsColor: .windowBackgroundColor).opacity(0), location: 1),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: height)
+            .ignoresSafeArea(edges: .top)
+        }
+        .frame(height: 0)
+        .allowsHitTesting(false)
+    }
+}
+
+/// 设置侧栏：标题栏下方的浮动玻璃面板。展开时图标加名字（180 pt），收起时只留图标（52 pt），名字放进悬停提示。
+/// 用按钮而不是 List：List 行里的 .help 收不到悬停，收起时的提示出不来。
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsPage?
+    let compact: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 2) {
+                ForEach(SettingsPage.allCases) { page in
+                    let selected = (selection ?? .general) == page
+                    Button {
+                        selection = page
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: page.symbol)
+                                .frame(width: 20)
+                                .foregroundStyle(selected ? Color.accentColor : .secondary)
+                            if !compact {
+                                Text(page.title).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .padding(.horizontal, compact ? 0 : 8)
+                        .frame(maxWidth: .infinity, minHeight: 28)
+                        .background {
+                            if selected {
+                                RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.18))
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .help(compact ? page.title : "")
+                    .accessibilityLabel(page.title)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(6)
+        }
+        .scrollIndicators(.never)
+        .frame(width: compact ? 52 : 180)
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 }
 
