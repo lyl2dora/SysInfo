@@ -1,6 +1,6 @@
 # 网络模块：能力边界（讨论稿）
 
-> 日期：2026-10-17。§3 的 N1–N9 待用户拍板，结论写入 `docs/decisions.md`。
+> 日期：2026-10-17。§3 的 N1–N9 已由用户全部按推荐确认，见 `docs/decisions.md` D60–D62。
 > 证据：`research/probes/network-module/`（2026-10-17，M5 Pro 与 M4 Pro 同步实测，macOS 27.0.1 26A434）；早期只在 M5 上测过的 `research/probes/network/`（2026-09-28）。
 > 「M5」「M4」分别指开发机 Mac17,16 与对照机 Mac16,11。
 
