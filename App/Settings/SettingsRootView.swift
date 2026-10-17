@@ -28,16 +28,40 @@ private struct SettingsSplitView: View {
 
     var body: some View {
         @Bindable var state = context.state
-        NavigationSplitView {
-            List(SettingsPage.allCases, selection: $state.selection) { page in
-                Label(page.title, systemImage: page.symbol)
-                    .tag(page)
-            }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
-        } detail: {
+        // 不用 NavigationSplitView：它在统一样式的标题栏下给侧栏留了最小宽度（红绿灯在侧栏里），收起成图标栏时
+        // 宽度改不下来。自己排：标题栏横贯，侧栏是标题栏下方的浮动玻璃面板，内容延伸到标题栏下。
+        HStack(alignment: .top, spacing: 8) {
+            SettingsSidebar(selection: $state.selection, compact: state.sidebarCompact)
+                .padding([.leading, .bottom], 8)
+                .zIndex(1)  // 浮出的页名要盖在内容上
             detail(for: state.selection ?? .general)
-                .navigationTitle(state.selection?.title ?? "")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Form 自带的背景比窗口背景浅：隐藏它，渐隐带才能与底色一致、静止时不显出一条。
+                .scrollContentBackground(.hidden)
+                .overlay(alignment: .top) { TitlebarFade() }
         }
+        // 整个窗口（含标题栏下）统一用窗口背景色，侧栏玻璃面板浮在上面，左右两栏之间不出现色差。
+        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+        .toolbar {
+            // 侧栏开关紧挨红绿灯，展开与收起时位置不变。
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    state.sidebarCompact.toggle()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .help(state.sidebarCompact ? "展开边栏" : "收起边栏")
+                .accessibilityLabel(state.sidebarCompact ? "展开边栏" : "收起边栏")
+            }
+            // 页名居中：标题栏不属于任何一栏，页名不会看成侧栏的标题。
+            ToolbarItem(placement: .principal) {
+                Text((state.selection ?? .general).title)
+                    .font(.headline)
+            }
+        }
+        // 窗口标题（「SysInfo 设置」）不显示：页名已经在中间。只在 NSWindow 上设 titleVisibility，
+        // SwiftUI 重建工具栏时会把它放回来。
+        .toolbar(removing: .title)
     }
 
     private func openPage(_ page: SettingsPage) {
@@ -84,6 +108,135 @@ private struct SettingsSplitView: View {
         case .about:
             AboutView()
         }
+    }
+}
+
+/// 内容滚到标题栏下面时的渐隐带：标题栏高度内先实后虚。Form 底层的滚动视图不吃 scrollEdgeEffectStyle，
+/// 不加这条的话滚上去的文字会和红绿灯、页名叠在一起。
+private struct TitlebarFade: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let height = proxy.safeAreaInsets.top + 10
+            LinearGradient(
+                stops: [
+                    .init(color: Color(nsColor: .windowBackgroundColor), location: 0),
+                    .init(color: Color(nsColor: .windowBackgroundColor), location: 0.6),
+                    .init(color: Color(nsColor: .windowBackgroundColor).opacity(0), location: 1),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: height)
+            .ignoresSafeArea(edges: .top)
+        }
+        .frame(height: 0)
+        .allowsHitTesting(false)
+    }
+}
+
+/// 设置侧栏：标题栏下方的浮动玻璃面板。展开时图标加名字（180 pt），收起时只留图标（52 pt）。
+/// 收起时悬停约 0.35 s，在图标右侧浮出页名。不用系统提示（.help）：AppKit 只在 app 处于前台时显示提示，
+/// 而设置窗口常在 app 未被激活时就在最前（从 Xcode 运行、`--open-settings` 启动，协作式激活不让抢前台）。
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsPage?
+    let compact: Bool
+
+    @State private var hovered: SettingsPage?
+    @State private var shown: SettingsPage?
+    @State private var showTask: Task<Void, Never>?
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 2) {
+                ForEach(SettingsPage.allCases) { page in
+                    let selected = (selection ?? .general) == page
+                    Button {
+                        selection = page
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: page.symbol)
+                                .frame(width: 20)
+                                .foregroundStyle(selected ? Color.accentColor : .secondary)
+                            if !compact {
+                                Text(page.title).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .padding(.horizontal, compact ? 0 : 8)
+                        .frame(maxWidth: .infinity, minHeight: 28)
+                        .background {
+                            if selected {
+                                RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.18))
+                            } else if compact && hovered == page {
+                                RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.08))
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { inside in hoverChanged(page, inside: inside) }
+                    .anchorPreference(key: HoverAnchorKey.self, value: .bounds) { shown == page ? $0 : nil }
+                    .accessibilityLabel(page.title)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(6)
+        }
+        .scrollIndicators(.never)
+        .frame(width: compact ? 52 : 180)
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        // 页名浮在侧栏右侧，盖在内容上方（侧栏在 HStack 里要排在内容之上，见 zIndex）。
+        .overlayPreferenceValue(HoverAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if compact, let anchor, let page = shown {
+                    let rect = proxy[anchor]
+                    // 左缘在面板右边外 10 pt，竖直方向与该行居中。
+                    Text(page.title)
+                        .font(.callout)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .glassEffect(.regular, in: .capsule)
+                        .fixedSize()
+                        .frame(height: rect.height)
+                        .offset(x: proxy.size.width + 10, y: rect.minY)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .onChange(of: compact) { hideHint() }
+    }
+
+    private func hoverChanged(_ page: SettingsPage, inside: Bool) {
+        guard compact else { return }
+        if inside {
+            hovered = page
+            showTask?.cancel()
+            // 已经在显示别的页名时直接换，不再等；第一次悬停等约 0.35 s，划过时不闪。
+            if shown != nil {
+                shown = page
+                return
+            }
+            showTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, hovered == page else { return }
+                shown = page
+            }
+        } else if hovered == page {
+            hideHint()
+        }
+    }
+
+    private func hideHint() {
+        showTask?.cancel()
+        hovered = nil
+        shown = nil
+    }
+}
+
+/// 悬停的那一行在侧栏里的位置（浮出页名用）。
+private struct HoverAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 
