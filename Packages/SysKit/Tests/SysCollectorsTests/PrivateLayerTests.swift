@@ -4,8 +4,9 @@ import Testing
 @testable import SysCollectors
 
 @Suite struct PrivateLayerTests {
-    @Test func layerVersionIsOneForCPUModule() {
-        #expect(PrivateLayer.version == 1)
+    /// 2：应用活动模块加入 IOPMAssertionNotify（D69）。
+    @Test func layerVersionIsTwoForAppActivity() {
+        #expect(PrivateLayer.version == 2)
     }
 
     // MARK: SMC

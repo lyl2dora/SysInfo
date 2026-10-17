@@ -22,7 +22,7 @@
 extern "C" {
 #endif
 
-#define CSP_LAYER_VERSION 1
+#define CSP_LAYER_VERSION 2
 
 /// 私有 C 层的接口版本号，诊断页和 sysinfo-cli 据此确认链接到的是哪一版私有层。
 uint32_t csp_layer_version(void);
@@ -152,6 +152,14 @@ int csp_thread_counts(pid_t pid, uint64_t thread_id, csp_thread_counts_level * _
 
 /// 进程的开机期间唯一 id（PROC_PIDUNIQIDENTIFIERINFO 的 p_uniqueid，不复用），用作名称缓存的键。成功返回 0。
 int csp_proc_unique_id(pid_t pid, uint64_t * _Nonnull unique_id);
+
+// MARK: - 电源断言变化通知（D69）
+
+/// IOPMAssertionNotify 已解析到。
+int csp_pm_available(void);
+
+/// 向 powerd 登记 notify(3) 名字 `name` 的断言变化通知（kIOPMNotifyRegister）。成功返回 0（IOReturn）；不可用返回 -1。
+int csp_pm_assertion_notify_register(const char * _Nonnull name);
 
 #ifdef __cplusplus
 }

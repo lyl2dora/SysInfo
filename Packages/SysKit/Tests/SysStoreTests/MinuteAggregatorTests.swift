@@ -123,7 +123,7 @@ let sensors = SensorCollector.collectorID
         #expect(agg.take(before: nil).rows.first?.quality == .estimated)
     }
 
-    @Test func appsMergeByIdentityAndKeepTopTen() {
+    @Test func appsMergeByIdentityAndKeepTopTen() throws {
         var agg = MinuteAggregator()
         let time = SampleTime(monotonicNanos: 1, wallClock: Date(timeIntervalSince1970: base + 20))
         func delta(_ id: UInt64, _ cpu: UInt64) -> CoalitionDelta {
@@ -146,11 +146,50 @@ let sensors = SensorCollector.collectorID
             AppActivityWindow(time: time, elapsedNanos: 10_000_000_000, coalitions: [delta(1, 100)], slotsTrusted: false),
             identities: identities)
         let apps = agg.take(before: nil).apps
-        #expect(apps.count == MinuteAggregator.appsPerMinute)
+        // CPU 与能耗的前 10 是同一批（app3…app12），app1、app2 并进「其余合计」（D68）
+        let named = apps.filter { $0.app.key != AppIdentity.other.key }
+        #expect(named.count == MinuteAggregator.appsPerMinute)
         #expect(apps.first?.app.key == "app12")
         #expect(apps.first?.cpuNanos == 12_500_000)
         #expect(!apps.contains { $0.app.key == "app1" || $0.app.key == "app2" })
-        #expect(apps.allSatisfy { $0.energyNanojoules != nil })
+        #expect(named.allSatisfy { $0.energyNanojoules != nil })
+        let other = try #require(apps.first { $0.app.key == AppIdentity.other.key })
+        #expect(other.cpuNanos == 3_000_000 + 100)
+        // app1 的第二个窗口能耗不可信：合进「其余」后整行能耗未知
+        #expect(other.energyNanojoules == nil)
+    }
+
+    @Test func unionKeepsTopAppsOfEveryColumnAndUnresolvedGoToOther() {
+        var agg = MinuteAggregator()
+        let time = SampleTime(monotonicNanos: 7, wallClock: Date(timeIntervalSince1970: base + 20))
+        var identities: [UInt64: AppIdentity] = [:]
+        var deltas: [CoalitionDelta] = []
+        // 1…12：CPU 递增；13：只有磁盘；14：只有 footprint 很大；15：没有身份（已退出）
+        for id in 1...15 {
+            if id != 15 { identities[UInt64(id)] = AppIdentity(key: "a\(id)", name: "A\(id)") }
+            deltas.append(
+                CoalitionDelta(
+                    id: UInt64(id), tasks: 1, cpuNanos: id <= 12 ? UInt64(id) * 1000 : 0, perfLevel0Nanos: 0, cycles: 0,
+                    perfLevel0Cycles: 0, energyNanojoules: 0, diskReadBytes: id == 13 ? 5000 : 0,
+                    wakeups: id == 15 ? 9 : 0, footprintBytes: id == 14 ? 1 << 30 : UInt64(id),
+                    membershipChanged: false, isNew: false))
+        }
+        agg.ingestApps(AppActivityWindow(time: time, elapsedNanos: 10_000_000_000, coalitions: deltas), identities: identities)
+        // 同一分钟的第二个窗口：footprint 跨窗口取最大，不相加
+        var second = deltas[13]
+        second.footprintBytes = 1 << 29
+        agg.ingestApps(
+            AppActivityWindow(
+                time: SampleTime(monotonicNanos: 8, wallClock: time.wallClock), elapsedNanos: 10_000_000_000, coalitions: [second]),
+            identities: identities)
+        let apps = agg.take(before: nil).apps
+        let keys = Set(apps.map(\.app.key))
+        #expect(keys.contains("a13"))  // 磁盘第一
+        #expect(keys.contains("a14"))  // footprint 第一
+        #expect(apps.first { $0.app.key == "a14" }?.footprintBytes == 1 << 30)
+        let other = apps.first { $0.app.key == AppIdentity.other.key }
+        #expect(other?.wakeups == 9)  // 没有身份的进了「其余」
+        #expect(apps.count <= 3 * MinuteAggregator.appsPerMinute + 1)
     }
 
     @Test func appEnergyBecomesUnknownWhenAnyWindowIsUntrusted() {

@@ -5,7 +5,9 @@
 //   所以下一个样本的区间就是它真正的差分区间。唤醒后不知道上一次运行在睡眠前多久，清空记录，丢弃第一个样本；
 // - 区间量按墙钟拆到所跨的分钟，瞬时量整份记到所在分钟（见 HistoryCatalog）；
 // - 不可用的样本不入库（空洞，图表断开）；
-// - 每应用：窗口的增量整份记到窗口结束所在的分钟，按应用身份合并；写库时每分钟只取 CPU 前 10。
+// - 每应用：窗口的增量整份记到窗口结束所在的分钟，按应用身份合并；写库时每分钟取「各列前 10 的并集」，
+//   另写一行「其余合计」（D68）。解析不到身份的 coalition（已退出、不在解析范围）直接记进「其余」，
+//   所以各列的整机总量可以从表里还原。footprint 是存量：同一窗口里同一应用的几个 coalition 相加，跨窗口取最大。
 
 import Foundation
 import SysCollectors
@@ -28,12 +30,28 @@ public struct AppMinuteRow: Hashable, Sendable {
     public var minute: Int64
     public var app: AppIdentity
     public var cpuNanos: UInt64
-    /// 能耗；这一分钟里有窗口的能耗槽不可信时为 nil。
+    /// CPU 能耗（槽位 11）；这一分钟里有窗口的能耗槽不可信时为 nil。
     public var energyNanojoules: UInt64?
+    /// GPU 时间（纳秒）、GPU 能耗、ANE 能耗（nJ）、磁盘读 / 写（字节）、唤醒次数、footprint 峰值（字节）（D68）。
+    public var gpuNanos: UInt64 = 0
+    public var gpuEnergyNanojoules: UInt64 = 0
+    public var aneEnergyNanojoules: UInt64 = 0
+    public var diskReadBytes: UInt64 = 0
+    public var diskWrittenBytes: UInt64 = 0
+    public var wakeups: UInt64 = 0
+    public var footprintBytes: UInt64 = 0
+
+    /// CPU + GPU + ANE 能耗（CPU 能耗不可信时只算 GPU + ANE）。
+    var totalEnergy: UInt64 { (energyNanojoules ?? 0) &+ gpuEnergyNanojoules &+ aneEnergyNanojoules }
+}
+
+extension AppIdentity {
+    /// 每分钟「其余合计」行的身份（D68）。界面按键显示本地化的「其余」。
+    public static let other = AppIdentity(key: "__other__", name: "其余")
 }
 
 public struct MinuteAggregator: Sendable {
-    /// 每应用每分钟保留的行数（D30）。
+    /// 每应用每分钟按各列各取前几名（D68：各列前 10 的并集）。
     public static let appsPerMinute = 10
     /// 区间长于这个值的样本视为异常（漏掉了基线复位），丢弃，秒。
     static let maxIntervalSeconds: Double = 3600
@@ -58,6 +76,41 @@ public struct MinuteAggregator: Sendable {
         var cpuNanos: UInt64 = 0
         var energyNanojoules: UInt64 = 0
         var energyValid = true
+        var gpuNanos: UInt64 = 0
+        var gpuEnergyNanojoules: UInt64 = 0
+        var aneEnergyNanojoules: UInt64 = 0
+        var diskReadBytes: UInt64 = 0
+        var diskWrittenBytes: UInt64 = 0
+        var wakeups: UInt64 = 0
+        var footprintMax: UInt64 = 0
+        /// 当前窗口（按单调时钟区分）里已累加的 footprint。
+        var footprintWindow: UInt64 = 0
+        var footprintWindowTime: UInt64?
+
+        mutating func add(_ delta: CoalitionDelta, trusted: Bool, window: UInt64) {
+            cpuNanos &+= delta.cpuNanos
+            if trusted { energyNanojoules &+= delta.energyNanojoules } else { energyValid = false }
+            gpuNanos &+= delta.gpuNanos
+            gpuEnergyNanojoules &+= delta.gpuEnergyNanojoules
+            aneEnergyNanojoules &+= delta.aneEnergyNanojoules
+            diskReadBytes &+= delta.diskReadBytes
+            diskWrittenBytes &+= delta.diskWrittenBytes
+            wakeups &+= delta.wakeups
+            if footprintWindowTime != window {
+                footprintWindowTime = window
+                footprintWindow = 0
+            }
+            footprintWindow &+= delta.footprintBytes
+            footprintMax = Swift.max(footprintMax, footprintWindow)
+        }
+
+        func row(minute: Int64, app: AppIdentity) -> AppMinuteRow {
+            AppMinuteRow(
+                minute: minute, app: app, cpuNanos: cpuNanos, energyNanojoules: energyValid ? energyNanojoules : nil,
+                gpuNanos: gpuNanos, gpuEnergyNanojoules: gpuEnergyNanojoules, aneEnergyNanojoules: aneEnergyNanojoules,
+                diskReadBytes: diskReadBytes, diskWrittenBytes: diskWrittenBytes, wakeups: wakeups, footprintBytes: footprintMax)
+        }
+
     }
 
     private var buckets: [Key: Bucket] = [:]
@@ -132,20 +185,16 @@ public struct MinuteAggregator: Sendable {
         body(&buckets[key, default: Bucket()])
     }
 
-    /// 吃一个应用活动窗口。`identities` 里没有的 coalition（已退出、解析不到）不记。
+    /// 吃一个应用活动窗口。`identities` 里没有的 coalition（已退出、不在解析范围）记进「其余」。
     public mutating func ingestApps(_ window: AppActivityWindow, identities: [UInt64: AppIdentity]) {
         let minute = Self.minute(of: window.time.wallClock)
         var perMinute = apps[minute, default: [:]]
-        for delta in window.coalitions where delta.cpuNanos > 0 {
-            guard let identity = identities[delta.id] else { continue }
+        let windowID = window.time.monotonicNanos
+        for delta in window.coalitions {
+            let identity = identities[delta.id] ?? .other
             var bucket = perMinute[identity.key, default: AppBucket(name: identity.name)]
             bucket.name = identity.name
-            bucket.cpuNanos &+= delta.cpuNanos
-            if window.slotsTrusted {
-                bucket.energyNanojoules &+= delta.energyNanojoules
-            } else {
-                bucket.energyValid = false
-            }
+            bucket.add(delta, trusted: window.slotsTrusted, window: windowID)
             perMinute[identity.key] = bucket
         }
         apps[minute] = perMinute
@@ -180,15 +229,42 @@ public struct MinuteAggregator: Sendable {
         var appRows: [AppMinuteRow] = []
         for (minute, perMinute) in apps where cutoff.map({ minute < $0 }) ?? true {
             apps[minute] = nil
-            let top = perMinute.sorted { $0.value.cpuNanos > $1.value.cpuNanos }.prefix(Self.appsPerMinute)
-            for (key, bucket) in top {
-                appRows.append(
-                    AppMinuteRow(
-                        minute: minute, app: AppIdentity(key: key, name: bucket.name), cpuNanos: bucket.cpuNanos,
-                        energyNanojoules: bucket.energyValid ? bucket.energyNanojoules : nil))
-            }
+            appRows.append(contentsOf: Self.selectRows(minute: minute, perMinute.map { $0.value.row(minute: minute, app: AppIdentity(key: $0.key, name: $0.value.name)) }))
         }
-        appRows.sort { ($0.minute, $1.cpuNanos) < ($1.minute, $0.cpuNanos) }
+        appRows.sort { ($0.minute, $1.cpuNanos, $0.app.key) < ($1.minute, $0.cpuNanos, $1.app.key) }
         return (rows, appRows)
+    }
+
+    /// 各列前 `appsPerMinute` 名的并集，其余并成一行「其余合计」（D68）。全部为 0 的行不写。
+    static func selectRows(minute: Int64, _ all: [AppMinuteRow]) -> [AppMinuteRow] {
+        let candidates = all.filter { $0.app.key != AppIdentity.other.key }
+        let columns: [(AppMinuteRow) -> UInt64] = [
+            \.cpuNanos, \.totalEnergy, \.gpuNanos, \.aneEnergyNanojoules, { $0.diskReadBytes &+ $0.diskWrittenBytes },
+            \.wakeups, \.footprintBytes,
+        ]
+        var keep = Set<String>()
+        for column in columns {
+            let top = candidates.filter { column($0) > 0 }.sorted { column($0) > column($1) }.prefix(appsPerMinute)
+            keep.formUnion(top.map(\.app.key))
+        }
+        var out = candidates.filter { keep.contains($0.app.key) }
+        var other = all.first { $0.app.key == AppIdentity.other.key }
+            ?? AppMinuteRow(minute: minute, app: .other, cpuNanos: 0, energyNanojoules: 0)
+        for row in candidates where !keep.contains(row.app.key) {
+            other.cpuNanos &+= row.cpuNanos
+            other.energyNanojoules = other.energyNanojoules.flatMap { a in row.energyNanojoules.map { a &+ $0 } }
+            other.gpuNanos &+= row.gpuNanos
+            other.gpuEnergyNanojoules &+= row.gpuEnergyNanojoules
+            other.aneEnergyNanojoules &+= row.aneEnergyNanojoules
+            other.diskReadBytes &+= row.diskReadBytes
+            other.diskWrittenBytes &+= row.diskWrittenBytes
+            other.wakeups &+= row.wakeups
+            other.footprintBytes &+= row.footprintBytes
+        }
+        other.app = .other
+        let otherIdle = other.cpuNanos == 0 && other.gpuNanos == 0 && other.aneEnergyNanojoules == 0
+            && other.diskReadBytes == 0 && other.diskWrittenBytes == 0 && other.wakeups == 0 && other.footprintBytes == 0
+        if !otherIdle { out.append(other) }
+        return out
     }
 }

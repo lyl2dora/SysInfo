@@ -38,6 +38,12 @@ public struct CoalitionDelta: Hashable, Sendable {
     public var gpuEnergyNanojoules: UInt64 = 0
     public var aneNanos: UInt64 = 0
     public var aneEnergyNanojoules: UInt64 = 0
+    /// 唤醒次数（槽位 4 + 5）、pageins（槽位 49）（应用活动，D67）。
+    public var wakeups: UInt64 = 0
+    public var pageins: UInt64 = 0
+    /// 窗口结束时的当前值：footprint（槽位 40，字节）与开机以来的累计 CPU 时间（纳秒）（应用活动，D67）。
+    public var footprintBytes: UInt64 = 0
+    public var cpuTotalNanos: UInt64 = 0
     /// 窗口内成员有没有变化（tasks_started / tasks_exited 变了）。残差归因只在没有变化时做（边界稿 §5.3）。
     public var membershipChanged: Bool
     /// 窗口开始时还不存在（新出现的 coalition）。
@@ -68,6 +74,10 @@ public struct AppActivityWindow: Hashable, Sendable {
     public var slotsTrusted: Bool = true
 
     public var totalCPUNanos: UInt64 { coalitions.reduce(0) { $0 &+ $1.cpuNanos } }
+    /// 全部 coalition 的 CPU + GPU + ANE 能耗之和，nJ（应用活动的「应用合计」，D67）。
+    public var totalEnergyNanojoules: UInt64 {
+        coalitions.reduce(0) { $0 &+ $1.energyNanojoules &+ $1.gpuEnergyNanojoules &+ $1.aneEnergyNanojoules }
+    }
     /// 全部 coalition 的 ANE 能耗之和，nJ（ANE 功率估算，D58）。
     public var totalANEEnergyNanojoules: UInt64 { coalitions.reduce(0) { $0 &+ $1.aneEnergyNanojoules } }
 }
@@ -283,6 +293,8 @@ public final class AppSampler: Collector {
                     gpuEnergyNanojoules: d(now.gpuEnergyNanojoules, before?.gpuEnergyNanojoules),
                     aneNanos: timebase.nanoseconds(fromTicks: d(now.aneTicks, before?.aneTicks)),
                     aneEnergyNanojoules: d(now.aneEnergyNanojoules, before?.aneEnergyNanojoules),
+                    wakeups: d(now.wakeups, before?.wakeups), pageins: d(now.pageins, before?.pageins),
+                    footprintBytes: now.physFootprint, cpuTotalNanos: timebase.nanoseconds(fromTicks: now.cpuTicks),
                     membershipChanged: before.map {
                         $0.tasksStarted != now.tasksStarted || $0.tasksExited != now.tasksExited
                     } ?? true,

@@ -72,6 +72,22 @@ struct HistoryExportMetadata: Encodable {
     var storageDevices: [String: String] = [:]
 }
 
+/// 导出用的一行每应用分钟数据（D68 之前的行新列为空）。
+struct ExportAppRow: Hashable, Sendable {
+    var minute: Int64
+    var key: String
+    var name: String
+    var cpuNanos: Int64
+    var energy: Int64?
+    var gpuNanos: Int64? = nil
+    var gpuEnergy: Int64? = nil
+    var aneEnergy: Int64? = nil
+    var diskRead: Int64? = nil
+    var diskWrite: Int64? = nil
+    var wakeups: Int64? = nil
+    var footprint: Int64? = nil
+}
+
 public enum HistoryExporter {
     /// 导出到 `destination`：CSV 时是要新建的文件夹，JSON Lines 时是文件。返回写出的文件。
     @discardableResult
@@ -83,6 +99,11 @@ public enum HistoryExporter {
         }
         let rows = try store.rows(from: from, to: to, granularity: options.granularity, metrics: filter)
         let apps = options.includeApps ? try store.appRows(from: from, to: to) : []
+        let assertions =
+            options.includeApps
+            ? try store.assertionSpans(
+                from: Date(timeIntervalSince1970: TimeInterval(from * 60)), to: Date(timeIntervalSince1970: TimeInterval(to * 60)))
+            : []
         let energy = try store.energyHours(from: HistoryStore.floorDiv(from, 60), to: HistoryStore.floorDiv(to - 1, 60) + 1)
         let units = Dictionary(try store.metrics().map { ($0.metric, $0.unit) }, uniquingKeysWith: { a, _ in a })
         let metricNames = Array(Set(rows.map(\.metric))).sorted()
@@ -108,12 +129,17 @@ public enum HistoryExporter {
                 let appsURL = destination.appendingPathComponent("apps.csv")
                 try appsCSV(apps).write(to: appsURL, atomically: true, encoding: .utf8)
                 out.insert(appsURL, at: 1)
+                if !assertions.isEmpty {
+                    let assertionsURL = destination.appendingPathComponent("assertions.csv")
+                    try assertionsCSV(assertions).write(to: assertionsURL, atomically: true, encoding: .utf8)
+                    out.insert(assertionsURL, at: 2)
+                }
             }
             return out
         case .jsonLines:
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try jsonLines(metadata: metadata, rows: rows, apps: apps, energy: energy)
+            try jsonLines(metadata: metadata, rows: rows, apps: apps, energy: energy, assertions: assertions)
                 .write(to: destination, atomically: true, encoding: .utf8)
             return [destination]
         }
@@ -147,7 +173,8 @@ public enum HistoryExporter {
             qualityCodes: HistoryQuality.allCases.map(\.name),
             notes: [
                 "avg/max are per-\(options.granularity.rawValue) aggregates in SI units; empty max means the samples covered windows too long to have a peak.",
-                "apps: top \(MinuteAggregator.appsPerMinute) apps per minute by CPU; cpu_cores = cpu_ns / 60e9.",
+                "apps: per minute, the union of the top \(MinuteAggregator.appsPerMinute) apps by each of CPU, energy, GPU, ANE, disk, wakeups and memory, plus one __other__ row with the rest (before schema 3 only the top \(MinuteAggregator.appsPerMinute) by CPU, without the extra columns); cpu_cores = cpu_ns / 60e9; energy_j is CPU energy, gpu_j and ane_j are separate; footprint is the peak in the minute.",
+                "assertions: power assertions that prevented system or display sleep, recorded while SysInfo was running; end_estimated = the app quit or crashed before the assertion ended.",
                 "energy: hourly joules; source integrated = 1 Hz PDTR integral, filled = PowerTelemetryData accumulator for periods when SysInfo was not running (may be low under heavy load).",
                 "storage: disk and volume-group keys are locally salted hashes (no serial numbers); storageDevices maps them to model and position.",
             ], storageDevices: storageDevices.filter { usedKeys.contains($0.key) })
@@ -182,13 +209,28 @@ public enum HistoryExporter {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    static func appsCSV(_ apps: [(minute: Int64, key: String, name: String, cpuNanos: Int64, energy: Int64?)]) -> String {
-        var lines = ["time,app_key,app_name,cpu_ns,cpu_cores,energy_j"]
+    static func appsCSV(_ apps: [ExportAppRow]) -> String {
+        var lines = ["time,app_key,app_name,cpu_ns,cpu_cores,energy_j,gpu_ns,gpu_j,ane_j,disk_read_bytes,disk_write_bytes,wakeups,footprint_bytes"]
+        func int(_ v: Int64?) -> String { v.map(String.init) ?? "" }
+        func joules(_ v: Int64?) -> String { number(v.map { Double($0) / 1e9 }) }
         for a in apps {
             lines.append(
                 [
                     iso(a.minute), csvField(a.key), csvField(a.name), String(a.cpuNanos), number(Double(a.cpuNanos) / 60e9),
-                    number(a.energy.map { Double($0) / 1e9 }),
+                    joules(a.energy), int(a.gpuNanos), joules(a.gpuEnergy), joules(a.aneEnergy), int(a.diskRead), int(a.diskWrite),
+                    int(a.wakeups), int(a.footprint),
+                ].joined(separator: ","))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    static func assertionsCSV(_ spans: [PowerAssertionSpan]) -> String {
+        var lines = ["start,end,end_estimated,app_key,app_name,type,name,holder"]
+        for span in spans {
+            lines.append(
+                [
+                    iso(span.start), span.end.map(iso) ?? "", span.endEstimated ? "1" : "0", csvField(span.appKey),
+                    csvField(span.appName), csvField(span.type), csvField(span.name), csvField(span.holder),
                 ].joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
@@ -210,7 +252,7 @@ public enum HistoryExporter {
 
     static func jsonLines(
         metadata: HistoryExportMetadata, rows: [(minute: Int64, metric: MetricID, point: HistoryPoint)],
-        apps: [(minute: Int64, key: String, name: String, cpuNanos: Int64, energy: Int64?)], energy: [EnergyHour] = []
+        apps: [ExportAppRow], energy: [EnergyHour] = [], assertions: [PowerAssertionSpan] = []
     ) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -230,6 +272,13 @@ public enum HistoryExporter {
             var name: String
             var cpu_ns: Int64
             var energy_nj: Int64?
+            var gpu_ns: Int64?
+            var gpu_nj: Int64?
+            var ane_nj: Int64?
+            var disk_read_bytes: Int64?
+            var disk_write_bytes: Int64?
+            var wakeups: Int64?
+            var footprint_bytes: Int64?
         }
         var lines = [String(decoding: try encoder.encode(metadata), as: UTF8.self)]
         for r in rows {
@@ -239,7 +288,10 @@ public enum HistoryExporter {
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
         }
         for a in apps {
-            let line = AppLine(t: iso(a.minute), key: a.key, name: a.name, cpu_ns: a.cpuNanos, energy_nj: a.energy)
+            let line = AppLine(
+                t: iso(a.minute), key: a.key, name: a.name, cpu_ns: a.cpuNanos, energy_nj: a.energy, gpu_ns: a.gpuNanos,
+                gpu_nj: a.gpuEnergy, ane_nj: a.aneEnergy, disk_read_bytes: a.diskRead, disk_write_bytes: a.diskWrite,
+                wakeups: a.wakeups, footprint_bytes: a.footprint)
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
         }
         struct EnergyLine: Encodable {
@@ -251,6 +303,23 @@ public enum HistoryExporter {
         }
         for h in energy {
             let line = EnergyLine(t: iso(h.hour * 60), source: sourceName(h.source), joules: h.joules, covered_s: h.covered)
+            lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
+        }
+        struct AssertionLine: Encodable {
+            var type = "assertion"
+            var start: String
+            var end: String?
+            var end_estimated: Bool
+            var key: String
+            var name: String
+            var assertion_type: String
+            var assertion_name: String
+            var holder: String
+        }
+        for span in assertions {
+            let line = AssertionLine(
+                start: iso(span.start), end: span.end.map(iso), end_estimated: span.endEstimated, key: span.appKey,
+                name: span.appName, assertion_type: span.type, assertion_name: span.name, holder: span.holder)
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
         }
         return lines.joined(separator: "\n") + "\n"
