@@ -437,8 +437,16 @@ final class TopNModel {
         }
     }
 
-    /// 结束进程（D31）：先确认，按住 ⌥ 时默认强制。GUI app 用 NSRunningApplication，其余用信号。
+    /// 结束进程（D31）：先确认，按住 ⌥ 时默认强制。
     func terminate(pid: pid_t, name: String) {
+        ProcessTermination.confirmAndTerminate(pid: pid, name: name)
+    }
+}
+
+/// 结束进程（D31）：先确认，按住 ⌥ 时默认强制。GUI app 用 NSRunningApplication，其余用信号。
+/// Top N 与应用详情页（D64）共用。
+enum ProcessTermination {
+    static func confirmAndTerminate(pid: pid_t, name: String) {
         // 先看触发这次操作的事件上的修饰键（合成点击也带在事件上），再看全局键盘状态。
         let optionHeld = (NSApp.currentEvent?.modifierFlags ?? []).contains(.option)
             || NSEvent.modifierFlags.contains(.option)
@@ -472,6 +480,55 @@ final class TopNModel {
     }
 }
 
+/// 应用详情页（D64）的数据：一个 coalition 的各域当前值与成员。只在详情页可见时激活，跟随 coalition 扫描刷新。
+@Observable
+final class AppDetailModel {
+    private(set) var detail: AppDetail?
+    /// 应用已经退出（coalition 没有成员了）。
+    private(set) var ended = false
+    private(set) var coalitionID: UInt64?
+    @ObservationIgnored private let sampler: AppSampler?
+    @ObservationIgnored private let builder = TopNBuilder()
+    @ObservationIgnored private var building = false
+
+    init(sampler: AppSampler?) {
+        self.sampler = sampler
+    }
+
+    /// 打开或关闭某个应用的详情；nil 为关闭。换应用时清空旧数据。
+    func show(_ coalitionID: UInt64?) {
+        guard coalitionID != self.coalitionID else { return }
+        self.coalitionID = coalitionID
+        detail = nil
+        ended = false
+        if coalitionID != nil { tick() }
+    }
+
+    /// 引擎交付了一个 `app.coalition` 结果（或刚打开，用已有的窗口：内存与成员立即可见，CPU 等差分下一窗口才准）。
+    func tick() {
+        guard let coalitionID, let sampler, !building else { return }
+        building = true
+        let builder = builder
+        let window = sampler.latestWindow
+        let footprints = sampler.latestFootprints
+        let trusted = sampler.auxiliarySlotsTrusted
+        Task.detached(priority: .utility) { [weak self] in
+            let built = builder.detail(
+                coalitionID: coalitionID, window: window, footprints: footprints, slotsTrusted: trusted)
+            await MainActor.run {
+                guard let self else { return }
+                self.building = false
+                guard self.coalitionID == coalitionID else { return }
+                if let built {
+                    self.detail = built
+                } else {
+                    self.ended = true
+                }
+            }
+        }
+    }
+}
+
 /// app 层的共用对象。
 final class AppServices {
     let collectors: CPUCollectors
@@ -487,6 +544,8 @@ final class AppServices {
     /// GPU 与加速器（D57）：采集器与按 GPU 时间的 Top N。
     let gpu: GPUCollectors
     let gpuTopN: TopNModel
+    /// 应用详情页（D64）：各模块 Top N 点行进入，共用一个。
+    let appDetail: AppDetailModel
     /// 网络（D60）：采集器与结构状态。
     let network: NetworkCollectors
     let networkModel = NetworkModel.shared
@@ -502,6 +561,7 @@ final class AppServices {
         self.gpu = gpu
         self.network = network
         self.gpuTopN = TopNModel(sampler: collectors.apps, metric: .gpu)
+        self.appDetail = AppDetailModel(sampler: collectors.apps)
         self.collectors = collectors
         self.power = power
         self.memory = memory
@@ -528,6 +588,7 @@ final class AppServices {
             memoryTopN.coalitionTick()
             diskTopN.coalitionTick()
             gpuTopN.coalitionTick()
+            appDetail.tick()
         }
         if result.collectors.contains(NetworkIOCollector.collectorID), let io = network.io {
             networkModel.refresh(io.lastState)

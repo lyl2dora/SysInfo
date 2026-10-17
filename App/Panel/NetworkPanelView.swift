@@ -1,7 +1,7 @@
 // 面板的「网络」tab（网络模块设计 §7，D60–D62）。
 //
 // 分区：概览（主接口、链路速率、VPN 标记、↓↑ 大字）→ 历史图（主接口入，叠加出）→ 流量统计（今日 / 本月）
-// → 接口列表（物理接口各一行；虚拟接口一组折叠）→ 连接信息（地址、网关、DNS、代理、公网 IP 按钮）
+// → 接口列表（物理接口各一行；虚拟接口折成一行汇总，点击进入列表页，D64）→ 连接信息（地址、网关、DNS、代理、公网 IP 按钮）
 // → Wi-Fi 卡片（有活跃 Wi-Fi 时）→ 延迟卡片（开启时）。
 // 每秒都在变的部分用 AppKit 自绘（做法同 LiveViews.swift），SwiftUI 只放外框和结构（读 NetworkModel，不读 MetricStore）。
 // 需求由 PanelController 按 tab 可见性登记。本机地址只显示、不写日志。
@@ -17,6 +17,7 @@ struct NetworkPanelView: View {
     let services: AppServices
     @Bindable var settings: AppSettings
     @Environment(\.panelLayoutChanged) private var layoutChanged
+    @Environment(\.panelNavigate) private var navigate
 
     var body: some View {
         let state = services.networkModel.state
@@ -67,11 +68,11 @@ struct NetworkPanelView: View {
         .onChange(of: layoutSignature(state)) { layoutChanged() }
     }
 
-    /// 影响高度的结构：接口、Wi-Fi 卡片、延迟卡片、虚拟组展开状态、公网 IP 行。
+    /// 影响高度的结构：接口、Wi-Fi 卡片、延迟卡片、公网 IP 行。
     private func layoutSignature(_ state: NetworkState) -> [String] {
         state.interfaces.map(\.name) + [
             state.activeWiFi == nil ? "-" : "wifi", settings.latencyTargets.map { "\($0.gateway)\($0.custom ?? "")" } ?? "-",
-            settings.networkShowsVirtual ? "v" : "-", "\(services.networkModel.publicIP)", settings.publicIPService.isEmpty ? "e" : "s",
+            "\(services.networkModel.publicIP)", settings.publicIPService.isEmpty ? "e" : "s",
         ]
     }
 
@@ -87,36 +88,114 @@ struct NetworkPanelView: View {
                 row(interface, primary: interface.name == state.primary)
             }
             if !state.virtual.isEmpty {
-                Button {
-                    settings.networkShowsVirtual.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: settings.networkShowsVirtual ? "chevron.down" : "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .frame(width: 10)
-                        Text("虚拟接口（\(state.virtual.count)）").font(.caption)
-                        Spacer()
+                // D64：虚拟接口不就地展开，只给个数与活跃数（D60：不相加，不给合计速率）。
+                SummaryRow(title: String(localized: "虚拟接口 \(state.virtual.count) 个"), action: { navigate(.virtualInterfaces) }) {
+                    LiveView(make: { VirtualInterfacesSummaryDrawView(store: store, interfaces: state.virtual) }) {
+                        $0.interfaces = state.virtual
                     }
-                    .contentShape(.rect)
+                    .frame(height: VirtualInterfacesSummaryDrawView.height)
                 }
-                .buttonStyle(.plain)
                 .help("隧道、虚拟机网卡与网桥、AirDrop。它们的流量通常也会计在物理接口上，不要相加。")
-                if settings.networkShowsVirtual {
-                    ForEach(state.virtual) { interface in
-                        row(interface, primary: false)
-                    }
-                }
             }
         }
     }
 
     private func row(_ interface: NetworkInterface, primary: Bool) -> some View {
+        NetworkInterfaceRow(store: store, interface: interface, primary: primary, bits: settings.networkThroughputBits)
+    }
+}
+
+/// 一个接口的两行（主页与虚拟接口列表页共用）。
+struct NetworkInterfaceRow: View {
+    let store: MetricStore
+    let interface: NetworkInterface
+    let primary: Bool
+    let bits: Bool
+
+    var body: some View {
         LiveView(make: { NetworkInterfaceRowDrawView(store: store, interface: interface, primary: primary) }) { view in
             view.interface = interface
             view.primary = primary
-            view.bits = settings.networkThroughputBits
+            view.bits = bits
         }
         .frame(height: NetworkInterfaceRowDrawView.height)
+    }
+}
+
+// MARK: - 虚拟接口列表页
+
+/// 虚拟接口逐个列出（D64 二级页）：按类型分组、组内按 index，不按实时速率排（避免行跳动）；默认只看活跃。
+struct NetworkVirtualListView: View {
+    let store: MetricStore
+    let services: AppServices
+    @Bindable var settings: AppSettings
+    @Environment(\.panelLayoutChanged) private var layoutChanged
+
+    var body: some View {
+        let all = services.networkModel.state.virtual
+        let active = all.filter { NetworkActivity.isActive($0, store: store) }
+        let activeOnly = settings.networkVirtualActiveOnly && !active.isEmpty
+        let shown = activeOnly ? active : all
+        let kinds = NetworkInterfaceKind.allCases.filter { kind in shown.contains { $0.kind == kind } }
+        PanelSubpage {
+            ActiveFilterPicker(activeOnly: $settings.networkVirtualActiveOnly, activeCount: active.count, totalCount: all.count)
+            Text("虚拟接口的流量通常也会计在物理接口上，不要相加。")
+                .font(.caption2).foregroundStyle(.secondary)
+            if settings.networkVirtualActiveOnly && active.isEmpty {
+                Text("最近 60 秒没有虚拟接口有流量，下面列出全部。").font(.caption2).foregroundStyle(.secondary)
+            }
+            ForEach(kinds, id: \.self) { kind in
+                PanelCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(NetworkText.kind(kind)).font(.caption.weight(.semibold))
+                        ForEach(shown.filter { $0.kind == kind }) { interface in
+                            NetworkInterfaceRow(
+                                store: store, interface: interface, primary: false, bits: settings.networkThroughputBits)
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: shown.map(\.name)) { layoutChanged() }
+        .onChange(of: settings.networkVirtualActiveOnly) { layoutChanged() }
+    }
+}
+
+/// 「活跃」的判定：最近 60 s 内入或出超过 1 KB/s。
+enum NetworkActivity {
+    static let threshold: Double = 1_000
+    static let seconds: Double = 60
+
+    static func isActive(_ interface: NetworkInterface, store: MetricStore) -> Bool {
+        for direction in [MetricID.NetworkDirection.in, .out] {
+            if store.recentPoints(.network(interface, direction), seconds: seconds).contains(where: { ($0.value ?? 0) > threshold }) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// 汇总行右侧：「n 个有流量」。只给个数，不给合计速率（D60）。
+final class VirtualInterfacesSummaryDrawView: LiveDrawView {
+    static let height: CGFloat = 16
+
+    var interfaces: [NetworkInterface] {
+        didSet { if interfaces != oldValue { needsDisplay = true } }
+    }
+
+    init(store: MetricStore, interfaces: [NetworkInterface]) {
+        self.interfaces = interfaces
+        super.init(store: store)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        countDraw()
+        _ = store.latest  // 订阅每秒的数据，活跃数随之更新
+        let active = interfaces.filter { NetworkActivity.isActive($0, store: store) }.count
+        let text = active == 0 ? String(localized: "都没有流量") : String(localized: "\(active) 个有流量")
+        Self.drawRight(Self.text(text, Self.caption2Digits, .secondaryLabelColor), right: bounds.width, y: 1)
+        setAccessibilityLabel(text)
     }
 }
 

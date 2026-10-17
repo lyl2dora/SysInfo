@@ -146,3 +146,54 @@ public enum TopNGrouping: String, Hashable, Codable, Sendable, CaseIterable {
     case byApp
     case byProcess
 }
+
+/// 应用详情页（D64）：一个 coalition 在各域的当前值与全部成员。各模块的 Top N 与以后的应用活动窗口共用。
+public struct AppDetail: Hashable, Sendable {
+    public var coalitionID: UInt64
+    public var name: String
+    public var appPath: String?
+    public var representativePID: Int32
+    /// 成员总数（含读不到的 root / 其他用户进程）。
+    public var memberCount: Int
+    /// 窗口内的 CPU，按单核比例；本窗口里这个 coalition 没有出现时为 0。
+    public var cpu: Double
+    /// 窗口内的平均功率，W（能耗槽）；槽位不可信时为 nil。
+    public var energyWatts: Double?
+    /// 内存 footprint，字节（成员之和）；还没有扫描到时为 nil。
+    public var footprint: UInt64?
+    public var diskRead: Double
+    public var diskWrite: Double
+    /// GPU 时间占墙钟的比例（可能超过 1，显示前钳到 1）。
+    public var gpuShare: Double
+    public var gpuWatts: Double
+    /// ANE 能耗功率，W（估算，D58）。
+    public var aneWatts: Double
+    /// 同 uid 成员：CPU、footprint、磁盘读写都填（第一次出现、还没有差分时为 nil）。
+    public var members: [TopNMember]
+    /// 读不到细节的成员数（root 与其他用户）。
+    public var residualCount: Int
+    public var eligibility: TerminationEligibility
+
+    public init(
+        coalitionID: UInt64, name: String, appPath: String?, representativePID: Int32, memberCount: Int, cpu: Double,
+        energyWatts: Double?, footprint: UInt64?, diskRead: Double, diskWrite: Double, gpuShare: Double, gpuWatts: Double,
+        aneWatts: Double, members: [TopNMember], residualCount: Int, eligibility: TerminationEligibility
+    ) {
+        self.coalitionID = coalitionID
+        self.name = name
+        self.appPath = appPath
+        self.representativePID = representativePID
+        self.memberCount = memberCount
+        self.cpu = cpu
+        self.energyWatts = energyWatts
+        self.footprint = footprint
+        self.diskRead = diskRead
+        self.diskWrite = diskWrite
+        self.gpuShare = gpuShare
+        self.gpuWatts = gpuWatts
+        self.aneWatts = aneWatts
+        self.members = members
+        self.residualCount = residualCount
+        self.eligibility = eligibility
+    }
+}

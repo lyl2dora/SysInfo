@@ -30,7 +30,10 @@
 // - menubar.network.<widget>.visible / .color   网络 widget（netThroughput / netLatency，D60：网速出厂开；延迟只在延迟开启时可选）
 // - network.widget.throughput.target / .unit   网速 widget 绑定：primary、physical、if:<BSD 名>；单位 bytes / bits
 // - network.widget.latency.target   延迟 widget 显示哪个目标：gateway / custom
-// - network.interval / network.panel.chartSpan / .showsVirtual / .totalsInterface   网络的常驻间隔覆盖与面板设置
+// - network.interval / network.panel.chartSpan / .virtualActiveOnly / .totalsInterface   网络的常驻间隔覆盖与面板设置
+//   （旧键 network.panel.showsVirtual 是 D64 之前虚拟接口就地展开的状态，已不再读取）
+// - storage.panel.listActiveOnly   外置盘 / RAID 成员列表页只看活跃（D64，默认是）
+// - menubar.merged / .merged.order / .merged.separator   合并为单个 item、合并顺序（widget 名数组）、分隔 line / space（D65）
 // - network.latency.enabled / .gateway / .custom / .host / .interval   延迟（D61：默认关；间隔 2 / 5 / 10 s，默认 5）
 // - network.publicIP.service   公网 IP 查询服务地址（D62：默认空，第一次点击时填写）
 // - history.network.enabled   是否记录网络历史（D60 N7）
@@ -114,7 +117,11 @@ final class AppSettings {
         static let networkThroughputUnit = "network.widget.throughput.unit"
         static let networkLatencyWidgetTarget = "network.widget.latency.target"
         static let networkChartSpan = "network.panel.chartSpan"
-        static let networkShowsVirtual = "network.panel.showsVirtual"
+        static let networkVirtualActiveOnly = "network.panel.virtualActiveOnly"
+        static let storageListActiveOnly = "storage.panel.listActiveOnly"
+        static let menuBarMerged = "menubar.merged"
+        static let menuBarMergedOrder = "menubar.merged.order"
+        static let menuBarMergedSeparator = "menubar.merged.separator"
         static let networkTotalsInterface = "network.panel.totalsInterface"
         static let latencyEnabled = "network.latency.enabled"
         static let latencyGateway = "network.latency.gateway"
@@ -173,6 +180,12 @@ final class AppSettings {
         MenuWidget.allCases.filter { isVisible($0) }
     }
 
+    /// 合并 item 里的段（D65 MG1）：开着的 widget，按合并顺序；不在顺序里的（新开的）按模块顺序排在后面。
+    func mergedWidgets(from visible: [MenuWidget]) -> [MenuWidget] {
+        let ordered = menuBarMergedOrder.filter(visible.contains)
+        return ordered + visible.filter { !ordered.contains($0) }
+    }
+
     func isVisible(_ widget: MenuWidget) -> Bool {
         switch widget {
         case .usage: cpuItemVisible
@@ -225,6 +238,22 @@ final class AppSettings {
     /// 所有 widget 是否显示小标签（D41：全局）。
     var menuBarShowsLabel: Bool {
         didSet { persist(menuBarShowsLabel, Key.menuBarLabel) }
+    }
+
+    /// 合并为单个 item（D65 MG1）。
+    var menuBarMerged: Bool {
+        didSet { persist(menuBarMerged, Key.menuBarMerged) }
+    }
+
+    /// 合并 item 里各 widget 的顺序（D65 MG1）。只记顺序；显示哪些仍由各 widget 的开关决定，
+    /// 开着但不在这里的 widget 按模块顺序排在后面（见 `mergedWidgets`）。
+    var menuBarMergedOrder: [MenuWidget] {
+        didSet { persist(menuBarMergedOrder.map(\.rawValue), Key.menuBarMergedOrder) }
+    }
+
+    /// 合并 item 段与段之间的分隔（D65 MG6）。
+    var menuBarMergedSeparator: MergedSeparator {
+        didSet { persist(menuBarMergedSeparator.rawValue, Key.menuBarMergedSeparator) }
     }
 
     /// 占用 widget 的呈现形式（D41：按 widget 设置）。
@@ -503,9 +532,14 @@ final class AppSettings {
         didSet { persist(networkChartSpan.rawValue, Key.networkChartSpan) }
     }
 
-    /// 面板里虚拟接口一组是否展开（记住上次的状态）。
-    var networkShowsVirtual: Bool {
-        didSet { persist(networkShowsVirtual, Key.networkShowsVirtual) }
+    /// 虚拟接口列表页是否只看活跃（D64：默认只看活跃）。
+    var networkVirtualActiveOnly: Bool {
+        didSet { persist(networkVirtualActiveOnly, Key.networkVirtualActiveOnly) }
+    }
+
+    /// 外置盘 / RAID 成员列表页是否只看活跃（D64：默认只看活跃）。
+    var storageListActiveOnly: Bool {
+        didSet { persist(storageListActiveOnly, Key.storageListActiveOnly) }
     }
 
     /// 流量统计看哪个接口：nil 为主接口。
@@ -657,7 +691,12 @@ final class AppSettings {
         networkLatencyWidgetTarget =
             defaults?.string(forKey: Key.networkLatencyWidgetTarget).flatMap(MetricID.LatencyTarget.init(rawValue:)) ?? .custom
         networkChartSpan = defaults?.string(forKey: Key.networkChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
-        networkShowsVirtual = defaults?.object(forKey: Key.networkShowsVirtual) as? Bool ?? false
+        networkVirtualActiveOnly = defaults?.object(forKey: Key.networkVirtualActiveOnly) as? Bool ?? true
+        storageListActiveOnly = defaults?.object(forKey: Key.storageListActiveOnly) as? Bool ?? true
+        menuBarMerged = defaults?.object(forKey: Key.menuBarMerged) as? Bool ?? false
+        menuBarMergedOrder = (defaults?.stringArray(forKey: Key.menuBarMergedOrder) ?? []).compactMap(MenuWidget.init(rawValue:))
+        menuBarMergedSeparator =
+            defaults?.string(forKey: Key.menuBarMergedSeparator).flatMap(MergedSeparator.init(rawValue:)) ?? .line
         networkTotalsInterface = defaults?.string(forKey: Key.networkTotalsInterface).flatMap { $0.isEmpty ? nil : $0 }
         latencyEnabled = defaults?.object(forKey: Key.latencyEnabled) as? Bool ?? false
         latencyGateway = defaults?.object(forKey: Key.latencyGateway) as? Bool ?? true
@@ -805,6 +844,14 @@ enum CPUUsagePresentation: String, CaseIterable, Identifiable {
 }
 
 /// widget 的绘制样式（D32、边界稿 §5.1），由排版与呈现形式合成（`AppSettings.renderStyle(for:)`）。
+/// 合并 item 段与段之间的分隔（D65 MG6）。
+enum MergedSeparator: String, CaseIterable, Identifiable {
+    case line
+    case space
+
+    var id: String { rawValue }
+}
+
 enum MenuBarCPUStyle: String, CaseIterable, Identifiable {
     /// 上行小标签「CPU」，下行数值（默认）。
     case stacked

@@ -120,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let statusItems = StatusItemController(store: store, engine: engine)
         statusItems.expandedInterfaceDelegate = panel
         statusItems.onUserRemoved = { [weak settings] widget in settings?.setVisible(widget, false) }
+        statusItems.onUserRemovedMerged = { [weak settings] in settings?.menuBarMerged = false }
         panel.statusItems = statusItems
         self.panel = panel
         self.statusItems = statusItems
@@ -133,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         instance.onReopenRequest = { [weak self] in self?.openSettings() }
         instance.startListening()
 
+        if options.merged { settings.menuBarMerged = true }
         settings.onChange = { [weak self] in self?.applySettings() }
         // 盘插拔、容量组变化：widget 的绑定（内置盘、启动组）要重新解析。
         services.storageModel.onStructureChange = { [weak self] in self?.applySettings() }
@@ -152,6 +154,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let index = options.storageDetailIndex {
             openStorageDetail(index: index, attempt: 0)
+        }
+        if let route = options.panelRoute {
+            openPanelRoute(route, attempt: 0)
         }
         if options.openSettings || settings.visibleWidgets.isEmpty {
             settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
@@ -194,7 +199,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        panel.state.storageDetail = disks[index].key
+        panel.state.path = [.disk(disks[index].key)]
+    }
+
+    /// `--panel-route=<页>`：等清单出来后推入二级页（D64，截图用）。
+    private func openPanelRoute(_ name: String, attempt: Int) {
+        let inventory = services.storageModel.inventory
+        let route: PanelRoute? =
+            switch name {
+            case "virtual": services.networkModel.state.virtual.isEmpty ? nil : .virtualInterfaces
+            case "external": inventory.disks.contains { $0.location == .external } ? .externalDisks : nil
+            case "raid": inventory.raidSets.first.map { .raidMembers($0.key) }
+            default: nil
+            }
+        guard let route else {
+            if attempt < 50 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.openPanelRoute(name, attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        panel.state.path = [route]
     }
 
     // MARK: - 菜单动作
@@ -223,9 +249,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 没有风扇的机型不出现风扇 widget（风扇在自检时发现；启动自检结束后会再调一次这里）。
         let hasFans = services?.power.hasFans ?? false
         let widgets = settings.visibleWidgets.filter { $0 != .fan || hasFans }
+        // D65 MG1：第一次切换到合并模式时，按各 item 当时在屏幕上的位置定初始顺序（赋值会再触发一次本函数，幂等）。
+        if settings.menuBarMerged, settings.menuBarMergedOrder.isEmpty, !statusItems.screenOrder().isEmpty {
+            settings.menuBarMergedOrder = statusItems.screenOrder()
+            return
+        }
+        let ordered = settings.menuBarMerged ? settings.mergedWidgets(from: widgets) : widgets
         statusItems.update(
-            widgets.map { StatusItemConfiguration(widget: $0, settings: settings) },
-            intervals: { settings.interval(for: $0) }, latencyInterval: settings.latencyInterval)
+            ordered.map { StatusItemConfiguration(widget: $0, settings: settings) }, merged: settings.menuBarMerged,
+            separator: settings.menuBarMergedSeparator, intervals: { settings.interval(for: $0) },
+            latencyInterval: settings.latencyInterval)
         // 延迟目标（D61）：关闭时不发包。
         services?.network.latency?.setTargets(settings.latencyTargets ?? .none)
         // SMART 焦点盘（D55）：只每次读盘温 widget 绑定的盘；「所有盘最高温」时读全部。
@@ -241,6 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         throttle.automatic = settings.autoThrottle
         let configuration = Self.historyConfiguration(settings)
         Task { [history] in await history?.setConfiguration(configuration) }
+        panel?.syncMergedState()
         panel?.updateDemands()
     }
 

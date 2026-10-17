@@ -112,12 +112,15 @@ private struct GeneralSettingsView: View {
     }
 }
 
-/// 菜单栏页（D41）：只放与具体指标无关的容器级设置——全局排版与小标签、已开启 widget 的只读总览、溢出区提示。
-/// 各 widget 的开关与配置在所属模块页。
+/// 菜单栏页（D41）：只放与具体指标无关的容器级设置——全局排版与小标签、合并为单个 item（D65 MG6）、
+/// 已开启 widget 的只读总览（合并模式下可调整合并顺序）、溢出区提示。各 widget 的开关与配置在所属模块页。
 private struct MenuBarSettingsView: View {
     @Bindable var settings: AppSettings
     let store: MetricStore
     let openPage: (SettingsPage) -> Void
+
+    /// 已开启的项目达到这么多时，建议切换到合并模式（D65 MG6）。
+    static let mergeSuggestionCount = 6
 
     var body: some View {
         Form {
@@ -134,27 +137,63 @@ private struct MenuBarSettingsView: View {
             }
 
             Section {
-                let widgets = settings.visibleWidgets
+                Toggle("合并为单个项目", isOn: $settings.menuBarMerged)
+                if settings.menuBarMerged {
+                    Picker("分隔", selection: $settings.menuBarMergedSeparator) {
+                        Text("细线").tag(MergedSeparator.line)
+                        Text("留空").tag(MergedSeparator.space)
+                    }
+                }
+            } header: {
+                Text("合并")
+            } footer: {
+                Text("合并后所有已开启的项目并排显示在一个菜单栏项目里，点哪一段就打开哪个模块；面板里可以在模块之间切换，另有「总览」。")
+            }
+
+            Section {
+                let visible = settings.visibleWidgets
+                let widgets = settings.menuBarMerged ? settings.mergedWidgets(from: visible) : visible
                 if widgets.isEmpty {
                     Text("还没有开启任何菜单栏项目。").foregroundStyle(.secondary)
                 } else {
-                    ForEach(widgets) { widget in
+                    ForEach(Array(widgets.enumerated()), id: \.element) { index, widget in
                         let configuration = StatusItemConfiguration(widget: widget, settings: settings)
                         LabeledContent {
-                            StatusItemPreview(store: store, configuration: configuration)
+                            HStack(spacing: 8) {
+                                StatusItemPreview(store: store, configuration: configuration)
+                                if settings.menuBarMerged {
+                                    Button {
+                                        move(widgets, from: index, by: -1)
+                                    } label: {
+                                        Image(systemName: "arrow.up")
+                                    }
+                                    .disabled(index == 0)
+                                    .help("在合并项目里左移")
+                                    Button {
+                                        move(widgets, from: index, by: 1)
+                                    } label: {
+                                        Image(systemName: "arrow.down")
+                                    }
+                                    .disabled(index == widgets.count - 1)
+                                    .help("在合并项目里右移")
+                                }
+                            }
+                            .buttonStyle(.borderless)
                         } label: {
                             Text(WidgetInfo.title(widget))
                             Text("\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))")
                         }
                     }
+                    let configurations = widgets.map { StatusItemConfiguration(widget: $0, settings: settings) }
                     LabeledContent(
                         "合计宽度",
                         value: Self.points(
-                            widgets.map { StatusItemView.fixedWidth(for: StatusItemConfiguration(widget: $0, settings: settings)) }
-                                .reduce(0, +)))
+                            settings.menuBarMerged
+                                ? MergedStatusItemView.fixedWidth(for: configurations, separator: settings.menuBarMergedSeparator)
+                                : configurations.map(StatusItemView.fixedWidth(for:)).reduce(0, +)))
                 }
             } header: {
-                Text("已开启的项目")
+                Text(settings.menuBarMerged ? "合并项目里的顺序（从左到右）" : "已开启的项目")
             } footer: {
                 HStack(spacing: 4) {
                     Text("各项目的开关和配置在所属模块页。")
@@ -168,16 +207,34 @@ private struct MenuBarSettingsView: View {
                         .buttonStyle(.link)
                     Button("GPU 与加速器") { openPage(.gpu) }
                         .buttonStyle(.link)
+                    Button("网络") { openPage(.network) }
+                        .buttonStyle(.link)
                 }
             }
 
-            Section {
-                Text("每个菜单栏项目只显示一项，可以按住 ⌘ 单独拖动位置。项目较多时，部分项目可能被系统收进溢出区；可以到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            if !settings.menuBarMerged {
+                Section {
+                    if settings.visibleWidgets.count >= Self.mergeSuggestionCount {
+                        Label("已开启 \(settings.visibleWidgets.count) 个项目，部分可能被系统收进溢出区。建议打开上面的「合并为单个项目」。", systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                    }
+                    Text("每个菜单栏项目只显示一项，可以按住 ⌘ 单独拖动位置。项目较多时，部分项目可能被系统收进溢出区；可以合并为单个项目，或到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// 在合并顺序里把一项左移或右移一位（D65 MG1）。
+    private func move(_ widgets: [MenuWidget], from index: Int, by offset: Int) {
+        let target = index + offset
+        guard widgets.indices.contains(index), widgets.indices.contains(target) else { return }
+        var order = widgets
+        order.swapAt(index, target)
+        // 关着的 widget 保留在顺序记录的末尾，再开时出现在它记录的位置。
+        settings.menuBarMergedOrder = order + settings.menuBarMergedOrder.filter { !order.contains($0) }
     }
 
     private static func points(_ width: CGFloat) -> String {

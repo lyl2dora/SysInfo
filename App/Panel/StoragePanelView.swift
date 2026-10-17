@@ -1,10 +1,12 @@
-// 面板的「存储」tab（存储模块设计 §6.2，D54）。
+// 面板的「存储」tab（存储模块设计 §6.2，D54、D64）。
 //
-// 两级：
-// - 概览页：按「内置 / RAID ‹名称›（每个阵列一组）/ 外置」分组；RAID 组可以折叠（默认展开，状态记住）；
-//   每块盘一行（名称与「温度 · 寿命」或异常项；读写速率与最近 60 s 的小曲线），点击进入详情页；
-//   容量挂在它的归属上：RAID 组标题，或拥有容量组的那块盘；盘多时盘列表放进限高滚动区；最下面是按磁盘 IO 的 Top N；
-// - 单盘详情页：读写历史图、IO 统计、SMART 全部字段、身份信息、卷构成；左上角返回。
+// - 主页（定高，D64）：按「内置 / RAID ‹名称›（每个阵列一组）/ 外置」分组。内置盘始终逐块列出；
+//   RAID 成员不超过 5 块时就地列出（组可以折叠，默认展开，状态记住），超过时折成汇总行；
+//   外置盘不超过 2 块时逐块列出，超过时折成汇总行「外置 n 块 · 最高温 · 读写」，点击进入外置盘列表页；
+//   每块盘一行（名称与「温度 · 寿命」或异常项；读写速率与最近 60 s 的小曲线），点击进入单盘详情页；
+//   容量挂在它的归属上：RAID 组标题，或拥有容量组的那块盘；最下面是按磁盘 IO 的 Top N；
+// - 列表页（二级页）：外置盘或 RAID 成员逐块列出，可「只看活跃」；
+// - 单盘详情页（二级页）：读写历史图、IO 统计、SMART 全部字段、身份信息、卷构成。
 //
 // 每秒都在变的部分用 AppKit 自绘（同 LiveViews.swift），SwiftUI 只放外框；结构（几块盘、几个组）读 StorageModel。
 
@@ -17,29 +19,13 @@ struct StoragePanelView: View {
     let store: MetricStore
     let services: AppServices
     @Bindable var settings: AppSettings
-    @Bindable var state: PanelState
-
-    var body: some View {
-        let model = services.storageModel
-        if let key = state.storageDetail, let disk = model.inventory.disk(key) {
-            StorageDetailView(store: store, services: services, settings: settings, disk: disk, back: { state.storageDetail = nil })
-        } else {
-            StorageOverviewView(store: store, services: services, settings: settings, open: { state.storageDetail = $0 })
-        }
-    }
-}
-
-// MARK: - 概览页
-
-private struct StorageOverviewView: View {
-    let store: MetricStore
-    let services: AppServices
-    @Bindable var settings: AppSettings
-    let open: (DiskKey) -> Void
     @Environment(\.panelLayoutChanged) private var layoutChanged
+    @Environment(\.panelNavigate) private var navigate
 
-    /// 盘列表超过这么多块时放进限高滚动区（存储模块设计 §6.2）。
-    static let scrollThreshold = 7
+    /// 外置盘超过这么多块时折成汇总行（合并模式设计 §2）。
+    static let externalInlineLimit = 2
+    /// RAID 成员超过这么多块时折成汇总行（D64）。
+    static let raidInlineLimit = 5
 
     var body: some View {
         let model = services.storageModel
@@ -51,11 +37,6 @@ private struct StorageOverviewView: View {
                 PanelCard {
                     Text("正在查找物理盘…").font(.caption).foregroundStyle(.secondary)
                 }
-            } else if inventory.disks.count > Self.scrollThreshold {
-                ScrollView {
-                    sections(inventory: inventory, internalDisks: internalDisks, externalDisks: externalDisks)
-                }
-                .frame(height: CGFloat(Self.scrollThreshold) * (DiskRowDrawView.height + 8) + 60)
             } else {
                 sections(inventory: inventory, internalDisks: internalDisks, externalDisks: externalDisks)
             }
@@ -77,66 +58,103 @@ private struct StorageOverviewView: View {
 
     @ViewBuilder
     private func sections(inventory: StorageInventory, internalDisks: [PhysicalDisk], externalDisks: [PhysicalDisk]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !internalDisks.isEmpty {
-                PanelCard {
-                    VStack(alignment: .leading, spacing: 6) {
-                        SectionTitle(text: String(localized: "内置"))
-                        ForEach(internalDisks) { disk in row(disk, inventory: inventory) }
-                    }
+        if !internalDisks.isEmpty {
+            PanelCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    SectionTitle(text: String(localized: "内置"))
+                    ForEach(internalDisks) { disk in StorageDiskRow(store: store, services: services, disk: disk) }
                 }
             }
-            ForEach(inventory.raidSets) { set in
-                let collapsed = settings.storageCollapsedRAIDs.contains(set.key.rawValue)
-                PanelCard {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Button {
-                            if collapsed {
-                                settings.storageCollapsedRAIDs.remove(set.key.rawValue)
-                            } else {
-                                settings.storageCollapsedRAIDs.insert(set.key.rawValue)
+        }
+        ForEach(inventory.raidSets) { set in
+            raidCard(set, inventory: inventory)
+        }
+        if !externalDisks.isEmpty {
+            PanelCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    if externalDisks.count > Self.externalInlineLimit {
+                        SummaryRow(title: String(localized: "外置 \(externalDisks.count) 块"), action: { navigate(.externalDisks) }) {
+                            LiveView(make: { DiskGroupSummaryDrawView(store: store, services: services, disks: externalDisks) }) {
+                                $0.disks = externalDisks
                             }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                                    .font(.caption2.weight(.semibold))
-                                    .frame(width: 10)
-                                SectionTitle(text: String(localized: "RAID「\(set.name)」"))
-                                Text(StorageText.raidSummary(set)).font(.caption2).foregroundStyle(.secondary)
-                                Spacer()
-                                if !set.isOnline {
-                                    StatusBadge(text: StorageText.raidStatus(set.status), color: .red)
-                                }
-                            }
-                            .contentShape(.rect)
+                            .frame(height: DiskGroupSummaryDrawView.height)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(collapsed ? Text("展开 RAID「\(set.name)」") : Text("收起 RAID「\(set.name)」"))
-                        LiveView(make: { CapacityDrawView(store: store, services: services, owner: .raid(set.key)) })
-                            .frame(height: CapacityDrawView.height)
-                        if !collapsed {
-                            let members = set.members.compactMap { inventory.disk($0) }
-                                .sorted { ($0.raid?.index ?? .max) < ($1.raid?.index ?? .max) }
-                            ForEach(members) { disk in row(disk, inventory: inventory) }
-                        }
-                    }
-                }
-            }
-            if !externalDisks.isEmpty {
-                PanelCard {
-                    VStack(alignment: .leading, spacing: 6) {
+                        .help("逐块查看外置盘")
+                    } else {
                         SectionTitle(text: String(localized: "外置"))
-                        ForEach(externalDisks) { disk in row(disk, inventory: inventory) }
+                        ForEach(externalDisks) { disk in StorageDiskRow(store: store, services: services, disk: disk) }
                     }
                 }
             }
         }
     }
 
-    private func row(_ disk: PhysicalDisk, inventory: StorageInventory) -> some View {
+    private func raidCard(_ set: RAIDSet, inventory: StorageInventory) -> some View {
+        let members = set.members.compactMap { inventory.disk($0) }
+            .sorted { ($0.raid?.index ?? .max) < ($1.raid?.index ?? .max) }
+        let folded = members.count > Self.raidInlineLimit
+        let collapsed = !folded && settings.storageCollapsedRAIDs.contains(set.key.rawValue)
+        return PanelCard {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    if folded {
+                        navigate(.raidMembers(set.key))
+                    } else if collapsed {
+                        settings.storageCollapsedRAIDs.remove(set.key.rawValue)
+                    } else {
+                        settings.storageCollapsedRAIDs.insert(set.key.rawValue)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if !folded {
+                            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                                .frame(width: 10)
+                        }
+                        SectionTitle(text: String(localized: "RAID「\(set.name)」"))
+                        Text(StorageText.raidSummary(set)).font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        if !set.isOnline {
+                            StatusBadge(text: StorageText.raidStatus(set.status), color: .red)
+                        }
+                        if folded {
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    folded
+                        ? Text("查看 RAID「\(set.name)」的成员")
+                        : (collapsed ? Text("展开 RAID「\(set.name)」") : Text("收起 RAID「\(set.name)」")))
+                LiveView(make: { CapacityDrawView(store: store, services: services, owner: .raid(set.key)) })
+                    .frame(height: CapacityDrawView.height)
+                if folded {
+                    LiveView(make: { DiskGroupSummaryDrawView(store: store, services: services, disks: members) }) {
+                        $0.disks = members
+                    }
+                    .frame(height: DiskGroupSummaryDrawView.height)
+                } else if !collapsed {
+                    ForEach(members) { disk in StorageDiskRow(store: store, services: services, disk: disk) }
+                }
+            }
+        }
+    }
+}
+
+/// 一块盘的行（主页与列表页共用）：点击进入单盘详情页。
+struct StorageDiskRow: View {
+    let store: MetricStore
+    let services: AppServices
+    let disk: PhysicalDisk
+    @Environment(\.panelNavigate) private var navigate
+
+    var body: some View {
+        let inventory = services.storageModel.inventory
         let ownsCapacity = services.storageModel.groups.contains { $0.owner == .disk(disk.key) && !$0.isAuxiliary }
-        return Button {
-            open(disk.key)
+        Button {
+            navigate(.disk(disk.key))
         } label: {
             HStack(spacing: 4) {
                 LiveView(make: { DiskRowDrawView(store: store, services: services, disk: disk) }) { view in
@@ -151,6 +169,98 @@ private struct StorageOverviewView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(Text(StorageText.diskName(disk, inventory: inventory)))
         .help("查看这块盘的 SMART 与读写详情")
+    }
+}
+
+// MARK: - 列表页
+
+/// 外置盘或某个 RAID 的成员逐块列出（D64 二级页），默认只看最近 60 s 有读写的盘。
+struct StorageDiskListView: View {
+    let store: MetricStore
+    let services: AppServices
+    @Bindable var settings: AppSettings
+    /// nil 为外置盘；否则为这个阵列的成员。
+    let raid: DiskKey?
+    @Environment(\.panelLayoutChanged) private var layoutChanged
+
+    var body: some View {
+        let inventory = services.storageModel.inventory
+        let disks: [PhysicalDisk] =
+            if let raid, let set = inventory.raidSet(raid) {
+                set.members.compactMap { inventory.disk($0) }.sorted { ($0.raid?.index ?? .max) < ($1.raid?.index ?? .max) }
+            } else {
+                inventory.disks.filter { $0.location == .external && $0.raid == nil }
+            }
+        let active = disks.filter { StorageActivity.isActive($0.key, store: store) }
+        let activeOnly = settings.storageListActiveOnly && !active.isEmpty
+        let shown = activeOnly ? active : disks
+        PanelSubpage {
+            ActiveFilterPicker(activeOnly: $settings.storageListActiveOnly, activeCount: active.count, totalCount: disks.count)
+            if settings.storageListActiveOnly && active.isEmpty {
+                Text("最近 60 秒没有盘在读写，下面列出全部。").font(.caption2).foregroundStyle(.secondary)
+            }
+            PanelCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(shown) { disk in StorageDiskRow(store: store, services: services, disk: disk) }
+                }
+            }
+        }
+        .onChange(of: shown.map(\.key)) { layoutChanged() }
+        .onChange(of: settings.storageListActiveOnly) { layoutChanged() }
+    }
+}
+
+/// 「活跃」的判定：最近 60 s 内读或写超过 1 KB/s。
+enum StorageActivity {
+    static let threshold: Double = 1_000
+    static let seconds: Double = 60
+
+    static func isActive(_ key: DiskKey, store: MetricStore) -> Bool {
+        for direction in [MetricID.DiskMetric.read, .write] {
+            if store.recentPoints(.storageDisk(key, direction), seconds: seconds).contains(where: { ($0.value ?? 0) > threshold }) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// 汇总行右侧的一行实时数：「最高 45 °C · 读 120M 写 3M」。读写只在这一组的物理盘之间相加（D54）。
+final class DiskGroupSummaryDrawView: LiveDrawView {
+    static let height: CGFloat = 16
+
+    private let services: AppServices
+    var disks: [PhysicalDisk] {
+        didSet { if disks.map(\.key) != oldValue.map(\.key) { needsDisplay = true } }
+    }
+
+    init(store: MetricStore, services: AppServices, disks: [PhysicalDisk]) {
+        self.services = services
+        self.disks = disks
+        super.init(store: store)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        countDraw()
+        let latest = store.latest
+        let keys = disks.map(\.key)
+        let temps = keys.compactMap { latest[.storageDisk($0, .temp)]?.value }
+        let reads = keys.compactMap { latest[.storageDisk($0, .read)]?.value }
+        let writes = keys.compactMap { latest[.storageDisk($0, .write)]?.value }
+        let issues = keys.filter { !(services.storage.smart?.latestRecords[$0]?.healthIssues ?? []).isEmpty }.count
+        var parts: [String] = []
+        if let hottest = temps.max() { parts.append(String(localized: "最高 \(Formatting.temperature(hottest))")) }
+        parts.append(
+            String(
+                localized:
+                    "读 \(reads.isEmpty ? "—" : Formatting.diskRate(reads.reduce(0, +)))  写 \(writes.isEmpty ? "—" : Formatting.diskRate(writes.reduce(0, +)))"
+            ))
+        let text = parts.joined(separator: " · ")
+        Self.drawRight(Self.text(text, Self.caption2Digits, .secondaryLabelColor), right: bounds.width, y: 1)
+        if issues > 0 {
+            Self.draw(Self.text("⚠︎ " + String(localized: "\(issues) 块有异常"), Self.caption2, .systemOrange), x: 0, y: 1)
+        }
+        setAccessibilityLabel(text)
     }
 }
 
@@ -408,75 +518,51 @@ final class CapacityDrawView: LiveDrawView {
 
 // MARK: - 单盘详情页
 
-private struct StorageDetailView: View {
+/// 单盘详情（D54、D64 二级页）：标题（盘名）在顶栏，这里第一行是位置、接口、BSD 名与容量。
+struct StorageDetailView: View {
     let store: MetricStore
     let services: AppServices
     @Bindable var settings: AppSettings
     let disk: PhysicalDisk
-    let back: () -> Void
 
     var body: some View {
         let inventory = services.storageModel.inventory
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Button(action: back) {
-                    Label("存储", systemImage: "chevron.left")
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .keyboardShortcut(.leftArrow, modifiers: [.command])
-                .help("返回存储概览")
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(StorageText.diskName(disk, inventory: inventory)).font(.callout.weight(.semibold)).lineLimit(1)
-                    Text(subtitle(inventory)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            // 详情比概览高得多（SMART 全字段、卷构成）：放进限高滚动区，面板不超出屏幕（存储模块设计 §6.2）。
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    PanelCard {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HistoryChart(
-                                store: store, history: services.history, defaultSpan: settings.storageChartSpan,
-                                series: ChartSeries(
-                                    metric: .storageDisk(disk.key, .read), overlay: .storageDisk(disk.key, .write),
-                                    collector: StorageIOCollector.collectorID, scale: .bytesPerSecond))
-                            HStack(spacing: 10) {
-                                Legend(color: .accentColor, text: String(localized: "读"))
-                                Legend(color: .orange, text: String(localized: "写"))
-                            }
-                        }
-                    }
-                    PanelCard {
-                        LiveView(make: { DiskIODrawView(store: store, services: services, key: disk.key) })
-                            .frame(height: DiskIODrawView.height)
-                    }
-                    if disk.smartCapable {
-                        PanelCard {
-                            LiveView(make: { SMARTDrawView(store: store, services: services, key: disk.key) }) { $0.key = disk.key }
-                                .frame(height: SMARTDrawView.height)
-                        }
-                    } else {
-                        PanelCard {
-                            Text("这块盘不是 NVMe 盘，没有可读的 SMART 数据（为了只读，不开启 ATA SMART）。")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    PanelCard { identity(inventory) }
-                    let groups = services.storageModel.groups.filter { $0.owner == .disk(disk.key) }
-                    if !groups.isEmpty {
-                        PanelCard { volumes(groups) }
+        PanelSubpage {
+            Text(subtitle(inventory)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            PanelCard {
+                VStack(alignment: .leading, spacing: 4) {
+                    HistoryChart(
+                        store: store, history: services.history, defaultSpan: settings.storageChartSpan,
+                        series: ChartSeries(
+                            metric: .storageDisk(disk.key, .read), overlay: .storageDisk(disk.key, .write),
+                            collector: StorageIOCollector.collectorID, scale: .bytesPerSecond))
+                    HStack(spacing: 10) {
+                        Legend(color: .accentColor, text: String(localized: "读"))
+                        Legend(color: .orange, text: String(localized: "写"))
                     }
                 }
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: Self.maxScrollHeight)
+            PanelCard {
+                LiveView(make: { DiskIODrawView(store: store, services: services, key: disk.key) })
+                    .frame(height: DiskIODrawView.height)
+            }
+            if disk.smartCapable {
+                PanelCard {
+                    LiveView(make: { SMARTDrawView(store: store, services: services, key: disk.key) }) { $0.key = disk.key }
+                        .frame(height: SMARTDrawView.height)
+                }
+            } else {
+                PanelCard {
+                    Text("这块盘不是 NVMe 盘，没有可读的 SMART 数据（为了只读，不开启 ATA SMART）。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            PanelCard { identity(inventory) }
+            let groups = services.storageModel.groups.filter { $0.owner == .disk(disk.key) }
+            if !groups.isEmpty {
+                PanelCard { volumes(groups) }
+            }
         }
-    }
-
-    /// 滚动区的最大高度：屏幕可见高度减去顶栏、标题与边距。
-    static var maxScrollHeight: CGFloat {
-        max((NSScreen.main?.visibleFrame.height ?? 900) - 150, 300)
     }
 
     private func subtitle(_ inventory: StorageInventory) -> String {
@@ -527,7 +613,7 @@ private struct StorageDetailView: View {
     }
 }
 
-private struct KeyValue: View {
+struct KeyValue: View {
     let title: String
     let value: String
     var body: some View {
