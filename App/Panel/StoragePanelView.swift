@@ -35,7 +35,7 @@ struct StoragePanelView: View {
         VStack(alignment: .leading, spacing: 10) {
             if inventory.disks.isEmpty {
                 PanelCard {
-                    Text("正在查找物理盘…").font(.caption).foregroundStyle(.secondary)
+                    Text("正在查找物理盘…").font(.panelRow).foregroundStyle(.secondary)
                 }
             } else {
                 sections(inventory: inventory, internalDisks: internalDisks, externalDisks: externalDisks)
@@ -108,17 +108,17 @@ struct StoragePanelView: View {
                     HStack(spacing: 4) {
                         if !folded {
                             Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                                .font(.caption2.weight(.semibold))
+                                .font(.panelNote.weight(.semibold))
                                 .frame(width: 10)
                         }
                         SectionTitle(text: String(localized: "RAID「\(set.name)」"))
-                        Text(StorageText.raidSummary(set)).font(.caption2).foregroundStyle(.secondary)
+                        Text(StorageText.raidSummary(set)).font(.panelNote).foregroundStyle(.secondary)
                         Spacer()
                         if !set.isOnline {
                             StatusBadge(text: StorageText.raidStatus(set.status), color: .red)
                         }
                         if folded {
-                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.right").font(.panelNote).foregroundStyle(.tertiary)
                         }
                     }
                     .contentShape(.rect)
@@ -162,7 +162,7 @@ struct StorageDiskRow: View {
                     view.showsCapacity = ownsCapacity
                 }
                 .frame(height: DiskRowDrawView.height + (ownsCapacity ? CapacityDrawView.height + 2 : 0))
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.panelNote).foregroundStyle(.tertiary)
             }
             .contentShape(.rect)
         }
@@ -197,7 +197,7 @@ struct StorageDiskListView: View {
         PanelSubpage {
             ActiveFilterPicker(activeOnly: $settings.storageListActiveOnly, activeCount: active.count, totalCount: disks.count)
             if settings.storageListActiveOnly && active.isEmpty {
-                Text("最近 60 秒没有盘在读写，下面列出全部。").font(.caption2).foregroundStyle(.secondary)
+                Text("最近 60 秒没有盘在读写，下面列出全部。").font(.panelNote).foregroundStyle(.secondary)
             }
             PanelCard {
                 VStack(alignment: .leading, spacing: 6) {
@@ -227,7 +227,7 @@ enum StorageActivity {
 
 /// 汇总行右侧的一行实时数：「最高 45 °C · 读 120M 写 3M」。读写只在这一组的物理盘之间相加（D54）。
 final class DiskGroupSummaryDrawView: LiveDrawView {
-    static let height: CGFloat = 16
+    static let height: CGFloat = 17
 
     private let services: AppServices
     var disks: [PhysicalDisk] {
@@ -267,7 +267,7 @@ final class DiskGroupSummaryDrawView: LiveDrawView {
 private struct SectionTitle: View {
     let text: String
     var body: some View {
-        Text(text).font(.caption.weight(.semibold))
+        Text(text).font(.panelRow.weight(.semibold))
     }
 }
 
@@ -276,7 +276,7 @@ private struct StatusBadge: View {
     let color: Color
     var body: some View {
         Text(text)
-            .font(.caption2)
+            .font(.panelNote)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(color.opacity(0.22), in: .capsule)
@@ -374,7 +374,7 @@ enum StorageText {
 
 /// 一块盘的两行（可选第三行容量条）：名称与「温度 · 寿命」或异常项；读写速率与最近 60 s 小曲线。
 final class DiskRowDrawView: LiveDrawView {
-    static let height: CGFloat = 32
+    static let height: CGFloat = 34
     static let sparklineSeconds: Double = 60
 
     private let services: AppServices
@@ -427,8 +427,8 @@ final class DiskRowDrawView: LiveDrawView {
         let write = latest[.storageDisk(key, .write)]?.value
         let rates = String(
             localized: "读 \(read.map(Formatting.diskRate) ?? "—")  写 \(write.map(Formatting.diskRate) ?? "—")")
-        Self.draw(Self.text(rates, Self.caption2Digits, .secondaryLabelColor), x: 0, y: 17)
-        drawSparkline(in: NSRect(x: bounds.width - 70, y: 17, width: 70, height: 12), key: key)
+        Self.draw(Self.text(rates, Self.caption2Digits, .secondaryLabelColor), x: 0, y: 18)
+        drawSparkline(in: NSRect(x: bounds.width - 70, y: 19, width: 70, height: 12), key: key)
 
         if showsCapacity {
             CapacityDrawView.drawCapacity(
@@ -470,7 +470,7 @@ final class DiskRowDrawView: LiveDrawView {
 
 /// 容量条：「已用 / 总量 · 可用」，一个归属下的主容量组合计。
 final class CapacityDrawView: LiveDrawView {
-    static let height: CGFloat = 22
+    static let height: CGFloat = 23
 
     private let services: AppServices
     let owner: CapacityOwner
@@ -528,7 +528,7 @@ struct StorageDetailView: View {
     var body: some View {
         let inventory = services.storageModel.inventory
         PanelSubpage {
-            Text(subtitle(inventory)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(subtitle(inventory)).font(.panelNote).foregroundStyle(.secondary).lineLimit(1)
             PanelCard {
                 VStack(alignment: .leading, spacing: 4) {
                     HistoryChart(
@@ -554,7 +554,7 @@ struct StorageDetailView: View {
             } else {
                 PanelCard {
                     Text("这块盘不是 NVMe 盘，没有可读的 SMART 数据（为了只读，不开启 ATA SMART）。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.panelRow).foregroundStyle(.secondary)
                 }
             }
             PanelCard { identity(inventory) }
@@ -572,7 +572,7 @@ struct StorageDetailView: View {
 
     private func identity(_ inventory: StorageInventory) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("身份").font(.caption.weight(.semibold))
+            Text("身份").font(.panelRow.weight(.semibold))
             KeyValue(title: String(localized: "型号"), value: disk.model)
             KeyValue(title: String(localized: "固件"), value: disk.firmware ?? "—")
             KeyValue(title: String(localized: "接口"), value: "\(StorageText.location(disk.location)) · \(disk.interconnect)")
@@ -588,13 +588,13 @@ struct StorageDetailView: View {
 
     private func volumes(_ groups: [CapacityGroup]) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("卷").font(.caption.weight(.semibold))
+            Text("卷").font(.panelRow.weight(.semibold))
             ForEach(groups) { group in
                 Text("\(group.name) · \(group.fileSystem.uppercased()) · \(Formatting.diskBytesShort(Double(group.usedBytes))) / \(Formatting.diskBytesShort(Double(group.totalBytes)))" + (group.isAuxiliary ? String(localized: "（系统辅助容器）") : ""))
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.panelNote).foregroundStyle(.secondary)
                 if let purgeable = group.purgeableBytes, purgeable > 0 {
                     Text("可用 \(Formatting.diskBytesShort(Double(group.availableBytes)))，另有可清除空间约 \(Formatting.diskBytesShort(Double(purgeable)))（系统需要时自动释放）")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.panelNote).foregroundStyle(.secondary)
                 }
                 ForEach(group.volumes, id: \.self) { volume in
                     HStack {
@@ -605,7 +605,7 @@ struct StorageDetailView: View {
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
-                    .font(.caption2)
+                    .font(.panelNote)
                     .padding(.leading, 8)
                 }
             }
@@ -622,7 +622,7 @@ struct KeyValue: View {
             Spacer(minLength: 8)
             Text(value).multilineTextAlignment(.trailing).lineLimit(2)
         }
-        .font(.caption)
+        .font(.panelRow)
     }
 }
 
@@ -632,15 +632,15 @@ private struct Legend: View {
     var body: some View {
         HStack(spacing: 4) {
             Capsule().fill(color).frame(width: 10, height: 3)
-            Text(text).font(.caption2).foregroundStyle(.secondary)
+            Text(text).font(.panelNote).foregroundStyle(.secondary)
         }
     }
 }
 
 /// IO 统计：读 / 写的速率、IOPS、平均延迟，以及驱动累计的错误与重试。
 final class DiskIODrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 16
-    static let height: CGFloat = 16 + rowHeight * 4
+    static let rowHeight: CGFloat = 17
+    static let height: CGFloat = 17 + rowHeight * 4
 
     private let services: AppServices
     let key: DiskKey
@@ -658,7 +658,7 @@ final class DiskIODrawView: LiveDrawView {
         let columns: [CGFloat] = [bounds.width * 0.62, bounds.width]
         Self.drawRight(Self.text(String(localized: "读"), Self.caption2, .secondaryLabelColor), right: columns[0], y: 2)
         Self.drawRight(Self.text(String(localized: "写"), Self.caption2, .secondaryLabelColor), right: columns[1], y: 2)
-        var y: CGFloat = 16
+        var y: CGFloat = 17
         func row(_ title: String, _ read: String, _ write: String) {
             Self.draw(Self.text(title, Self.caption, .secondaryLabelColor), x: 0, y: y)
             Self.drawRight(Self.text(read, Self.captionDigits), right: columns[0], y: y)
@@ -682,12 +682,12 @@ final class DiskIODrawView: LiveDrawView {
 
 /// SMART 全部字段（存储模块设计 §3.2），分「健康 / 温度 / 累计 / 其他」四节。行数固定，缺的字段写「—」。
 final class SMARTDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 15
+    static let rowHeight: CGFloat = 16
     static let sectionGap: CGFloat = 6
     /// 各节的行数（与 `sections` 保持一致）。
     static let sectionRows = [5, 5, 7, 2]
     static let height: CGFloat =
-        CGFloat(sectionRows.count) * (14 + sectionGap) + CGFloat(sectionRows.reduce(0, +)) * rowHeight + 26
+        CGFloat(sectionRows.count) * (15 + sectionGap) + CGFloat(sectionRows.reduce(0, +)) * rowHeight + 28
 
     private let services: AppServices
     var key: DiskKey {
@@ -760,7 +760,7 @@ final class SMARTDrawView: LiveDrawView {
         var y: CGFloat = 0
         for (title, rows) in sections(record) {
             Self.draw(Self.text(title, Self.captionBold), x: 0, y: y)
-            y += 14
+            y += 15
             for row in rows {
                 Self.draw(Self.text(row.title, Self.caption, .secondaryLabelColor), x: 0, y: y)
                 Self.drawRight(Self.text(row.value, Self.captionDigits, row.color ?? .labelColor), right: bounds.width, y: y)
@@ -774,7 +774,7 @@ final class SMARTDrawView: LiveDrawView {
         if record?.powerOnHoursUnreliable == true {
             Self.draw(
                 Self.text(String(localized: "Apple 控制器的通电时间严重低报，仅供参考。"), Self.caption2, .secondaryLabelColor),
-                x: 0, y: y + 13)
+                x: 0, y: y + 14)
         }
         setAccessibilityLabel(String(localized: "SMART"))
     }

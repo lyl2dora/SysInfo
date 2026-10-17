@@ -70,10 +70,10 @@ struct SummaryRow<Detail: View>: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Text(title).font(.caption)
+                Text(title).font(.panelRow)
                 detail
                 Spacer(minLength: 4)
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.panelNote).foregroundStyle(.tertiary)
             }
             .frame(minHeight: 18)
             .contentShape(.rect)

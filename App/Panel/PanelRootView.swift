@@ -94,7 +94,7 @@ struct PanelRootView: View {
             if let disk = services.storageModel.inventory.disk(key) {
                 StorageDetailView(store: store, services: services, settings: settings, disk: disk)
             } else {
-                PanelSubpage { PanelCard { Text("这块盘已经断开").font(.caption).foregroundStyle(.secondary) } }
+                PanelSubpage { PanelCard { Text("这块盘已经断开").font(.panelRow).foregroundStyle(.secondary) } }
             }
         case .externalDisks:
             StorageDiskListView(store: store, services: services, settings: settings, raid: nil)
@@ -137,7 +137,7 @@ struct PanelRootView: View {
                 .keyboardShortcut(.leftArrow, modifiers: [.command])
                 .help("返回（Esc）")
                 Text(title(route))
-                    .font(.callout.weight(.semibold))
+                    .font(.panelTitle.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
             } else {
@@ -231,7 +231,7 @@ struct SegmentedButtons<Value: Hashable>: View {
                     selection = value
                 } label: {
                     Text(title)
-                        .font(size == .small ? .caption : .callout)
+                        .font(size == .small ? .panelRow : .panelTitle)
                         .padding(.horizontal, size == .small ? 8 : 14)
                         .padding(.vertical, size == .small ? 3 : 4)
                         .frame(maxWidth: size == .small ? .infinity : nil)

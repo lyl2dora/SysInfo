@@ -36,7 +36,7 @@ struct NetworkPanelView: View {
                             metric: .networkPrimaryIn, overlay: .networkPrimaryOut, collector: NetworkIOCollector.collectorID,
                             scale: .bytesPerSecond))
                     Text("主接口：蓝线为下载，橙线为上传")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.panelNote).foregroundStyle(.secondary)
                 }
             }
             PanelCard {
@@ -79,9 +79,9 @@ struct NetworkPanelView: View {
     @ViewBuilder
     private func interfaces(_ state: NetworkState) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("接口").font(.caption.weight(.semibold))
+            Text("接口").font(.panelRow.weight(.semibold))
             if state.physical.isEmpty {
-                Text("没有活跃的物理接口").font(.caption).foregroundStyle(.secondary)
+                Text("没有活跃的物理接口").font(.panelRow).foregroundStyle(.secondary)
             }
             // 主接口排最前，其余按 index。
             ForEach(state.physical.sorted { ($0.name == state.primary ? 0 : 1) < ($1.name == state.primary ? 0 : 1) }) { interface in
@@ -140,14 +140,14 @@ struct NetworkVirtualListView: View {
         PanelSubpage {
             ActiveFilterPicker(activeOnly: $settings.networkVirtualActiveOnly, activeCount: active.count, totalCount: all.count)
             Text("虚拟接口的流量通常也会计在物理接口上，不要相加。")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.panelNote).foregroundStyle(.secondary)
             if settings.networkVirtualActiveOnly && active.isEmpty {
-                Text("最近 60 秒没有虚拟接口有流量，下面列出全部。").font(.caption2).foregroundStyle(.secondary)
+                Text("最近 60 秒没有虚拟接口有流量，下面列出全部。").font(.panelNote).foregroundStyle(.secondary)
             }
             ForEach(kinds, id: \.self) { kind in
                 PanelCard {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(NetworkText.kind(kind)).font(.caption.weight(.semibold))
+                        Text(NetworkText.kind(kind)).font(.panelRow.weight(.semibold))
                         ForEach(shown.filter { $0.kind == kind }) { interface in
                             NetworkInterfaceRow(
                                 store: store, interface: interface, primary: false, bits: settings.networkThroughputBits)
@@ -178,7 +178,7 @@ enum NetworkActivity {
 
 /// 汇总行右侧：「n 个有流量」。只给个数，不给合计速率（D60）。
 final class VirtualInterfacesSummaryDrawView: LiveDrawView {
-    static let height: CGFloat = 16
+    static let height: CGFloat = 17
 
     var interfaces: [NetworkInterface] {
         didSet { if interfaces != oldValue { needsDisplay = true } }
@@ -248,7 +248,7 @@ enum NetworkText {
 // MARK: - 概览
 
 final class NetworkOverviewDrawView: LiveDrawView {
-    static let height: CGFloat = 86
+    static let height: CGFloat = 94
 
     private let services: AppServices
     /// 用比特 / 秒（跟随网速 widget 的单位设置）。
@@ -259,8 +259,8 @@ final class NetworkOverviewDrawView: LiveDrawView {
         let base = NSFont.monospacedDigitSystemFont(ofSize: 24, weight: .semibold)
         return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 24) } ?? base
     }()
-    private static let subheadline = NSFont.systemFont(ofSize: 13)
-    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    private static let subheadline = NSFont.systemFont(ofSize: PanelType.title)
+    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: PanelType.title, weight: .medium)
 
     init(store: MetricStore, services: AppServices) {
         self.services = services
@@ -279,19 +279,19 @@ final class NetworkOverviewDrawView: LiveDrawView {
         let up = latest[.networkPrimaryOut]?.value
         let downText = down.map { NetworkText.rate($0, bits: bits) } ?? PercentFormat.placeholder
         let upText = up.map { NetworkText.rate($0, bits: bits) } ?? PercentFormat.placeholder
-        var x = Self.draw(Self.text("↓ ", Self.big, .controlAccentColor), x: 0, y: 20)
-        x += Self.draw(Self.text(downText, Self.big), x: x, y: 20) + 14
-        x += Self.draw(Self.text("↑ ", Self.big, .systemOrange), x: x, y: 20)
-        Self.draw(Self.text(upText, Self.big), x: x, y: 20)
+        var x = Self.draw(Self.text("↓ ", Self.big, .controlAccentColor), x: 0, y: 21)
+        x += Self.draw(Self.text(downText, Self.big), x: x, y: 21) + 14
+        x += Self.draw(Self.text("↑ ", Self.big, .systemOrange), x: x, y: 21)
+        Self.draw(Self.text(upText, Self.big), x: x, y: 21)
         // 字节口径说明（D60）。
-        Self.draw(Self.text(String(localized: "接口字节（含协议头），不是应用载荷"), Self.caption2, .secondaryLabelColor), x: 0, y: 64)
+        Self.draw(Self.text(String(localized: "接口字节（含协议头），不是应用载荷"), Self.caption2, .secondaryLabelColor), x: 0, y: 66)
 
         let right = bounds.width
         var y: CGFloat = 0
         func item(_ title: String, _ value: String, _ color: NSColor = .labelColor) {
             Self.drawRight(Self.text(title, Self.caption2, .secondaryLabelColor), right: right, y: y)
-            Self.drawRight(Self.text(value, Self.callout, color), right: right, y: y + 12)
-            y += 29
+            Self.drawRight(Self.text(value, Self.callout, color), right: right, y: y + 14)
+            y += 31
         }
         if let primary = state.primaryInterface {
             if primary.kind == .wifi {
@@ -312,7 +312,7 @@ final class NetworkOverviewDrawView: LiveDrawView {
 
 /// 一个接口两行：名称与类型（链路速率）；入 / 出速率与最近 60 s 小曲线。
 final class NetworkInterfaceRowDrawView: LiveDrawView {
-    static let height: CGFloat = 32
+    static let height: CGFloat = 34
     static let sparklineSeconds: Double = 60
 
     var interface: NetworkInterface {
@@ -346,8 +346,8 @@ final class NetworkInterfaceRowDrawView: LiveDrawView {
         let down = latest[.network(interface, .in)]?.value
         let up = latest[.network(interface, .out)]?.value
         let rates = "↓ \(down.map { NetworkText.rate($0, bits: bits) } ?? "—")  ↑ \(up.map { NetworkText.rate($0, bits: bits) } ?? "—")"
-        Self.draw(Self.text(rates, Self.caption2Digits, .secondaryLabelColor), x: 0, y: 17)
-        drawSparkline(in: NSRect(x: bounds.width - 70, y: 17, width: 70, height: 12))
+        Self.draw(Self.text(rates, Self.caption2Digits, .secondaryLabelColor), x: 0, y: 18)
+        drawSparkline(in: NSRect(x: bounds.width - 70, y: 19, width: 70, height: 12))
         setAccessibilityLabel("\(name) \(rates)")
     }
 
@@ -397,7 +397,7 @@ private struct NetworkTotalsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("流量统计").font(.caption.weight(.semibold))
+                Text("流量统计").font(.panelRow.weight(.semibold))
                 Spacer()
                 Picker("", selection: $settings.networkTotalsInterface) {
                     Text("主接口").tag(String?.none)
@@ -413,9 +413,9 @@ private struct NetworkTotalsView: View {
                 .fixedSize()
             }
             if !settings.historyNetworkEnabled {
-                Text("没有开启「记录网络历史」，无法统计").font(.caption2).foregroundStyle(.secondary)
+                Text("没有开启「记录网络历史」，无法统计").font(.panelNote).foregroundStyle(.secondary)
             } else if services.history == nil || failed {
-                Text("历史库不可用").font(.caption2).foregroundStyle(.secondary)
+                Text("历史库不可用").font(.panelNote).foregroundStyle(.secondary)
             } else {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
                     totalRow(String(localized: "今日"), "day")
@@ -434,9 +434,9 @@ private struct NetworkTotalsView: View {
 
     private func totalRow(_ title: String, _ period: String) -> some View {
         GridRow {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text("↓ \(totals["\(period).in"].map(Formatting.diskBytes) ?? "—")").font(.caption.monospacedDigit())
-            Text("↑ \(totals["\(period).out"].map(Formatting.diskBytes) ?? "—")").font(.caption.monospacedDigit())
+            Text(title).font(.panelRow).foregroundStyle(.secondary)
+            Text("↓ \(totals["\(period).in"].map(Formatting.diskBytes) ?? "—")").font(.panelRow.monospacedDigit())
+            Text("↑ \(totals["\(period).out"].map(Formatting.diskBytes) ?? "—")").font(.panelRow.monospacedDigit())
         }
     }
 
@@ -479,7 +479,7 @@ private struct NetworkConnectionView: View {
     var body: some View {
         let primary = state.primaryInterface
         VStack(alignment: .leading, spacing: 4) {
-            Text("连接").font(.caption.weight(.semibold))
+            Text("连接").font(.panelRow.weight(.semibold))
             if let primary {
                 copyRow(String(localized: "IPv4"), primary.ipv4.first, more: primary.ipv4.count - 1)
                 copyRow(String(localized: "IPv6"), primary.ipv6.first, more: primary.ipv6.count - 1)
@@ -501,7 +501,7 @@ private struct NetworkConnectionView: View {
     private var publicIP: some View {
         let status = services.networkModel.publicIP
         HStack {
-            Text("公网 IP").font(.caption).foregroundStyle(.secondary)
+            Text("公网 IP").font(.panelRow).foregroundStyle(.secondary)
             Spacer()
             switch status {
             case .idle:
@@ -510,10 +510,10 @@ private struct NetworkConnectionView: View {
                 ProgressView().controlSize(.mini)
             case .result(let address, _):
                 Button(address) { copy(address) }
-                    .buttonStyle(.plain).font(.caption.monospacedDigit())
+                    .buttonStyle(.plain).font(.panelRow.monospacedDigit())
                     .help("点击复制")
             case .failed(let message):
-                Text(message).font(.caption2).foregroundStyle(.red).lineLimit(1)
+                Text(message).font(.panelNote).foregroundStyle(.red).lineLimit(1)
             }
             Button("查询") {
                 if settings.publicIPService.isEmpty {
@@ -528,9 +528,9 @@ private struct NetworkConnectionView: View {
         }
         if editingService {
             VStack(alignment: .leading, spacing: 4) {
-                Text("第一次查询：选择或填写查询服务（以后可在设置 › 网络里修改）").font(.caption2).foregroundStyle(.secondary)
+                Text("第一次查询：选择或填写查询服务（以后可在设置 › 网络里修改）").font(.panelNote).foregroundStyle(.secondary)
                 HStack {
-                    TextField("https://…", text: $serviceDraft).textFieldStyle(.roundedBorder).font(.caption)
+                    TextField("https://…", text: $serviceDraft).textFieldStyle(.roundedBorder).font(.panelRow)
                     Menu("候选") {
                         ForEach(Self.serviceCandidates, id: \.self) { candidate in
                             Button(candidate) { serviceDraft = candidate }
@@ -556,30 +556,30 @@ private struct NetworkConnectionView: View {
 
     private func row(_ title: String, _ value: String) -> some View {
         HStack {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.panelRow).foregroundStyle(.secondary)
             Spacer()
-            Text(value).font(.caption)
+            Text(value).font(.panelRow)
         }
     }
 
     @ViewBuilder
     private func copyRow(_ title: String, _ value: String?, more: Int) -> some View {
         HStack {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.panelRow).foregroundStyle(.secondary)
             Spacer()
             if let value {
                 Button {
                     copy(value)
                 } label: {
                     Text(more > 0 ? "\(value) 等 \(more + 1) 个" : value)
-                        .font(.caption.monospacedDigit())
+                        .font(.panelRow.monospacedDigit())
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 .buttonStyle(.plain)
                 .help("点击复制")
             } else {
-                Text("—").font(.caption).foregroundStyle(.secondary)
+                Text("—").font(.panelRow).foregroundStyle(.secondary)
             }
         }
     }
@@ -594,8 +594,8 @@ private struct NetworkConnectionView: View {
 
 /// Wi-Fi 卡片（D60 N5）：面板可见时每 5 s 读一次 CoreWLAN；不读 SSID。
 final class WiFiDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 17
-    static let height: CGFloat = 16 + rowHeight * 3
+    static let rowHeight: CGFloat = 18
+    static let height: CGFloat = 17 + rowHeight * 3
 
     private let services: AppServices
 
@@ -615,7 +615,7 @@ final class WiFiDrawView: LiveDrawView {
         if let name = info?.interfaceName {
             Self.drawRight(Self.text(String(localized: "\(name) · 每 5 秒"), Self.caption2, .secondaryLabelColor), right: width, y: y + 1)
         }
-        y += 16
+        y += 17
         func row(_ title: String, _ value: String) {
             Self.draw(Self.text(title, Self.caption, .secondaryLabelColor), x: 0, y: y)
             Self.drawRight(Self.text(value, Self.captionDigits), right: width, y: y)
@@ -650,10 +650,10 @@ final class WiFiDrawView: LiveDrawView {
 // MARK: - 延迟
 
 final class LatencyDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 17
+    static let rowHeight: CGFloat = 18
 
     static func height(for targets: LatencyCollector.Targets) -> CGFloat {
-        16 + rowHeight * CGFloat((targets.gateway ? 1 : 0) + (targets.custom != nil ? 1 : 0))
+        17 + rowHeight * CGFloat((targets.gateway ? 1 : 0) + (targets.custom != nil ? 1 : 0))
     }
 
     private let services: AppServices
@@ -675,7 +675,7 @@ final class LatencyDrawView: LiveDrawView {
         var y: CGFloat = 0
         Self.draw(Self.text(String(localized: "延迟"), Self.captionBold), x: 0, y: y)
         Self.drawRight(Self.text(String(localized: "RTT · 丢包（最近 10 个）"), Self.caption2, .secondaryLabelColor), right: width, y: y + 1)
-        y += 16
+        y += 17
         let state = services.networkModel.state
         let rows: [(MetricID.LatencyTarget, String)] =
             (targets.gateway ? [(.gateway, String(localized: "网关 \(state.gatewayIPv4 ?? state.gatewayIPv6 ?? "")"))] : [])

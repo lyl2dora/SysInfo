@@ -47,14 +47,14 @@ struct MemoryPanelView: View {
 // MARK: - 概览
 
 final class MemoryOverviewDrawView: LiveDrawView {
-    static let height: CGFloat = 86
+    static let height: CGFloat = 94
 
     private static let big: NSFont = {
-        let base = NSFont.monospacedDigitSystemFont(ofSize: 34, weight: .semibold)
-        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 34) } ?? base
+        let base = NSFont.monospacedDigitSystemFont(ofSize: PanelType.hero, weight: .semibold)
+        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: PanelType.hero) } ?? base
     }()
-    private static let subheadline = NSFont.systemFont(ofSize: 13)
-    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    private static let subheadline = NSFont.systemFont(ofSize: PanelType.title)
+    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: PanelType.title, weight: .medium)
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
@@ -62,23 +62,23 @@ final class MemoryOverviewDrawView: LiveDrawView {
         Self.draw(Self.text(String(localized: "已用内存"), Self.subheadline, .secondaryLabelColor), x: 0, y: 0)
         let used = latest[.memoryUsed]
         let usedText = used?.value.map(Formatting.memory) ?? "—"
-        let w = Self.draw(Self.text(usedText, Self.big), x: 0, y: 16)
+        let w = Self.draw(Self.text(usedText, Self.big), x: 0, y: 17)
         if used?.quality == .estimated {
-            Self.draw(Self.text(String(localized: "估算"), Self.caption, .secondaryLabelColor), x: w + 6, y: 38)
+            Self.draw(Self.text(String(localized: "估算"), Self.caption, .secondaryLabelColor), x: w + 6, y: 39)
         }
         if let physical = latest[.memoryPhysical]?.value {
             let usage = latest[.memoryUsage]?.value.map { PercentFormat.string(fromRatio: $0) } ?? "—"
             Self.draw(
                 Self.text(String(localized: "共 \(Formatting.memory(physical)) · 占用 \(usage)"), Self.caption2Digits, .secondaryLabelColor),
-                x: 0, y: 64)
+                x: 0, y: 66)
         }
 
         let right = bounds.width
         var y: CGFloat = 0
         func item(_ title: String, _ value: String) {
             Self.drawRight(Self.text(title, Self.caption2, .secondaryLabelColor), right: right, y: y)
-            Self.drawRight(Self.text(value, Self.callout), right: right, y: y + 12)
-            y += 29
+            Self.drawRight(Self.text(value, Self.callout), right: right, y: y + 14)
+            y += 31
         }
         let level = MemoryPressureLevel(sampleValue: latest[.memoryPressureLevel]?.value)
         let pressure = latest[.memoryPressure]?.value.map { PercentFormat.string(fromRatio: $0) } ?? "—"
@@ -93,12 +93,12 @@ final class MemoryOverviewDrawView: LiveDrawView {
 
 /// 物理内存的构成：App、联动、被压缩、已缓存文件、空闲，一根横向堆叠条加逐项数值（按物理内存的比例）。
 final class MemoryCompositionDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 16
+    static let rowHeight: CGFloat = 17
     static let parts: [(MetricID, NSColor)] = [
         (.memoryApp, .systemBlue), (.memoryWired, .systemOrange), (.memoryCompressed, .systemPurple),
         (.memoryCached, .systemTeal), (.memoryFree, .quaternaryLabelColor),
     ]
-    static let height: CGFloat = 16 + 10 + 8 + rowHeight * CGFloat(parts.count) + 4 + 14
+    static let height: CGFloat = 17 + 10 + 8 + rowHeight * CGFloat(parts.count) + 4 + 15
 
     static func title(_ id: MetricID) -> String {
         switch id {
@@ -116,7 +116,7 @@ final class MemoryCompositionDrawView: LiveDrawView {
         Self.draw(Self.text(String(localized: "构成"), Self.captionBold), x: 0, y: 0)
         let physical = latest[.memoryPhysical]?.value ?? 0
         // 堆叠条：按物理内存的比例；其余（引导保留等，约 1%）留成槽色。
-        let bar = NSRect(x: 0, y: 16, width: bounds.width, height: 10)
+        let bar = NSRect(x: 0, y: 17, width: bounds.width, height: 10)
         NSColor.quaternaryLabelColor.withAlphaComponent(0.4).setFill()
         NSBezierPath(roundedRect: bar, xRadius: 3, yRadius: 3).fill()
         if physical > 0 {
@@ -135,7 +135,7 @@ final class MemoryCompositionDrawView: LiveDrawView {
         var y = bar.maxY + 8
         for (id, color) in Self.parts {
             color.setFill()
-            NSBezierPath(ovalIn: NSRect(x: 0, y: y + 4, width: 7, height: 7)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 0, y: y + 4.5, width: 7, height: 7)).fill()
             Self.draw(Self.text(Self.title(id), Self.caption, .secondaryLabelColor), x: 12, y: y)
             let sample = latest[id]
             var text = sample?.value.map(Formatting.memory) ?? "—"
@@ -148,7 +148,7 @@ final class MemoryCompositionDrawView: LiveDrawView {
         }
         y += 4
         Self.draw(
-            Self.text(String(localized: "已用 = App + 联动 + 被压缩（同活动监视器）；缓存可随时回收。"), Self.caption2, .tertiaryLabelColor),
+            Self.text(String(localized: "已用 = App + 联动 + 被压缩（同活动监视器）；缓存可随时回收。"), Self.caption2, .secondaryLabelColor),
             x: 0, y: y)
         setAccessibilityLabel(String(localized: "内存构成"))
     }
@@ -157,15 +157,15 @@ final class MemoryCompositionDrawView: LiveDrawView {
 // MARK: - 活动与压力
 
 final class MemoryActivityDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 17
-    static let height: CGFloat = 16 + rowHeight * 4 + 24
+    static let rowHeight: CGFloat = 18
+    static let height: CGFloat = 17 + rowHeight * 4 + 25
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
         let latest = store.latest
         Self.draw(Self.text(String(localized: "活动"), Self.captionBold), x: 0, y: 0)
         func rate(_ id: MetricID) -> String { latest[id]?.value.map(Formatting.rate) ?? "—" }
-        var y: CGFloat = 16
+        var y: CGFloat = 17
         func row(_ title: String, _ value: String) {
             Self.draw(Self.text(title, Self.caption, .secondaryLabelColor), x: 0, y: y)
             Self.drawRight(Self.text(value, Self.captionDigits), right: bounds.width, y: y)

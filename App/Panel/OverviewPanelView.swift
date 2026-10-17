@@ -37,7 +37,7 @@ struct OverviewPanelView: View {
                                 $0.todayTraffic = todayTraffic
                             }
                             .frame(height: OverviewCardDrawView.height)
-                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.right").font(.panelNote).foregroundStyle(.tertiary)
                         }
                     }
                     .contentShape(.rect)
@@ -76,10 +76,10 @@ struct OverviewPanelView: View {
     private var energyCard: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text("最耗能的应用").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text("最近 1 分钟").font(.caption2).foregroundStyle(.tertiary)
+                Text("最耗能的应用").font(.panelRow.weight(.semibold)).foregroundStyle(.secondary)
+                Text("最近 1 分钟").font(.panelNote).foregroundStyle(.tertiary)
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.panelNote).foregroundStyle(.tertiary)
             }
             ForEach(0..<Self.energyRows, id: \.self) { index in
                 HStack(spacing: 6) {
@@ -95,7 +95,7 @@ struct OverviewPanelView: View {
                         Spacer()
                     }
                 }
-                .font(.caption)
+                .font(.panelRow)
             }
         }
     }
@@ -116,7 +116,7 @@ struct OverviewPanelView: View {
 
 /// 一张总览卡片：左上模块名，第一行主数值，第二行次要数值；右侧最近 60 s 迷你曲线。
 final class OverviewCardDrawView: LiveDrawView {
-    static let height: CGFloat = 40
+    static let height: CGFloat = 42
     static let sparklineSeconds: Double = 60
     static let sparklineWidth: CGFloat = 96
 
@@ -127,11 +127,11 @@ final class OverviewCardDrawView: LiveDrawView {
         didSet { if todayTraffic != oldValue { needsDisplay = true } }
     }
 
-    private static let title = NSFont.systemFont(ofSize: 11, weight: .semibold)
+    private static let title = NSFont.systemFont(ofSize: PanelType.row, weight: .semibold)
     /// 数值列的起点：所有卡片对齐，取最长模块名的宽度。
     private static let valueX: CGFloat = ceil(
         PanelTab.allCases.map { text($0.title, title).size().width }.max() ?? 64) + 10
-    private static let primary = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    private static let primary = NSFont.monospacedDigitSystemFont(ofSize: PanelType.title, weight: .medium)
 
     init(store: MetricStore, services: AppServices, settings: AppSettings, tab: PanelTab) {
         self.services = services
@@ -146,7 +146,7 @@ final class OverviewCardDrawView: LiveDrawView {
         let (first, second, series) = lines(latest)
         Self.draw(Self.text(tab.title, Self.title, .secondaryLabelColor), x: 0, y: 2)
         Self.draw(Self.text(first, Self.primary), x: Self.valueX, y: 0)
-        Self.draw(Self.text(second, Self.caption2Digits, .secondaryLabelColor), x: Self.valueX, y: 22)
+        Self.draw(Self.text(second, Self.caption2Digits, .secondaryLabelColor), x: Self.valueX, y: 23)
         let rect = NSRect(x: bounds.width - Self.sparklineWidth, y: 4, width: Self.sparklineWidth, height: bounds.height - 8)
         drawSparklines(series, in: rect)
         setAccessibilityLabel("\(tab.title) \(first) \(second)")

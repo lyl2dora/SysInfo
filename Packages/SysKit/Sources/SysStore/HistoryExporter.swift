@@ -230,10 +230,17 @@ public enum HistoryExporter {
             lines.append(
                 [
                     iso(span.start), span.end.map(iso) ?? "", span.endEstimated ? "1" : "0", csvField(span.appKey),
-                    csvField(span.appName), csvField(span.type), csvField(span.name), csvField(span.holder),
+                    csvField(span.appName), csvField(span.type), csvField(redactingUUIDs(span.name)), csvField(span.holder),
                 ].joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// 断言名里可能带扩展实例的 UUID（如小组件的 `config:`、`uuid:`），导出时替换为 `<uuid>`。
+    /// 它们不是设备标识，但导出承诺不带任何 UUID 形态的标识（K34）。
+    static func redactingUUIDs(_ text: String) -> String {
+        text.replacing(
+            /[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/, with: "<uuid>")
     }
 
     typealias EnergyHour = (hour: Int64, source: Int64, joules: Double, covered: Double)
@@ -319,7 +326,7 @@ public enum HistoryExporter {
         for span in assertions {
             let line = AssertionLine(
                 start: iso(span.start), end: span.end.map(iso), end_estimated: span.endEstimated, key: span.appKey,
-                name: span.appName, assertion_type: span.type, assertion_name: span.name, holder: span.holder)
+                name: span.appName, assertion_type: span.type, assertion_name: redactingUUIDs(span.name), holder: span.holder)
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
         }
         return lines.joined(separator: "\n") + "\n"

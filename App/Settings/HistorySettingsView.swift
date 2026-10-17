@@ -90,6 +90,18 @@ struct HistorySettingsView: View {
                         Button("设置…") { openPage(.gpu) }
                     }
                 }
+                LabeledContent("网络") {
+                    HStack {
+                        Text(settings.historyNetworkEnabled ? "记录" : "不记录")
+                        Button("设置…") { openPage(.network) }
+                    }
+                }
+                LabeledContent("应用活动") {
+                    HStack {
+                        Text(settings.historyAppsEnabled ? "记录" : "不记录")
+                        Button("设置…") { openPage(.appActivity) }
+                    }
+                }
             } header: {
                 Text("记录")
             } footer: {
@@ -158,13 +170,8 @@ struct HistorySettingsView: View {
 
     /// 只读：CPU 模块当前记录了哪些（D41）。
     private var recordingSummary: String {
-        guard settings.historyCPUEnabled || settings.historyAppsEnabled else { return String(localized: "不记录") }
-        var parts: [String] = []
-        if settings.historyCPUEnabled {
-            parts.append(settings.historyHighPrecision ? String(localized: "整机（高精度）") : String(localized: "整机"))
-        }
-        if settings.historyAppsEnabled { parts.append(String(localized: "每应用")) }
-        return parts.joined(separator: String(localized: "、"))
+        guard settings.historyCPUEnabled else { return String(localized: "不记录") }
+        return settings.historyHighPrecision ? String(localized: "记录（高精度）") : String(localized: "记录")
     }
 
     private func reload() async {
@@ -179,7 +186,9 @@ struct HistorySettingsView: View {
 
     private func export() {
         guard let history else { return }
-        let stamp = Date().formatted(.iso8601.year().month().day()).replacingOccurrences(of: "-", with: "")
+        // 文件名按本地日期（ISO8601FormatStyle 默认 UTC，东八区零点到八点会写成前一天）。
+        let stamp = Date().formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
+            .replacingOccurrences(of: "-", with: "")
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = format == .csv ? "SysInfo-History-\(stamp)" : "SysInfo-History-\(stamp).jsonl"
