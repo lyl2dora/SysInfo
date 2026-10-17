@@ -24,6 +24,8 @@ final class AppActivityModel {
         didSet { if sortOrder != oldValue { refreshRows() } }
     }
     var selection: AppActivityRow.ID?
+    /// 递增时表格滚回顶部。
+    private(set) var scrollToTopToken = 0
 
     /// 筛选、搜索、排序后的行，以及各分类的行数。只在数据或条件变化时重算一次（窗口每次重绘不重算）。
     private(set) var visibleRows: [AppActivityRow] = []
@@ -276,10 +278,12 @@ final class AppActivityModel {
         return allRows.first { $0.id == selection }
     }
 
-    /// 按某一列降序（Top N 的「查看全部」、总览卡片进入时）。
+    /// 按某一列降序（Top N 的「查看全部」、总览卡片进入时）：清掉选中、回到顶部，让排在最前的几项可见。
     func sort(by column: AppActivityColumn) {
         guard let comparator = column.comparator else { return }
         sortOrder = [comparator]
+        selection = nil
+        scrollToTopToken += 1
     }
 
     /// 历史时段的应用合计能耗，J（只计已知部分）；一行都不知道时为 nil。

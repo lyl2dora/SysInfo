@@ -152,3 +152,6 @@ D65 MG5 规定总览「只用常驻采集器，不扫 Top N」，而这张卡片
 - **schema 3 之前的每应用行**：新列为空。内存峰值显示「—」，GPU、ANE、磁盘、唤醒按 0 计。
 - **历史库能耗的显示**：分钟里 CPU 能耗为空（槽位核对未通过）时，按应用汇总只计已知分钟，标「*」；小于 1 Wh 的能耗用 mWh 显示。
 - **启动参数**：`--open-app-activity[=<时间段>]`、`--app-activity-select=<n>`（截图自查用）。measure 脚本加 `appactivity` 档。
+- **runningboardd 的启动记账不算阻止睡眠**（2026-10-17 点击验收时发现）：每个 app 启动、退出时，runningboardd 都会代它持有一个 2–3 s 的 `PreventUserIdleSystemSleep`（名字形如 `app<application.…>…:FBApplicationProcess`），任何 app 都有，混进来只是噪音。读取时滤掉；Debug 历史库里修复前记下的 8 段已删除。
+- **右键菜单打开期间暂停表格刷新**，关闭后补一次；**从入口带着排序列打开窗口时清掉选中、回到顶部**（否则停在上次选中的行附近，最大的几项不可见）。
+

@@ -202,11 +202,19 @@ public final class PowerAssertionCollector: Collector {
         return out
     }
 
-    /// 合并：按「归属 pid + 类型 + 名字」合并计数，开始时刻取最早；滤掉本进程的自检断言。按归属 pid、类型、名字排序。
+    /// runningboardd 在每个 app 启动、退出时代它持有的 2–3 s 断言（名字形如 `app<application.…>…:FBApplicationProcess`）：
+    /// 是进程生命周期的记账，任何 app 都有，不算「谁在阻止睡眠」（2026-10-17 点击验收时发现）。
+    static func isLaunchBookkeeping(_ item: RawAssertion) -> Bool {
+        item.processName == "runningboardd" && item.name.hasSuffix(":FBApplicationProcess")
+    }
+
+    /// 合并：按「归属 pid + 类型 + 名字」合并计数，开始时刻取最早；滤掉本进程的自检断言与 runningboardd 的启动记账。
+    /// 按归属 pid、类型、名字排序。
     static func merge(_ raw: [RawAssertion], ownPID: Int32) -> [PowerAssertion] {
         var merged: [String: PowerAssertion] = [:]
         for item in raw {
             if item.pid == ownPID, item.name == selfTestAssertionName { continue }
+            if isLaunchBookkeeping(item) { continue }
             let assertion = PowerAssertion(
                 pid: item.onBehalfOf ?? item.pid, holderPID: item.pid, holderName: item.processName, type: item.type,
                 name: item.name, count: 1, since: item.start)

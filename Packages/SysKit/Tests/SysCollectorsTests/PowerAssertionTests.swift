@@ -43,6 +43,15 @@ import SysModel
         #expect(merged[0].kind == .preventDisplaySleep)
     }
 
+    @Test func dropsRunningboardLaunchBookkeeping() {
+        let merged = PowerAssertionCollector.merge(
+            [
+                raw(652, "PreventUserIdleSystemSleep", "app<application.zone.lyl.sysinfo.dev.1.2(501)>652-1191-381351:FBApplicationProcess", behalf: 900, process: "runningboardd"),
+                raw(652, "PreventUserIdleSystemSleep", "other", process: "runningboardd"),
+            ], ownPID: 1)
+        #expect(merged.map(\.name) == ["other"])
+    }
+
     @Test func parsesIOPMDictionary() {
         let item: NSDictionary = [
             "AssertType": "NoIdleSleepAssertion", "AssertionTrueType": "PreventUserIdleSystemSleep", "AssertName": "Electron",

@@ -95,7 +95,9 @@ struct AppActivityView: View {
     private var isNow: Bool { model.range == .now }
 
     private var table: some View {
-        AppActivityTable(rows: model.visibleRows, isNow: isNow, selection: $model.selection, sortOrder: $model.sortOrder)
+        AppActivityTable(
+            rows: model.visibleRows, isNow: isNow, selection: $model.selection, sortOrder: $model.sortOrder,
+            scrollToTopToken: model.scrollToTopToken)
     }
 
     // MARK: - 底部合计

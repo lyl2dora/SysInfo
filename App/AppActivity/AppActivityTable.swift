@@ -18,6 +18,8 @@ struct AppActivityTable: NSViewRepresentable {
     let isNow: Bool
     @Binding var selection: AppActivityRow.ID?
     @Binding var sortOrder: [KeyPathComparator<AppActivityRow>]
+    /// 变化时滚回顶部（从入口带着排序列打开窗口时）。
+    var scrollToTopToken = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -73,6 +75,11 @@ struct AppActivityTable: NSViewRepresentable {
         private var isNow: Bool?
         /// 程序改选中时不回写绑定。
         private var applyingSelection = false
+        /// 行的右键菜单开着：暂停刷新，免得被右键的那一行在菜单打开期间被改写成别的应用（关闭后补一次）。
+        private var rowMenuOpen = false
+        private var pendingApply = false
+        /// 上次处理过的「回到顶部」请求号。
+        private var scrollToken = 0
 
         init(_ parent: AppActivityTable) {
             self.parent = parent
@@ -80,6 +87,10 @@ struct AppActivityTable: NSViewRepresentable {
 
         func apply() {
             guard let table else { return }
+            if rowMenuOpen {
+                pendingApply = true
+                return
+            }
             if isNow != parent.isNow {
                 isNow = parent.isNow
                 for column in table.tableColumns {
@@ -117,6 +128,24 @@ struct AppActivityTable: NSViewRepresentable {
                 table.deselectAll(nil)
             }
             applyingSelection = false
+            if parent.scrollToTopToken != scrollToken {
+                scrollToken = parent.scrollToTopToken
+                table.scrollRowToVisible(0)
+            }
+        }
+
+        func menuWillOpen(_ menu: NSMenu) {
+            if menu === table?.menu { rowMenuOpen = true }
+        }
+
+        func menuDidClose(_ menu: NSMenu) {
+            guard menu === table?.menu else { return }
+            rowMenuOpen = false
+            if pendingApply {
+                pendingApply = false
+                // 菜单动作在关闭之后才执行：下一轮再补刷新，避免和动作抢主线程。
+                DispatchQueue.main.async { [weak self] in self?.apply() }
+            }
         }
 
         private func syncSortIndicator(_ table: NSTableView) {
@@ -161,6 +190,8 @@ struct AppActivityTable: NSViewRepresentable {
             field.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             field.alignment = .right
             field.lineBreakMode = .byTruncatingTail
+            field.usesSingleLineMode = true
+            field.maximumNumberOfLines = 1
             field.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(field)
             cell.textField = field
@@ -184,6 +215,8 @@ struct AppActivityTable: NSViewRepresentable {
                 image.translatesAutoresizingMaskIntoConstraints = false
                 let field = NSTextField(labelWithString: "")
                 field.lineBreakMode = .byTruncatingTail
+                field.usesSingleLineMode = true
+                field.maximumNumberOfLines = 1
                 field.translatesAutoresizingMaskIntoConstraints = false
                 field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
                 cell.addSubview(image)
@@ -208,7 +241,7 @@ struct AppActivityTable: NSViewRepresentable {
             let text = NSMutableAttributedString(string: item.name, attributes: [.foregroundColor: NSColor.labelColor])
             let secondary: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.tertiaryLabelColor]
             if let count = item.memberCount, count > 1 { text.append(NSAttributedString(string: " ×\(count)", attributes: secondary)) }
-            if let member = item.topMemberName {
+            if let member = item.topMemberName, member != item.name {
                 text.append(NSAttributedString(string: "  \(member)", attributes: [.foregroundColor: NSColor.secondaryLabelColor]))
             }
             if cell.textField?.attributedStringValue != text { cell.textField?.attributedStringValue = text }
