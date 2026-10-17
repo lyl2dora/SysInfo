@@ -31,7 +31,7 @@ struct AppActivitySettingsView: View {
                             .tag(seconds)
                     }
                 }
-                Text("只在窗口可见时扫描全部应用；关闭、最小化或被完全遮住时停止，开销为 0。窗口第一次打开时要解析全部应用的名字，多花约 5–10 毫秒。开销按单核计。")
+                Text("右边的数是扫描本身。窗口打开在「现在」、每 2 秒刷新时，连同表格刷新整个 SysInfo 约 2.2% 单核（M5 Pro 与 M4 Pro 实测，与 CPU 面板打开时相当）。只在窗口可见时扫描；关闭、最小化或被完全遮住时停止，开销为 0。窗口第一次打开时要解析全部应用的名字，多花约 5–10 毫秒。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
