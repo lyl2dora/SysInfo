@@ -4,7 +4,7 @@
 //   （按功率排序，D70）、启动参数 `--open-app-activity[=<时间段>]`；
 // - 窗口打开期间与设置窗口共用 `.regular` 计数（ForegroundWindows）；
 // - 采样只在窗口可见时：关闭、最小化、被完全遮住（occlusionState 不含 visible）时注销需求（D67）；
-// - 位置与大小按 autosave 名记住；关闭后保留窗口对象，再次打开不重新冷解析身份（构建器缓存在模型里）。
+// - 位置与大小按 autosave 名记住（`--factory-defaults` 时不记）；关闭后保留窗口对象，再次打开不重新冷解析身份（构建器缓存在模型里）。
 
 import AppKit
 import OSLog
@@ -52,8 +52,13 @@ final class AppActivityWindowController: NSObject, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 760, height: 400)
         window.toolbarStyle = .unified
         window.delegate = self
-        if !window.setFrameUsingName("AppActivity") { window.center() }
-        window.setFrameAutosaveName("AppActivity")
+        // `--factory-defaults` 不读写偏好（测量、对照机截图，D39）：不用 autosave。
+        if LaunchOptions.current.factoryDefaults {
+            window.center()
+        } else {
+            if !window.setFrameUsingName("AppActivity") { window.center() }
+            window.setFrameAutosaveName("AppActivity")
+        }
         return window
     }
 

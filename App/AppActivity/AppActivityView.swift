@@ -1,7 +1,7 @@
 // 应用活动窗口的内容（D67，合并模式设计 §6）。
 //
 // - 工具栏：时间段（现在 / 1 小时 / 今天 / 7 天 / 30 天）与搜索；侧栏：分类；
-// - 表格：多列可排序，列可隐藏、可拖动顺序（记在设置里）。同一组列在「现在」档显示速率，在历史时段显示总量；
+// - 表格（AppActivityTable，AppKit）：多列可排序，列可隐藏、可拖动顺序。同一组列在「现在」档显示速率，在历史时段显示总量；
 // - 底部：「现在」档为应用合计功率与 SoC 功率（不给百分比，D67 AA2），历史时段为应用合计能耗；
 // - 右侧 inspector：选中应用的详情（「现在」档复用面板的应用详情组件，另加最近 1 小时曲线；历史时段为总量、曲线与断言区间）。
 
@@ -17,7 +17,6 @@ struct AppActivityView: View {
     let services: AppServices
     let settings: AppSettings
 
-    @State private var columns = TableColumnCustomization<AppActivityRow>()
     @State private var showsInspector = true
 
     var body: some View {
@@ -56,8 +55,6 @@ struct AppActivityView: View {
         }
         .navigationTitle(Text("应用活动"))
         .navigationSubtitle(Text(subtitle))
-        .onAppear { loadColumns() }
-        .onChange(of: columns) { saveColumns() }
         .onChange(of: model.selection) { model.updateDetail() }
     }
 
@@ -73,7 +70,7 @@ struct AppActivityView: View {
             Section("分类") {
                 ForEach(AppActivityCategory.allCases, id: \.self) { category in
                     Label(category.title, systemImage: category.symbol)
-                        .badge(model.allRows.filter { $0.matches(category) }.count)
+                        .badge(model.categoryCounts[category] ?? 0)
                         .tag(category)
                 }
             }
@@ -98,146 +95,35 @@ struct AppActivityView: View {
     private var isNow: Bool { model.range == .now }
 
     private var table: some View {
-        ScrollViewReader { proxy in
-            Table(of: AppActivityRow.self, selection: $model.selection, sortOrder: $model.sortOrder, columnCustomization: $columns) {
-                Group {
-                TableColumn("名称", value: \AppActivityRow.name) { row in
-                    AppNameCell(row: row)
-                }
-                .width(min: 180, ideal: 240)
-                .customizationID("name")
-                .disabledCustomizationBehavior(.visibility)
-
-                TableColumn(isNow ? "CPU" : "CPU 时间", value: \AppActivityRow.sortCPU) { row in
-                    Cell(isNow ? row.cpu.map { PercentFormat.string(fromRatio: $0) } : row.cpuTimeNanos.map(Self.duration))
-                }
-                .width(min: 56, ideal: 80)
-                .customizationID("cpu")
-
-                TableColumn("累计 CPU 时间", value: \AppActivityRow.sortCPUTime) { row in
-                    Cell(isNow ? row.cpuTimeNanos.map(Self.duration) : nil)
-                }
-                .width(min: 70, ideal: 84)
-                .customizationID("cpuTime")
-                .defaultVisibility(.hidden)
-
-                TableColumn(isNow ? "功率" : "能耗", value: \AppActivityRow.sortPower) { row in
-                    Cell(
-                        isNow ? row.watts.map(Formatting.watts) : row.energyJoules.map { Formatting.appEnergy($0) + (row.energyPartial ? "*" : "") })
-                        .help(row.energyPartial ? String(localized: "* 部分分钟的能耗未知（槽位核对未通过），只计已知部分") : "")
-                }
-                .width(min: 60, ideal: 70)
-                .customizationID("power")
-
-                TableColumn(isNow ? "内存" : "内存峰值", value: \AppActivityRow.sortMemory) { row in
-                    Cell(row.footprint.flatMap { $0 > 0 ? Formatting.memory(Double($0)) : nil })
-                }
-                .width(min: 70, ideal: 80)
-                .customizationID("memory")
-                }
-                Group {
-
-                TableColumn(isNow ? "GPU" : "GPU 时间", value: \AppActivityRow.sortGPU) { row in
-                    Cell(
-                        isNow
-                            ? row.gpuShare.map { PercentFormat.string(fromRatio: min($0, 1)) }
-                            : row.gpuTimeNanos.flatMap { $0 > 0 ? Self.duration($0) : "0" })
-                }
-                .width(min: 56, ideal: 64)
-                .customizationID("gpu")
-
-                TableColumn(isNow ? "ANE（估算）" : "ANE 能耗", value: \AppActivityRow.sortANE) { row in
-                    Cell(isNow ? row.aneWatts.map(Formatting.watts) : row.aneJoules.map(Formatting.appEnergy))
-                }
-                .width(min: 64, ideal: 76)
-                .customizationID("ane")
-
-                TableColumn(isNow ? "读" : "读取量", value: \AppActivityRow.sortDiskRead) { row in
-                    Cell(row.diskRead.map { isNow ? Formatting.diskRate($0) : Formatting.diskBytes($0) })
-                }
-                .width(min: 64, ideal: 76)
-                .customizationID("diskRead")
-
-                TableColumn(isNow ? "写" : "写入量", value: \AppActivityRow.sortDiskWrite) { row in
-                    Cell(row.diskWrite.map { isNow ? Formatting.diskRate($0) : Formatting.diskBytes($0) })
-                }
-                .width(min: 64, ideal: 76)
-                .customizationID("diskWrite")
-
-                TableColumn(isNow ? "唤醒" : "唤醒次数", value: \AppActivityRow.sortWakeups) { row in
-                    Cell(row.wakeups.map { isNow ? Formatting.rate($0) : Formatting.count($0) })
-                }
-                .width(min: 56, ideal: 64)
-                .customizationID("wakeups")
-
-                TableColumn("阻止睡眠", value: \AppActivityRow.sortSleep) { row in
-                    SleepCell(row: row, isNow: isNow)
-                }
-                .width(min: 56, ideal: 72)
-                .customizationID("sleep")
-                }
-                Group {
-
-                TableColumn("P0 占比", value: \AppActivityRow.sortPerfLevel0) { row in
-                    Cell(row.perfLevel0Share.map { PercentFormat.string(fromRatio: $0) })
-                }
-                .width(min: 52, ideal: 60)
-                .customizationID("perfLevel0")
-                .defaultVisibility(.hidden)
-
-                TableColumn("Pageins", value: \AppActivityRow.sortPageins) { row in
-                    Cell(row.pageins.map(Formatting.rate))
-                }
-                .width(min: 52, ideal: 60)
-                .customizationID("pageins")
-                .defaultVisibility(.hidden)
-
-                TableColumn("进程数", value: \AppActivityRow.sortMembers) { row in
-                    Cell(row.memberCount.map(String.init))
-                }
-                .width(min: 44, ideal: 52)
-                .customizationID("members")
-                .defaultVisibility(.hidden)
-
-                TableColumn("活跃分钟", value: \AppActivityRow.sortMinutes) { row in
-                    Cell(row.activeMinutes.map(String.init))
-                }
-                .width(min: 56, ideal: 64)
-                .customizationID("minutes")
-                .defaultVisibility(.hidden)
-                }
-            } rows: {
-                ForEach(model.visibleRows) { row in
-                    TableRow(row).contextMenu { contextMenu(row) }
-                }
-            }
-            .monospacedDigit()
-            .onChange(of: model.live) {
-                // 「现在」档刷新后重新排序，选中的行保持可见（D67 默认做法）。
-                if let selection = model.selection { proxy.scrollTo(selection) }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func contextMenu(_ row: AppActivityRow) -> some View {
-        if let path = row.appPath {
-            Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-        }
-        if isNow, let pid = row.representativePID, row.memberCount == 1,
-            ProcessControl.eligibility(uid: ProcessInfoReader.uid(of: pid), pid: pid).isAllowed
-        {
-            Button("结束…") { ProcessTermination.confirmAndTerminate(pid: pid, name: row.name) }
-        }
-        Button("拷贝名称") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(row.name, forType: .string)
-        }
+        AppActivityTable(rows: model.visibleRows, isNow: isNow, selection: $model.selection, sortOrder: $model.sortOrder)
     }
 
     // MARK: - 底部合计
 
+    /// 底部合计单独成一个视图：它读 MetricStore（每个 tick 都变），不能让整张表跟着重绘。
     private var footer: some View {
+        AppActivityFooter(model: model, store: store, interval: settings.appActivityInterval)
+    }
+
+    /// CPU / GPU 时间：「1:02:03」或「12.3 s」。
+    static func duration(_ nanos: UInt64) -> String {
+        let seconds = Double(nanos) / 1e9
+        guard seconds >= 60 else { return String(format: "%.1f s", seconds) }
+        let s = Int(seconds)
+        return s >= 3600
+            ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+// MARK: - 底部合计
+
+private struct AppActivityFooter: View {
+    let model: AppActivityModel
+    let store: MetricStore
+    let interval: Int
+
+    var body: some View {
+        let isNow = model.range == .now
         HStack(spacing: 6) {
             if isNow {
                 let total = model.live?.totalWatts.map(Formatting.watts) ?? "—"
@@ -259,90 +145,13 @@ struct AppActivityView: View {
             }
             Spacer()
             if isNow {
-                Text("每 \(settings.appActivityInterval) 秒刷新").foregroundStyle(.secondary)
+                Text("每 \(interval) 秒刷新").foregroundStyle(.secondary)
             }
         }
         .font(.callout)
         .monospacedDigit()
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-    }
-
-    // MARK: - 列配置
-
-    private func loadColumns() {
-        guard let data = settings.appActivityColumns,
-            let decoded = try? JSONDecoder().decode(TableColumnCustomization<AppActivityRow>.self, from: data)
-        else { return }
-        columns = decoded
-    }
-
-    private func saveColumns() {
-        settings.appActivityColumns = try? JSONEncoder().encode(columns)
-    }
-
-    /// CPU / GPU 时间：「1:02:03」或「12.3 s」。
-    static func duration(_ nanos: UInt64) -> String {
-        let seconds = Double(nanos) / 1e9
-        guard seconds >= 60 else { return String(format: "%.1f s", seconds) }
-        let s = Int(seconds)
-        return s >= 3600
-            ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
-    }
-}
-
-// MARK: - 单元格
-
-private struct Cell: View {
-    let text: String?
-    init(_ text: String?) { self.text = text }
-
-    var body: some View {
-        Text(text ?? "—")
-            .foregroundStyle(text == nil ? .tertiary : .primary)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-    }
-}
-
-private struct AppNameCell: View {
-    let row: AppActivityRow
-
-    var body: some View {
-        HStack(spacing: 6) {
-            AppIcon(path: row.appPath)
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 3) {
-                    Text(row.name).lineLimit(1)
-                    if let count = row.memberCount, count > 1 {
-                        Text("×\(count)").foregroundStyle(.tertiary)
-                    }
-                }
-                if let member = row.topMemberName {
-                    Text(member).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-        }
-        .help(row.key)
-    }
-}
-
-private struct SleepCell: View {
-    let row: AppActivityRow
-    let isNow: Bool
-
-    var body: some View {
-        let sleeping = row.assertions.filter { $0.kind.preventsSleep }
-        HStack(spacing: 3) {
-            Spacer(minLength: 0)
-            if !sleeping.isEmpty {
-                Image(systemName: sleeping.contains { $0.kind == .preventSleep } ? "moon.zzz.fill" : "display")
-                    .foregroundStyle(.orange)
-            }
-            if !isNow, let seconds = row.sleepPreventionSeconds {
-                Text(Formatting.duration(seconds))
-            }
-        }
-        .help(sleeping.map { "\($0.name)（\($0.type)）" + ($0.isOnBehalf ? String(localized: "，经 \($0.holderName)") : "") }.joined(separator: "\n"))
     }
 }
 

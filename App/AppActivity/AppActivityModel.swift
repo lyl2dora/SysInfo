@@ -18,15 +18,21 @@ final class AppActivityModel {
     var range: AppActivityRange = .now {
         didSet { if range != oldValue { rangeChanged() } }
     }
-    var category: AppActivityCategory = .all
-    var search = ""
-    var sortOrder: [KeyPathComparator<AppActivityRow>] = [KeyPathComparator(\.sortCPU, order: .reverse)]
+    var category: AppActivityCategory = .all { didSet { if category != oldValue { refreshRows() } } }
+    var search = "" { didSet { if search != oldValue { refreshRows() } } }
+    var sortOrder: [KeyPathComparator<AppActivityRow>] = [KeyPathComparator(\.sortCPU, order: .reverse)] {
+        didSet { if sortOrder != oldValue { refreshRows() } }
+    }
     var selection: AppActivityRow.ID?
 
+    /// 筛选、搜索、排序后的行，以及各分类的行数。只在数据或条件变化时重算一次（窗口每次重绘不重算）。
+    private(set) var visibleRows: [AppActivityRow] = []
+    private(set) var categoryCounts: [AppActivityCategory: Int] = [:]
+
     /// 「现在」档的全表与合计。
-    private(set) var live: AppActivitySnapshot?
+    private(set) var live: AppActivitySnapshot? { didSet { refreshRows() } }
     /// 历史时段的行与断言区间。
-    private(set) var historyRows: [AppActivityRow] = []
+    private(set) var historyRows: [AppActivityRow] = [] { didSet { refreshRows() } }
     private(set) var historySpans: [PowerAssertionSpan] = []
     private(set) var historyRangeStart: Date?
     private(set) var isLoadingHistory = false
@@ -225,16 +231,44 @@ final class AppActivityModel {
     /// 当前时间段的全部行（未筛选）。
     var allRows: [AppActivityRow] { range == .now ? live?.rows ?? [] : historyRows }
 
-    /// 筛选、搜索、排序后的行。
-    var visibleRows: [AppActivityRow] {
+    private func refreshRows() {
+        let rows = allRows
+        var counts: [AppActivityCategory: Int] = [:]
+        for category in AppActivityCategory.allCases { counts[category] = rows.reduce(0) { $0 + ($1.matches(category) ? 1 : 0) } }
+        categoryCounts = counts
         let needle = search.trimmingCharacters(in: .whitespaces)
-        let filtered = allRows.filter { row in
+        let filtered = rows.filter { row in
             row.matches(category)
                 && (needle.isEmpty || row.name.localizedCaseInsensitiveContains(needle)
                     || row.key.localizedCaseInsensitiveContains(needle)
                     || (row.topMemberName?.localizedCaseInsensitiveContains(needle) ?? false))
         }
-        return filtered.sorted(using: sortOrder)
+        // 主键按显示精度取整，相同时再按固定的次序排，排序稳定：几百个接近 0 的行不会每次刷新都互换位置。
+        // 表格的行移动是逐行重建视图的（实测占窗口开销的大头），所以也不加动画。
+        // 先取出排序键再排（KeyPathComparator 逐对比较时每次都走泛型 KeyPath，几百行时明显慢）。
+        let sorted: [AppActivityRow]
+        if let first = sortOrder.first, let column = AppActivityColumn.allCases.first(where: { $0.comparator?.keyPath == first.keyPath }),
+            column != .name
+        {
+            let ascending = first.order == .forward
+            // 主键相同时：「现在」档按 coalition id（整数比较，稳定），历史时段按名字。
+            let keyed = filtered.map { (key: column.sortKey($0), tie: $0.coalitionID ?? 0, row: $0) }
+            sorted = keyed.sorted { a, b in
+                if a.key != b.key { return ascending ? a.key < b.key : a.key > b.key }
+                if a.tie != b.tie { return a.tie < b.tie }
+                return a.row.name < b.row.name
+            }.map(\.row)
+        } else {
+            let ascending = sortOrder.first?.order != .reverse
+            sorted = filtered.sorted { a, b in
+                let order = a.name.localizedStandardCompare(b.name)
+                if order != .orderedSame { return ascending ? order == .orderedAscending : order == .orderedDescending }
+                return a.id < b.id
+            }
+        }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { visibleRows = sorted }
     }
 
     var selectedRow: AppActivityRow? {
@@ -283,6 +317,27 @@ enum AppActivityColumn: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 数值排序键（名字列不用）。
+    func sortKey(_ row: AppActivityRow) -> Double {
+        switch self {
+        case .name: 0
+        case .cpu: row.sortCPU
+        case .cpuTime: row.sortCPUTime
+        case .power: row.sortPower
+        case .memory: row.sortMemory
+        case .gpu: row.sortGPU
+        case .ane: row.sortANE
+        case .diskRead: row.sortDiskRead
+        case .diskWrite: row.sortDiskWrite
+        case .wakeups: row.sortWakeups
+        case .sleep: row.sortSleep
+        case .perfLevel0: row.sortPerfLevel0
+        case .pageins: row.sortPageins
+        case .members: row.sortMembers
+        case .minutes: row.sortMinutes
+        }
+    }
+
     /// 降序的比较器。
     var comparator: KeyPathComparator<AppActivityRow>? {
         switch self {
@@ -306,16 +361,20 @@ enum AppActivityColumn: String, CaseIterable, Identifiable {
 }
 
 /// 排序键：可选值按 -1 处理（排在 0 后面），「现在」档与历史时段共用同一列。
+/// 「现在」档的速率按显示精度取整（CPU 0.1%、功率 0.01 W、读写 1 KB/s、唤醒 1 次/s）：显示一样的行由名字决定先后，
+/// 不因为看不见的差别每次刷新换位置。
 nonisolated extension AppActivityRow {
-    var sortCPU: Double { cpu ?? Double(cpuTimeNanos ?? 0) / 1e9 }
+    private static func q(_ value: Double, _ step: Double) -> Double { (value / step).rounded() * step }
+
+    var sortCPU: Double { cpu.map { Self.q($0, 0.001) } ?? Double(cpuTimeNanos ?? 0) / 1e9 }
     var sortCPUTime: Double { Double(cpuTimeNanos ?? 0) }
-    var sortPower: Double { watts ?? energyJoules ?? -1 }
+    var sortPower: Double { watts.map { Self.q($0, 0.01) } ?? energyJoules ?? -1 }
     var sortMemory: Double { Double(footprint ?? 0) }
-    var sortGPU: Double { gpuShare ?? Double(gpuTimeNanos ?? 0) / 1e9 }
-    var sortANE: Double { aneWatts ?? aneJoules ?? 0 }
-    var sortDiskRead: Double { diskRead ?? 0 }
-    var sortDiskWrite: Double { diskWrite ?? 0 }
-    var sortWakeups: Double { wakeups ?? 0 }
+    var sortGPU: Double { gpuShare.map { Self.q($0, 0.001) } ?? Double(gpuTimeNanos ?? 0) / 1e9 }
+    var sortANE: Double { aneWatts.map { Self.q($0, 0.01) } ?? aneJoules ?? 0 }
+    var sortDiskRead: Double { coalitionID != nil ? Self.q(diskRead ?? 0, 1000) : diskRead ?? 0 }
+    var sortDiskWrite: Double { coalitionID != nil ? Self.q(diskWrite ?? 0, 1000) : diskWrite ?? 0 }
+    var sortWakeups: Double { coalitionID != nil ? Self.q(wakeups ?? 0, 1) : wakeups ?? 0 }
     var sortSleep: Double { sleepPreventionSeconds ?? (preventsSleep ? 1 : 0) }
     var sortPerfLevel0: Double { perfLevel0Share ?? -1 }
     var sortPageins: Double { pageins ?? 0 }

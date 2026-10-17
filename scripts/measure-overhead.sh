@@ -13,7 +13,8 @@
 #   gpu：面板打开且在「GPU 与加速器」tab（--panel-tab=gpu，温度 / ANE / 媒体 2 s，coalition 2 s，Top N 5 行，GPU 模块设计 §8）；
 #   network：面板打开且在「网络」tab（--panel-tab=network，速率 1 s，Wi-Fi 卡片 5 s，延迟出厂关，网络模块设计 §7）；
 #   merged：出厂默认的 widget 合并为单个 item（--merged，D65），面板关闭；
-#   overview：合并模式下面板打开且在「总览」（--merged --panel-tab=overview，D65 MG5）。
+#   overview：合并模式下面板打开且在「总览」（--merged --panel-tab=overview，D65 MG5）；
+#   appactivity：应用活动窗口打开在「现在」（--open-app-activity，全表每 2 s，D67；不属于出厂默认，只记录）。
 # 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D40：用 sysinfo-cli rusage 读 app 的按档计数，把其他档的指令
 # 折算成最快档的等效时间（按单核的比例）；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
@@ -231,6 +232,7 @@ for tier in ${TIERS}; do
         network) measure network --factory-defaults --open-panel --pin-panel --panel-tab=network ;;
         merged) measure merged --factory-defaults --merged ;;
         overview) measure overview --factory-defaults --merged --open-panel --pin-panel --panel-tab=overview ;;
+        appactivity) measure appactivity --factory-defaults --open-app-activity ;;
         *) echo "未知档位：${tier}" >&2; exit 64 ;;
     esac
 done
@@ -280,6 +282,7 @@ fi
             network) name="面板打开（网络 tab，速率 1 s，Wi-Fi 5 s，延迟关）" ;;
             merged) name="出厂默认，合并为单个 item（D65）" ;;
             overview) name="合并模式，面板打开在总览（D65）" ;;
+            appactivity) name="应用活动窗口打开在「现在」（全表 2 s，D67）" ;;
             *) name="${label}" ;;
         esac
         echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
