@@ -42,7 +42,24 @@
 - 两台的差异是协议头的计数口径，不是误差。界面显示的是**接口字节**（含协议头），不是应用载荷。
 - 没测到 10 GbE 线速：两台机器不在同一网段，中间链路只有约 560 Mbps。
 
-### 1.3 读取开销（线程 CPU，中位数；M5 / M4）
+### 1.3 VPN：代理软件的增强模式（TUN）开启后（M5，2026-10-17 用户开启）
+
+- 路由与配置：默认路由、SCDynamicStore 的 `PrimaryInterface` 都变成 **utun9**（`PrimaryService` 是代理软件的 VPN 服务，`Router` 198.18.0.1）；DNS 变成 198.18.0.2（假 IP，域名都解析到 198.18.x）；系统 HTTP / HTTPS / SOCKS 代理同时指向 127.0.0.1。私有网段走 `ExcludedRoutes` 直连 en0（发往 M4 的路由仍是 en0）。
+- 计数对账（从国内镜像下载 2 306 457 582 字节，15 s，约 154 MB/s ≈ 1.2 Gbps）：
+
+| 计数 | 入向字节 | 相对载荷 |
+|---|---|---|
+| utun9 | 2 344.28 MB | +1.6%（隧道内只有 IP 头） |
+| en0 | 2 420.28 MB | +4.9%（线上实际流量，同 §1.2） |
+| 全部非回环接口合计 | 4 764.70 MB | **约 2 倍**（同一份数据在 utun9 和 en0 上各计一次） |
+
+- 结论：
+  - 开了 TUN 型 VPN 后，**en0 才是真实的线上流量**；utun 只是隧道内层，而且走系统代理（127.0.0.1 → 代理软件 → en0）的流量根本不经过 utun，utun 会低估。所以「主接口」应当是隧道下面的物理接口，不是 `PrimaryInterface`。
+  - 找下层物理接口：`Setup:/Network/Global/IPv4` 的 `ServiceOrder` 里第一个有 `State:/Network/Service/<id>/IPv4`、且 `InterfaceName` 不是隧道的服务（实测为 en0 的以太网服务）。全部是公开的 SCDynamicStore 键，随变更通知更新。
+  - 判定「VPN 中」：`PrimaryService` 有 `State:/Network/Service/<id>/VPN` 子键，或者 `PrimaryInterface` 是 utun / ipsec / ppp。不能靠「有带地址的 utun」（§1.1：代理软件未开时 utun8/9/10 也有全局 IPv6）。
+  - 顺带验证了 1.2 Gbps 下 64 位计数正常。
+
+### 1.4 读取开销（线程 CPU，中位数；M5 / M4）
 
 | 项 | M5 | M4 | 用在哪 |
 |---|---|---|---|
@@ -58,7 +75,7 @@
 
 按 1 s 读一个缓存 index 的接口估算：网速 widget 常驻约 **0.01% 单核**；面板打开、每秒读全部接口约 0.03%。
 
-### 1.4 K47：ICMP 与本地网络授权
+### 1.5 K47：ICMP 与本地网络授权
 
 | 发往 | 结果 |
 |---|---|
@@ -74,8 +91,8 @@
 ## 2. 跨机型差异与未验证项
 
 - 只有两台台式机，都是有线 10 GbE 为主、Wi-Fi 同时在线。没测笔记本（只有 Wi-Fi，`IOBuiltin` 和主接口切换会更频繁）、USB / 雷电以太网转接器、启用中的 Thunderbolt Bridge（D20）。
-- **VPN 没测**：M5 装了代理软件，但测试时没开。开启代理软件的增强模式（TUN）或其他全局 VPN 后，默认路由会变成 utun，内层流量计在 utun 上，外层（加密后）计在 en0 上。「主接口」该跟哪一个，见 N1；需要你在验收时开一次代理软件复核（我不改网络设置）。
-- 计数器只验证到约 560 Mbps；10 GbE 线速下 64 位计数不会出问题，但没实测。
+- VPN 只测了代理软件的增强模式（§1.3）。只开系统代理、不开 TUN 时，主接口不变，无需特殊处理；IKEv2 / WireGuard 等系统 VPN 没测，按同一规则（`PrimaryService` 带 VPN 子键）处理。M4 没装代理软件。
+- 计数器验证到约 1.2 Gbps（§1.3）；10 GbE 线速没实测。
 - CoreWLAN 事件（`CWEventDelegate`）能注册，事件是否投递仍未测。
 - 本模块用到的都是公开接口（IFMIB sysctl、IOKit 网络属性、SystemConfiguration、CoreWLAN、ICMP DGRAM socket），**不需要私有层**。`SIOCGIFLINKPARAMS` 不在公开头文件里，不用；链路速率用 IOKit。
 
@@ -83,7 +100,7 @@
 
 ### N1 显示哪些接口，「主接口」是谁
 - **A（推荐）**：
-  - 主接口 = 默认路由所在的接口（SCDynamicStore `State:/Network/Global/IPv4` 的 `PrimaryInterface`，IPv4 没有时看 IPv6），收到变更通知时更新，不轮询。默认路由是隧道（utun / ipsec / ppp）时，主接口改为隧道下面的物理接口，并在面板标「VPN」，隧道本身作为一行显示在接口列表里。（下层物理接口怎么找，等代理软件实测后在设计里定。）
+  - 主接口 = 默认路由所在的接口（SCDynamicStore `State:/Network/Global/IPv4` 的 `PrimaryInterface`，IPv4 没有时看 IPv6），收到变更通知时更新，不轮询。默认路由是隧道（utun / ipsec / ppp）时，主接口改为隧道下面的物理接口（`ServiceOrder` 中第一个有 IPv4 状态的非隧道服务，§1.3），并在面板标「VPN」；隧道本身作为一行显示在接口列表里，注明「隧道内层，经系统代理的流量不计在这里」。
   - 面板列出**活跃的物理接口**：有 IOKit 背后的控制器、不是 `IOUserEthernet` / `AppleUSBDeviceNCM`、且链路 active 或有地址。Thunderbolt Bridge 以 bridge0 一行出现，成员端口不单列。
   - 虚拟接口（utun、vmenet、虚拟机 bridge、awdl、llw）默认折叠成「虚拟接口」一组，可以展开。
   - 任何地方都**不把所有接口加起来**（虚拟机和 VPN 流量会重复计数）。「物理接口合计」只加物理接口，彼此不重复。
