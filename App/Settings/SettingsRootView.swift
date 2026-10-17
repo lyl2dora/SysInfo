@@ -33,6 +33,7 @@ private struct SettingsSplitView: View {
         HStack(alignment: .top, spacing: 8) {
             SettingsSidebar(selection: $state.selection, compact: state.sidebarCompact)
                 .padding([.leading, .bottom], 8)
+                .zIndex(1)  // 浮出的页名要盖在内容上
             detail(for: state.selection ?? .general)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Form 自带的背景比窗口背景浅：隐藏它，渐隐带才能与底色一致、静止时不显出一条。
@@ -132,11 +133,16 @@ private struct TitlebarFade: View {
     }
 }
 
-/// 设置侧栏：标题栏下方的浮动玻璃面板。展开时图标加名字（180 pt），收起时只留图标（52 pt），名字放进悬停提示。
-/// 用按钮而不是 List：List 行里的 .help 收不到悬停，收起时的提示出不来。
+/// 设置侧栏：标题栏下方的浮动玻璃面板。展开时图标加名字（180 pt），收起时只留图标（52 pt）。
+/// 收起时悬停约 0.35 s，在图标右侧浮出页名。不用系统提示（.help）：AppKit 只在 app 处于前台时显示提示，
+/// 而设置窗口常在 app 未被激活时就在最前（从 Xcode 运行、`--open-settings` 启动，协作式激活不让抢前台）。
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsPage?
     let compact: Bool
+
+    @State private var hovered: SettingsPage?
+    @State private var shown: SettingsPage?
+    @State private var showTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -160,12 +166,15 @@ private struct SettingsSidebar: View {
                         .background {
                             if selected {
                                 RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.18))
+                            } else if compact && hovered == page {
+                                RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.08))
                             }
                         }
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
-                    .help(compact ? page.title : "")
+                    .onHover { inside in hoverChanged(page, inside: inside) }
+                    .anchorPreference(key: HoverAnchorKey.self, value: .bounds) { shown == page ? $0 : nil }
                     .accessibilityLabel(page.title)
                     .accessibilityAddTraits(selected ? .isSelected : [])
                 }
@@ -175,6 +184,59 @@ private struct SettingsSidebar: View {
         .scrollIndicators(.never)
         .frame(width: compact ? 52 : 180)
         .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        // 页名浮在侧栏右侧，盖在内容上方（侧栏在 HStack 里要排在内容之上，见 zIndex）。
+        .overlayPreferenceValue(HoverAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if compact, let anchor, let page = shown {
+                    let rect = proxy[anchor]
+                    // 左缘在面板右边外 10 pt，竖直方向与该行居中。
+                    Text(page.title)
+                        .font(.callout)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .glassEffect(.regular, in: .capsule)
+                        .fixedSize()
+                        .frame(height: rect.height)
+                        .offset(x: proxy.size.width + 10, y: rect.minY)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .onChange(of: compact) { hideHint() }
+    }
+
+    private func hoverChanged(_ page: SettingsPage, inside: Bool) {
+        guard compact else { return }
+        if inside {
+            hovered = page
+            showTask?.cancel()
+            // 已经在显示别的页名时直接换，不再等；第一次悬停等约 0.35 s，划过时不闪。
+            if shown != nil {
+                shown = page
+                return
+            }
+            showTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, hovered == page else { return }
+                shown = page
+            }
+        } else if hovered == page {
+            hideHint()
+        }
+    }
+
+    private func hideHint() {
+        showTask?.cancel()
+        hovered = nil
+        shown = nil
+    }
+}
+
+/// 悬停的那一行在侧栏里的位置（浮出页名用）。
+private struct HoverAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 
