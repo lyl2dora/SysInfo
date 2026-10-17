@@ -8,6 +8,7 @@
 // - memory、memtop、verify memory、verify memtop：内存（Memory.swift）；
 // - storage、smart、disktop、verify storage：存储（Storage.swift）；
 // - gpu、gputop：GPU 与加速器（GPU.swift）；
+// - network：网络（Network.swift）；
 // - history：历史库的统计、导出与实录（History.swift）；
 // - engine：经 SamplingEngine 采样，验证「没有需求时定时器停掉、不再 tick」（M0 验收 5）。
 //
@@ -136,6 +137,15 @@ struct SysInfoCLI {
                         interval: try options.double("--interval", default: 2, range: 0.5...60),
                         rows: try options.int("--rows", default: 10, range: 1...100),
                         grouping: options.flag("--by-process") ? .byProcess : .byApp, json: options.flag("--json")))
+            case "network":
+                let options = try Options(
+                    arguments, flags: ["--json", "--diag", "--wifi", "--addresses"], values: ["--interval", "--count", "--latency"])
+                exit(
+                    runNetwork(
+                        interval: try options.double("--interval", default: 1, range: 0.5...3600),
+                        count: try options.int("--count", default: 3, range: 1...1_000_000), diagnostics: options.flag("--diag"),
+                        wifi: options.flag("--wifi"), latency: options.value("--latency"), addresses: options.flag("--addresses"),
+                        json: options.flag("--json")))
             case "storage":
                 let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count"])
                 exit(
@@ -225,6 +235,10 @@ struct SysInfoCLI {
                                                       --diag 另打印各档驻留、PWRCTRL、节流、PMP 带宽、ANE 中断、Device Utilization %
               gputop [--interval 2] [--count 1] [--rows 10] [--by-process] [--json]
                                                       按 GPU 时间的 Top N（coalition 槽位 8），附 GPU 与 ANE 能耗
+              network [--interval 1] [--count 3] [--diag] [--wifi] [--latency gateway|地址] [--addresses] [--json]
+                                                      网络接口清单（类型、物理判定、链路速率）、主接口与 VPN，逐次打印各接口入 / 出速率；
+                                                      --diag 加原始计数，--wifi 读 CoreWLAN，--latency 每次发一个 ICMP 探测包，
+                                                      --addresses 才打印本机地址、网关与 DNS
               storage [--interval 1] [--count 3] [--json]
                                                       物理盘清单、RAID 组、容量组，以及每盘读写、IOPS、延迟、温度与寿命
               smart [--json]                          每块物理盘的 NVMe SMART 全字段
