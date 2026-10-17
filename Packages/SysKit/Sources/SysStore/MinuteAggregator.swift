@@ -121,7 +121,7 @@ public struct MinuteAggregator: Sendable {
 
     public var isEmpty: Bool { buckets.isEmpty && apps.isEmpty }
 
-    static func minute(of date: Date) -> Int64 {
+    public static func minute(of date: Date) -> Int64 {
         Int64((date.timeIntervalSince1970 / 60).rounded(.down))
     }
 

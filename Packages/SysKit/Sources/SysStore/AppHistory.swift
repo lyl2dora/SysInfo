@@ -145,3 +145,15 @@ extension HistoryStore {
         }
     }
 }
+
+extension AppTotal {
+    /// 换成应用活动表格的一行（历史时段）。`appPath`、`isApp` 由调用方按身份键查（bundle id → 应用位置）。
+    public func row(appPath: String?, isApp: Bool, assertions: [PowerAssertion] = []) -> AppActivityRow {
+        let energy: Double? = energyNanojoules.map { Double($0) / 1e9 }
+        return AppActivityRow(
+            id: key, key: key, name: name, appPath: appPath, isApp: isApp, cpuTimeNanos: UInt64(max(cpuNanos, 0)),
+            diskRead: Double(diskReadBytes), diskWrite: Double(diskWrittenBytes), wakeups: Double(wakeups),
+            footprint: UInt64(max(footprintPeak, 0)), energyJoules: energy, gpuTimeNanos: UInt64(max(gpuNanos, 0)),
+            aneJoules: Double(aneEnergyNanojoules) / 1e9, activeMinutes: minutes, assertions: assertions)
+    }
+}
