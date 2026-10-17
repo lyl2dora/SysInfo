@@ -26,7 +26,12 @@ import Testing
     @Test func loadOrCreateSaltPersistsOnce() throws {
         let suite = "zone.lyl.sysinfo.tests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer {
+            // removePersistentDomain 只清空内容，cfprefsd 会留下空的 plist 文件，一并删掉。
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(
+                at: URL.libraryDirectory.appending(path: "Preferences/\(suite).plist"))
+        }
         let first = DiskIdentity.loadOrCreateSalt(in: defaults)
         let second = DiskIdentity.loadOrCreateSalt(in: defaults)
         #expect(first == second)
