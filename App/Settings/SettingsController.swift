@@ -22,6 +22,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case memory
     case storage
     case gpu
+    case network
     case history
     case privacy
     case diagnostics
@@ -38,6 +39,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .memory: String(localized: "内存")
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
+        case .network: String(localized: "网络")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -54,6 +56,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .memory: "memorychip"
         case .storage: "internaldrive"
         case .gpu: "cpu.fill"
+        case .network: "network"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
@@ -91,6 +94,8 @@ final class SettingsController {
     /// 诊断页的存储读数（读写 2 s、SMART 2 s 读全部盘、容量 10 s，存储模块设计 §6.4）。
     private let storageDemand: DemandSlot
     private let storageCapacityDemand: DemandSlot
+    /// 诊断页的网络读数（原始计数每 2 s，网络模块设计 §7）。
+    private let networkDemand: DemandSlot
 
     private var openSettingsAction: (() -> Void)?
     private weak var window: NSWindow?
@@ -114,6 +119,7 @@ final class SettingsController {
         self.gpuDetailsDemand = DemandSlot(engine: engine)
         self.storageDemand = DemandSlot(engine: engine)
         self.storageCapacityDemand = DemandSlot(engine: engine)
+        self.networkDemand = DemandSlot(engine: engine)
     }
 
     /// 把 Settings 场景挂到 NSApplication 上（启动时调用一次）。
@@ -218,6 +224,8 @@ final class SettingsController {
         storageCapacityDemand.set(
             storageVisible ? Demand(collectors: [StorageCapacityCollector.collectorID], interval: 10, source: .diagnostics) : nil)
         services.storageModel.diagnosticsVisible = storageVisible
+        networkDemand.set(
+            storageVisible ? Demand(collectors: [NetworkIOCollector.collectorID], interval: 2, source: .diagnostics) : nil)
         gpuDemand.set(
             storageVisible
                 ? Demand(

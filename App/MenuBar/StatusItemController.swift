@@ -11,6 +11,7 @@
 //   GPU 活跃与 GPU 功率 → power.gpu（同一个订阅，D57），GPU 温度 → gpu.temperature；
 //   内存的三个 widget → memory.vm（D49）；
 //   存储：盘温 → storage.smart（只读绑定的盘，D55），读写 → storage.io，可用空间 → storage.capacity（60 s）；
+//   网络：网速 → network.io，延迟 → network.latency（按延迟设置的间隔，D61）；
 //   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
 // - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）。
 
@@ -54,7 +55,9 @@ final class StatusItemController {
     }
 
     /// 按设置显示或移除各 widget，并同步采样需求与显示配置。`configurations` 里只有要显示的 widget。
-    func update(_ configurations: [StatusItemConfiguration], intervals: (MenuModule) -> SamplingInterval) {
+    func update(
+        _ configurations: [StatusItemConfiguration], intervals: (MenuModule) -> SamplingInterval, latencyInterval: Int = 5
+    ) {
         let wanted = Dictionary(uniqueKeysWithValues: configurations.map { ($0.widget, $0) })
         for widget in MenuWidget.allCases {
             if let configuration = wanted[widget] {
@@ -62,7 +65,9 @@ final class StatusItemController {
                 apply(configuration, to: entry)
                 entry.demand.set(
                     Demand(
-                        collectors: [Self.collector(for: widget)], interval: Self.interval(for: widget, moduleInterval: intervals(widget.module)),
+                        collectors: [Self.collector(for: widget)],
+                        interval: Self.interval(
+                            for: widget, moduleInterval: intervals(widget.module), latencyInterval: latencyInterval),
                         source: Self.source(widget)))
             } else {
                 remove(widget)
@@ -83,12 +88,19 @@ final class StatusItemController {
         case .diskTemperature: SMARTCollector.collectorID
         case .diskThroughput: StorageIOCollector.collectorID
         case .diskFree: StorageCapacityCollector.collectorID
+        case .netThroughput: NetworkIOCollector.collectorID
+        case .netLatency: LatencyCollector.collectorID
         }
     }
 
-    /// 采样间隔：可用空间变化慢，固定 60 s（存储模块设计 §4.6）；其余按所属模块的常驻间隔。
-    static func interval(for widget: MenuWidget, moduleInterval: SamplingInterval) -> Int {
-        widget == .diskFree ? 60 : moduleInterval.rawValue
+    /// 采样间隔：可用空间变化慢，固定 60 s（存储模块设计 §4.6）；延迟按延迟设置的发包间隔（D61，不少于 2 s）；
+    /// 其余按所属模块的常驻间隔。
+    static func interval(for widget: MenuWidget, moduleInterval: SamplingInterval, latencyInterval: Int = 5) -> Int {
+        switch widget {
+        case .diskFree: 60
+        case .netLatency: max(latencyInterval, 2)
+        default: moduleInterval.rawValue
+        }
     }
 
     static func source(_ widget: MenuWidget) -> DemandSource {
@@ -183,7 +195,20 @@ extension StatusItemConfiguration {
             coreCount: topology?.logicalCPUCount ?? SystemInfo.maxLogicalCPUCount ?? 8,
             memoryShowsBytes: settings.memoryUsagePresentation == .bytes,
             storageKey: Self.storageKey(widget: widget, settings: settings),
-            storageHottest: widget == .diskTemperature && settings.diskTemperatureTarget == .hottest)
+            storageHottest: widget == .diskTemperature && settings.diskTemperatureTarget == .hottest,
+            networkIn: widget == .netThroughput ? Self.networkMetric(.in, settings: settings) : nil,
+            networkOut: widget == .netThroughput ? Self.networkMetric(.out, settings: settings) : nil,
+            networkBits: settings.networkThroughputBits,
+            latencyMetric: widget == .netLatency ? .networkLatencyRTT(settings.networkLatencyWidgetTarget) : nil)
+    }
+
+    /// 网速 widget 绑定的指标：指定接口时按当前清单判断它是物理还是虚拟接口（D60）。
+    private static func networkMetric(_ direction: MetricID.NetworkDirection, settings: AppSettings) -> MetricID {
+        let target = settings.networkThroughputTarget
+        if case .interface(let name) = target {
+            return target.metric(direction, physical: NetworkInventory.shared.current.interface(name)?.isPhysical ?? true)
+        }
+        return target.metric(direction)
     }
 
     /// 存储 widget 绑定的盘或组（D54）：内置盘、启动组按当前清单解析；其余 widget 为 nil。

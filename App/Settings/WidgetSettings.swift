@@ -14,6 +14,7 @@ struct WidgetSettingsRow: View {
 
     var body: some View {
         let visible = settings.isVisible(widget)
+        let latencyLocked = widget == .netLatency && !settings.latencyEnabled
         Toggle(isOn: Binding(get: { settings.isVisible(widget) }, set: { settings.setVisible(widget, $0) })) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(WidgetInfo.title(widget))
@@ -22,6 +23,7 @@ struct WidgetSettingsRow: View {
                 }
             }
         }
+        .disabled(latencyLocked)
         if visible {
             Group {
                 if widget == .usage {
@@ -33,6 +35,19 @@ struct WidgetSettingsRow: View {
                 }
                 if widget == .diskTemperature || widget == .diskThroughput || widget == .diskFree {
                     StorageTargetPicker(settings: settings, widget: widget)
+                }
+                if widget == .netThroughput {
+                    NetworkTargetPicker(settings: settings, state: NetworkModel.shared.state)
+                    Picker("单位", selection: $settings.networkThroughputBits) {
+                        Text("字节 / 秒（12M）").tag(false)
+                        Text("比特 / 秒（96Mb）").tag(true)
+                    }
+                }
+                if widget == .netLatency {
+                    Picker("目标", selection: $settings.networkLatencyWidgetTarget) {
+                        Text("默认网关").tag(MetricID.LatencyTarget.gateway)
+                        Text("自定义地址（\(settings.latencyHost)）").tag(MetricID.LatencyTarget.custom)
+                    }
                 }
                 if widget == .memoryUsage {
                     Picker("显示", selection: $settings.memoryUsagePresentation) {
@@ -90,6 +105,8 @@ enum WidgetInfo {
         case .diskTemperature: String(localized: "盘温")
         case .diskThroughput: String(localized: "读写速率")
         case .diskFree: String(localized: "可用空间")
+        case .netThroughput: String(localized: "网速")
+        case .netLatency: String(localized: "网络延迟")
         }
     }
 
@@ -101,6 +118,7 @@ enum WidgetInfo {
         case .memory: String(localized: "内存")
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
+        case .network: String(localized: "网络")
         }
     }
 
@@ -142,6 +160,10 @@ enum WidgetInfo {
             return String(localized: "一块物理盘的读写速率，上下两行（R 读、W 写），按 1000 换算。\(CostLabel.text(collector: StorageIOCollector.collectorID, interval: interval, store: store))")
         case .diskFree:
             return String(localized: "一个容量组（APFS 容器或分区）的可用空间，与访达的「可用」一致（不含可清除空间），每分钟更新。")
+        case .netThroughput:
+            return String(localized: "上下两行：↑ 上传、↓ 下载，接口字节（含协议头）。默认跟随主接口，开 VPN 时取它下面的物理接口。\(CostLabel.text(collector: NetworkIOCollector.collectorID, interval: interval, store: store))")
+        case .netLatency:
+            return String(localized: "到所选目标的 ICMP 往返时间。只有在下方开启「延迟」后才可用，按延迟的发包间隔更新。")
         }
     }
 }
@@ -200,6 +222,26 @@ struct StorageTargetPicker: View {
     }
 }
 
+/// 网速 widget 绑定的接口（D60）。选项按当前清单列出物理接口；指定的接口不在了时仍保留，显示「已断开」。
+struct NetworkTargetPicker: View {
+    @Bindable var settings: AppSettings
+    let state: NetworkState
+
+    var body: some View {
+        let current = settings.networkThroughputTarget
+        Picker("接口", selection: $settings.networkThroughputTarget) {
+            Text(state.primaryInterface.map { "主接口（当前 \(NetworkText.interfaceName($0))）" } ?? "主接口").tag(NetworkTarget.primary)
+            Text("全部物理接口合计").tag(NetworkTarget.physical)
+            ForEach(state.physical) { interface in
+                Text(NetworkText.interfaceName(interface)).tag(NetworkTarget.interface(interface.name))
+            }
+            if case .interface(let name) = current, !state.physical.contains(where: { $0.name == name }) {
+                Text(state.interface(name).map(NetworkText.interfaceName) ?? "已断开的接口（\(name)）").tag(current)
+            }
+        }
+    }
+}
+
 /// 开销标注（D19）。
 enum CostLabel {
     /// 参考值：单次采样的线程 CPU 时间，毫秒（偏离记录与 D34 的两台实测，取较大者）。
@@ -217,6 +259,8 @@ enum CostLabel {
         // 存储模块设计 §1.1、D56：每次打开 → 读 → 关闭，一块盘约 0.7–1.0 ms（盘温 widget 只读绑定的盘）；6 块盘的驱动统计约 0.8 ms
         SMARTCollector.collectorID: 1.0,
         StorageIOCollector.collectorID: 0.8,
+        // 网络模块设计 §1.4：IFMIB 每个接口约 0.003 ms，加清单快照与差分（Release 实测见验收记录）
+        NetworkIOCollector.collectorID: 0.2,
     ]
 
     static func text(collector: CollectorID, interval: Int, store: MetricStore) -> String {

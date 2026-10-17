@@ -27,6 +27,13 @@
 // - gpu.interval / gpu.panel.interval / .topNInterval / .topNRows / .grouping / .chartSpan / .chartPower
 //   GPU 与加速器的常驻间隔覆盖与面板设置
 // - history.gpu.enabled   是否记录 GPU 与加速器历史（D57 G9）
+// - menubar.network.<widget>.visible / .color   网络 widget（netThroughput / netLatency，D60：网速出厂开；延迟只在延迟开启时可选）
+// - network.widget.throughput.target / .unit   网速 widget 绑定：primary、physical、if:<BSD 名>；单位 bytes / bits
+// - network.widget.latency.target   延迟 widget 显示哪个目标：gateway / custom
+// - network.interval / network.panel.chartSpan / .showsVirtual / .totalsInterface   网络的常驻间隔覆盖与面板设置
+// - network.latency.enabled / .gateway / .custom / .host / .interval   延迟（D61：默认关；间隔 2 / 5 / 10 s，默认 5）
+// - network.publicIP.service   公网 IP 查询服务地址（D62：默认空，第一次点击时填写）
+// - history.network.enabled   是否记录网络历史（D60 N7）
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
@@ -35,6 +42,7 @@
 
 import Foundation
 import Observation
+import SysCollectors
 import SysModel
 
 /// 采集间隔，取基础 tick（1 s）的整数倍（D19、D25）。
@@ -101,6 +109,20 @@ final class AppSettings {
         static let gpuChartSpan = "gpu.panel.chartSpan"
         static let gpuChartShowsPower = "gpu.panel.chartPower"
         static let historyGPU = "history.gpu.enabled"
+        static let networkInterval = "network.interval"
+        static let networkThroughputTarget = "network.widget.throughput.target"
+        static let networkThroughputUnit = "network.widget.throughput.unit"
+        static let networkLatencyWidgetTarget = "network.widget.latency.target"
+        static let networkChartSpan = "network.panel.chartSpan"
+        static let networkShowsVirtual = "network.panel.showsVirtual"
+        static let networkTotalsInterface = "network.panel.totalsInterface"
+        static let latencyEnabled = "network.latency.enabled"
+        static let latencyGateway = "network.latency.gateway"
+        static let latencyCustom = "network.latency.custom"
+        static let latencyHost = "network.latency.host"
+        static let latencyInterval = "network.latency.interval"
+        static let publicIPService = "network.publicIP.service"
+        static let historyNetwork = "history.network.enabled"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
         static let panelTopNInterval = "cpu.panel.topNInterval"
@@ -157,6 +179,7 @@ final class AppSettings {
         case .frequency: cpuFrequencyItemVisible
         case .temperature: cpuTemperatureItemVisible
         case .power: cpuPowerItemVisible
+        case .netLatency: latencyEnabled && (powerWidgetsVisible[widget] ?? widget.visibleByDefault)
         default: powerWidgetsVisible[widget] ?? widget.visibleByDefault
         }
     }
@@ -450,6 +473,91 @@ final class AppSettings {
         didSet { persist(historyGPUEnabled, Key.historyGPU) }
     }
 
+    // MARK: 网络（D60–D62）
+
+    /// 网络模块的常驻间隔覆盖；nil 表示跟随全局默认（D25）。
+    var networkIntervalOverride: SamplingInterval? {
+        didSet { persist(networkIntervalOverride?.rawValue ?? 0, Key.networkInterval) }
+    }
+
+    /// 网络模块实际使用的常驻间隔。
+    var networkInterval: SamplingInterval { networkIntervalOverride ?? globalInterval }
+
+    /// 网速 widget 绑定的接口（默认主接口，自动跟随）。
+    var networkThroughputTarget: NetworkTarget {
+        didSet { persist(networkThroughputTarget.storageValue, Key.networkThroughputTarget) }
+    }
+
+    /// 网速 widget 用比特 / 秒（默认字节 / 秒，同活动监视器，K24）。
+    var networkThroughputBits: Bool {
+        didSet { persist(networkThroughputBits ? "bits" : "bytes", Key.networkThroughputUnit) }
+    }
+
+    /// 延迟 widget 显示哪个目标。
+    var networkLatencyWidgetTarget: MetricID.LatencyTarget {
+        didSet { persist(networkLatencyWidgetTarget.rawValue, Key.networkLatencyWidgetTarget) }
+    }
+
+    /// 网络图的默认跨度。
+    var networkChartSpan: ChartSpan {
+        didSet { persist(networkChartSpan.rawValue, Key.networkChartSpan) }
+    }
+
+    /// 面板里虚拟接口一组是否展开（记住上次的状态）。
+    var networkShowsVirtual: Bool {
+        didSet { persist(networkShowsVirtual, Key.networkShowsVirtual) }
+    }
+
+    /// 流量统计看哪个接口：nil 为主接口。
+    var networkTotalsInterface: String? {
+        didSet { persist(networkTotalsInterface ?? "", Key.networkTotalsInterface) }
+    }
+
+    /// 延迟（D61：默认关，开启才发 ICMP 包）。
+    var latencyEnabled: Bool {
+        didSet { persist(latencyEnabled, Key.latencyEnabled) }
+    }
+
+    /// 延迟测默认网关（无需本地网络授权）。
+    var latencyGateway: Bool {
+        didSet { persist(latencyGateway, Key.latencyGateway) }
+    }
+
+    /// 延迟测自定义地址。
+    var latencyCustom: Bool {
+        didSet { persist(latencyCustom, Key.latencyCustom) }
+    }
+
+    /// 自定义地址（IP 或主机名；默认 223.5.5.5，D61）。
+    var latencyHost: String {
+        didSet { persist(latencyHost, Key.latencyHost) }
+    }
+
+    /// 发包间隔，秒（2 / 5 / 10，默认 5）。
+    var latencyInterval: Int {
+        didSet { persist(latencyInterval, Key.latencyInterval) }
+    }
+
+    /// 实际要测的目标；延迟关闭时为 nil。
+    var latencyTargets: LatencyCollector.Targets? {
+        guard latencyEnabled else { return nil }
+        let host = latencyHost.trimmingCharacters(in: .whitespaces)
+        let targets = LatencyCollector.Targets(gateway: latencyGateway, custom: latencyCustom && !host.isEmpty ? host : nil)
+        return targets.gateway || targets.custom != nil ? targets : nil
+    }
+
+    /// 公网 IP 查询服务地址（D62：默认空）。
+    var publicIPService: String {
+        didSet { persist(publicIPService, Key.publicIPService) }
+    }
+
+    /// 是否记录网络历史（默认开）。
+    var historyNetworkEnabled: Bool {
+        didSet { persist(historyNetworkEnabled, Key.historyNetwork) }
+    }
+
+    static let latencyIntervals = [2, 5, 10]
+
     /// 某个模块实际使用的常驻间隔。
     func interval(for module: MenuModule) -> SamplingInterval {
         switch module {
@@ -458,6 +566,7 @@ final class AppSettings {
         case .memory: memoryInterval
         case .storage: storageInterval
         case .gpu: gpuInterval
+        case .network: networkInterval
         }
     }
 
@@ -541,6 +650,22 @@ final class AppSettings {
         gpuChartSpan = defaults?.string(forKey: Key.gpuChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
         gpuChartShowsPower = defaults?.object(forKey: Key.gpuChartShowsPower) as? Bool ?? false
         historyGPUEnabled = defaults?.object(forKey: Key.historyGPU) as? Bool ?? true
+        networkIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.networkInterval)) }
+        networkThroughputTarget =
+            defaults?.string(forKey: Key.networkThroughputTarget).flatMap(NetworkTarget.init(storageValue:)) ?? .primary
+        networkThroughputBits = defaults?.string(forKey: Key.networkThroughputUnit) == "bits"
+        networkLatencyWidgetTarget =
+            defaults?.string(forKey: Key.networkLatencyWidgetTarget).flatMap(MetricID.LatencyTarget.init(rawValue:)) ?? .custom
+        networkChartSpan = defaults?.string(forKey: Key.networkChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
+        networkShowsVirtual = defaults?.object(forKey: Key.networkShowsVirtual) as? Bool ?? false
+        networkTotalsInterface = defaults?.string(forKey: Key.networkTotalsInterface).flatMap { $0.isEmpty ? nil : $0 }
+        latencyEnabled = defaults?.object(forKey: Key.latencyEnabled) as? Bool ?? false
+        latencyGateway = defaults?.object(forKey: Key.latencyGateway) as? Bool ?? true
+        latencyCustom = defaults?.object(forKey: Key.latencyCustom) as? Bool ?? true
+        latencyHost = defaults?.string(forKey: Key.latencyHost) ?? "223.5.5.5"
+        latencyInterval = Self.int(defaults, Key.latencyInterval, choices: Self.latencyIntervals) ?? 5
+        publicIPService = defaults?.string(forKey: Key.publicIPService) ?? ""
+        historyNetworkEnabled = defaults?.object(forKey: Key.historyNetwork) as? Bool ?? true
     }
 
     private static func int(_ defaults: UserDefaults?, _ key: String, in range: ClosedRange<Int>) -> Int? {
@@ -591,6 +716,44 @@ enum StorageTarget: Hashable {
             case "group": self = .group(key)
             default: return nil
             }
+        }
+    }
+}
+
+/// 网速 widget 绑定的接口（网络模块设计 §7，D60）。
+enum NetworkTarget: Hashable {
+    /// 主接口，自动跟随（隧道时取下层物理接口）。
+    case primary
+    /// 活跃物理接口合计。
+    case physical
+    /// 指定接口（BSD 名）；不在了时显示「—」。
+    case interface(String)
+
+    var storageValue: String {
+        switch self {
+        case .primary: "primary"
+        case .physical: "physical"
+        case .interface(let name): "if:\(name)"
+        }
+    }
+
+    init?(storageValue: String) {
+        switch storageValue {
+        case "primary": self = .primary
+        case "physical": self = .physical
+        default:
+            guard storageValue.hasPrefix("if:"), storageValue.count > 3 else { return nil }
+            self = .interface(String(storageValue.dropFirst(3)))
+        }
+    }
+
+    /// 入 / 出速率的指标。指定接口时按名字找物理前缀，没有再找虚拟前缀（由调用方按清单决定）。
+    func metric(_ direction: MetricID.NetworkDirection, physical: Bool = true) -> MetricID {
+        switch self {
+        case .primary: .networkPrimary(direction)
+        case .physical: .networkPhysical(direction)
+        case .interface(let name):
+            physical ? .networkInterface(name, direction) : .networkVirtualInterface(name, direction)
         }
     }
 }
@@ -707,6 +870,9 @@ enum MenuWidget: String, CaseIterable, Identifiable {
     case gpuActive
     case gpuPower
     case gpuTemperature
+    // 网络（D60）
+    case netThroughput
+    case netLatency
 
     var id: String { rawValue }
 
@@ -717,6 +883,7 @@ enum MenuWidget: String, CaseIterable, Identifiable {
         case .memoryUsage, .memoryPressure, .swapUsed: .memory
         case .diskTemperature, .diskThroughput, .diskFree: .storage
         case .gpuActive, .gpuPower, .gpuTemperature: .gpu
+        case .netThroughput, .netLatency: .network
         }
     }
 
@@ -725,8 +892,10 @@ enum MenuWidget: String, CaseIterable, Identifiable {
 
     static func widgets(of module: MenuModule) -> [MenuWidget] { allCases.filter { $0.module == module } }
 
-    /// 出厂默认是否显示（D51：CPU 占用、整机功率、内存占用；D54 加盘温）。
-    var visibleByDefault: Bool { self == .usage || self == .systemPower || self == .memoryUsage || self == .diskTemperature }
+    /// 出厂默认是否显示（D51：CPU 占用、整机功率、内存占用；D54 加盘温；D60 加网速）。
+    var visibleByDefault: Bool {
+        self == .usage || self == .systemPower || self == .memoryUsage || self == .diskTemperature || self == .netThroughput
+    }
 }
 
 /// widget 所属的模块：决定常驻采集间隔、点击后预选的面板 tab、设置页的位置。
@@ -736,6 +905,7 @@ enum MenuModule: String, CaseIterable, Identifiable {
     case memory
     case storage
     case gpu
+    case network
 
     var id: String { rawValue }
 }

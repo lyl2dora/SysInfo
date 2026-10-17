@@ -92,6 +92,89 @@ struct GPUCollectors {
     }
 }
 
+/// 引擎里的网络采集器实例（面板读清单与 Wi-Fi 信息，诊断页读原始计数，D60）。
+struct NetworkCollectors {
+    var io: NetworkIOCollector?
+    var wifi: WiFiCollector?
+    var latency: LatencyCollector?
+
+    init(_ collectors: [any Collector]) {
+        io = collectors.compactMap { $0 as? NetworkIOCollector }.first
+        wifi = collectors.compactMap { $0 as? WiFiCollector }.first
+        latency = collectors.compactMap { $0 as? LatencyCollector }.first
+    }
+}
+
+/// 网络的结构状态（网络模块设计 §7）：清单（接口、主接口、VPN、地址）变化时才更新，面板据此决定有几行；
+/// 另负责公网 IP 的按需查询（D62）。
+@Observable
+final class NetworkModel {
+    /// 菜单栏 widget 的绑定要在设置页预览里解析，所以有一个共享实例。
+    static let shared = NetworkModel()
+
+    private(set) var state: NetworkState = .empty
+    /// 结构变了（接口增减、主接口切换）：菜单栏 widget 的绑定要重新解析。
+    @ObservationIgnored var onStructureChange: (() -> Void)?
+
+    /// 公网 IP 查询（D62）：只在点击时发一次请求，结果只显示、不存储。
+    enum PublicIPState: Equatable {
+        case idle
+        case loading
+        case result(String, Date)
+        case failed(String)
+    }
+
+    private(set) var publicIP: PublicIPState = .idle
+
+    func refresh(_ state: NetworkState) {
+        guard state != self.state else { return }
+        let structureChanged =
+            state.interfaces.map { [$0.name, $0.kind.rawValue] } != self.state.interfaces.map { [$0.name, $0.kind.rawValue] }
+            || state.primary != self.state.primary
+        self.state = state
+        if structureChanged { onStructureChange?() }
+    }
+
+    /// 查询公网 IP：GET 服务地址，取响应正文里的第一个 IPv4 / IPv6 地址。
+    func lookUpPublicIP(service: String) {
+        let trimmed = service.trimmingCharacters(in: .whitespaces)
+        guard let url = URL(string: trimmed), url.scheme == "https", url.host != nil else {
+            publicIP = .failed(String(localized: "服务地址需要以 https:// 开头"))
+            return
+        }
+        publicIP = .loading
+        Task { @MainActor [weak self] in
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+            request.setValue("text/plain", forHTTPHeaderField: "Accept")
+            do {
+                let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let body = String(decoding: data.prefix(4096), as: UTF8.self)
+                if (200..<300).contains(status), let address = Self.firstAddress(in: body) {
+                    self?.publicIP = .result(address, Date())
+                } else {
+                    self?.publicIP = .failed(String(localized: "响应里没有 IP 地址（HTTP \(status)）"))
+                }
+            } catch {
+                self?.publicIP = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// 正文里的第一个 IP 地址（纯文本或 JSON 都能取）。
+    static func firstAddress(in body: String) -> String? {
+        let separators = CharacterSet(charactersIn: " \t\r\n\",:{}[]=")
+        for token in body.components(separatedBy: separators) where !token.isEmpty {
+            var v4 = in_addr()
+            var v6 = in6_addr()
+            if inet_pton(AF_INET, token, &v4) == 1 || (token.contains(":") && inet_pton(AF_INET6, token, &v6) == 1) {
+                return token
+            }
+        }
+        return nil
+    }
+}
+
 /// 存储的结构状态（存储模块设计 §6）：物理盘清单与容量组变化时才更新，面板据此决定有几行；
 /// 另负责 widget 绑定的解析与 SMART 焦点盘（D55）。
 @Observable
@@ -404,6 +487,9 @@ final class AppServices {
     /// GPU 与加速器（D57）：采集器与按 GPU 时间的 Top N。
     let gpu: GPUCollectors
     let gpuTopN: TopNModel
+    /// 网络（D60）：采集器与结构状态。
+    let network: NetworkCollectors
+    let networkModel = NetworkModel.shared
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
@@ -411,9 +497,10 @@ final class AppServices {
 
     init(
         collectors: CPUCollectors, power: PowerCollectors, memory: MemoryCollectors, storage: StorageCollectors,
-        gpu: GPUCollectors, history: HistoryRecorder?, engine: SamplingEngine
+        gpu: GPUCollectors, network: NetworkCollectors, history: HistoryRecorder?, engine: SamplingEngine
     ) {
         self.gpu = gpu
+        self.network = network
         self.gpuTopN = TopNModel(sampler: collectors.apps, metric: .gpu)
         self.collectors = collectors
         self.power = power
@@ -441,6 +528,9 @@ final class AppServices {
             memoryTopN.coalitionTick()
             diskTopN.coalitionTick()
             gpuTopN.coalitionTick()
+        }
+        if result.collectors.contains(NetworkIOCollector.collectorID), let io = network.io {
+            networkModel.refresh(io.lastState)
         }
         if !StorageCollectors.ids.isDisjoint(with: result.collectors) {
             storageModel.refresh(

@@ -28,6 +28,13 @@ struct StatusItemConfiguration: Equatable {
     var storageKey: DiskKey?
     /// 盘温 widget 显示所有盘的最高温。
     var storageHottest = false
+    /// 网速 widget 的入 / 出指标（按绑定解析好，D60）。
+    var networkIn: MetricID?
+    var networkOut: MetricID?
+    /// 网速用比特 / 秒。
+    var networkBits = false
+    /// 延迟 widget 的 RTT 指标。
+    var latencyMetric: MetricID?
 }
 
 final class StatusItemView: NSView {
@@ -66,12 +73,24 @@ final class StatusItemView: NSView {
         case .diskTemperature: String(localized: "SSD", comment: "菜单栏小标签：盘温，保持英文缩写")
         case .diskThroughput: String(localized: "DISK", comment: "菜单栏小标签：磁盘读写（读写 widget 实际画 R/W 两行），保持英文缩写")
         case .diskFree: String(localized: "FREE", comment: "菜单栏小标签：可用空间，保持英文缩写")
+        case .netThroughput: String(localized: "NET", comment: "菜单栏小标签：网速（实际画 ↑ / ↓ 两行），保持英文缩写")
+        case .netLatency: String(localized: "PING", comment: "菜单栏小标签：网络延迟，保持英文缩写")
         }
     }
 
     /// 读写 widget 两行前面的字母（同 Stats 的 R / W）。
     private static let readSymbol = String(localized: "R", comment: "菜单栏读写 widget：读，保持英文字母")
     private static let writeSymbol = String(localized: "W", comment: "菜单栏读写 widget：写，保持英文字母")
+    /// 网速 widget 两行前面的箭头：上行出（上传），下行入（下载）。
+    private static let uploadSymbol = "↑"
+    private static let downloadSymbol = "↓"
+
+    /// 两行 widget（读写、网速）各行的符号。
+    private static func rowSymbols(_ widget: MenuWidget) -> (String, String) {
+        widget == .netThroughput ? (uploadSymbol, downloadSymbol) : (readSymbol, writeSymbol)
+    }
+
+    static func isTwoRow(_ widget: MenuWidget) -> Bool { widget == .diskThroughput || widget == .netThroughput }
 
     /// 各 widget 数值的最坏情况，用来定宽。
     private static func widestValue(_ c: StatusItemConfiguration) -> String {
@@ -87,7 +106,28 @@ final class StatusItemView: NSView {
         case .gpuActive: "100%"
         case .diskThroughput: "999M"
         case .diskFree: "99.9T"
+        case .netThroughput: c.networkBits ? "999Mb" : "999M"
+        case .netLatency: "999ms"
         }
+    }
+
+    /// 比特速率的短格式：字节 × 8，单位加 b（「96Mb」「1.2Gb」「800b」），与字节的「12M」区分开。
+    static func bitsShort(_ bytesPerSecond: Double) -> String {
+        let units = ["b", "Kb", "Mb", "Gb", "Tb"]
+        var v = max(bytesPerSecond * 8, 0)
+        var unit = 0
+        while v >= 999.5, unit < units.count - 1 {
+            v /= 1000
+            unit += 1
+        }
+        if unit == 0 { return String(format: "%.0f%@", v, units[0]) }
+        return String(format: v < 9.95 ? "%.1f%@" : "%.0f%@", v, units[unit])
+    }
+
+    /// 延迟：<10 ms 一位小数，否则取整，封顶 999ms。
+    static func millisecondsShort(_ seconds: Double) -> String {
+        let ms = seconds * 1000
+        return ms < 9.95 ? String(format: "%.1fms", ms) : String(format: "%.0fms", min(ms, 999))
     }
 
     /// 十进制的短格式（K24：磁盘按 1000 换算）：<10 一位小数，否则取整；「812G」「1.2T」「340K」「12B」。
@@ -117,7 +157,7 @@ final class StatusItemView: NSView {
     /// 实际生效的样式：非占用 widget 只有上下、左右两种；读写 widget 固定上下两行（同 Stats 的 twoRows）。
     static func effectiveStyle(_ c: StatusItemConfiguration) -> MenuBarCPUStyle {
         guard c.widget != .usage else { return c.style }
-        if c.widget == .diskThroughput { return .stacked }
+        if isTwoRow(c.widget) { return .stacked }
         return c.style == .inline ? .inline : .stacked
     }
 
@@ -127,9 +167,10 @@ final class StatusItemView: NSView {
 
     /// 按样式的最坏情况算好的固定宽度。
     static func fixedWidth(for c: StatusItemConfiguration) -> CGFloat {
-        if c.widget == .diskThroughput {
+        if isTwoRow(c.widget) {
+            let (top, bottom) = rowSymbols(c.widget)
             let symbol = c.showsLabel
-                ? max(textWidth(readSymbol, stackedLabelFont), textWidth(writeSymbol, stackedLabelFont)) + throughputGap : 0
+                ? max(textWidth(top, stackedLabelFont), textWidth(bottom, stackedLabelFont)) + throughputGap : 0
             return ceil(padding + symbol + textWidth(widestValue(c), stackedValueFont) + padding)
         }
         let label = label(c.widget)
@@ -219,8 +260,10 @@ final class StatusItemView: NSView {
             }
             guard let key = configuration.storageKey else { return nil }
             return store.latest[.storageDisk(key, .temp)]?.value.map { String(format: "%.0f°", $0) }
-        case .diskThroughput:
+        case .diskThroughput, .netThroughput:
             return nil  // 两行，另画
+        case .netLatency:
+            return configuration.latencyMetric.flatMap { store.latest[$0]?.value }.map(Self.millisecondsShort)
         case .diskFree:
             guard let key = configuration.storageKey else { return nil }
             return store.latest[.storageGroup(key, .available)]?.value.map(Self.decimalShort)
@@ -230,17 +273,28 @@ final class StatusItemView: NSView {
     /// 读写 widget 两行字母与数值的间距。
     private static let throughputGap: CGFloat = 3
 
-    /// 读写 widget：上 R、下 W，数值右对齐（同 Stats 的 twoRows）。没有数据的一行画「—」。
+    /// 两行 widget：读写为上 R、下 W；网速为上 ↑（出）、下 ↓（入）。数值右对齐（同 Stats 的 twoRows），没有数据的一行画「—」。
     private func drawThroughput(color: NSColor) -> String {
-        let key = configuration.storageKey
-        let read = key.flatMap { store.latest[.storageDisk($0, .read)]?.value }
-        let write = key.flatMap { store.latest[.storageDisk($0, .write)]?.value }
+        let read: Double?
+        let write: Double?
+        let format: (Double) -> String
+        if configuration.widget == .netThroughput {
+            read = configuration.networkOut.flatMap { store.latest[$0]?.value }
+            write = configuration.networkIn.flatMap { store.latest[$0]?.value }
+            format = configuration.networkBits ? Self.bitsShort : Self.decimalShort
+        } else {
+            let key = configuration.storageKey
+            read = key.flatMap { store.latest[.storageDisk($0, .read)]?.value }
+            write = key.flatMap { store.latest[.storageDisk($0, .write)]?.value }
+            format = Self.decimalShort
+        }
+        let (topSymbol, bottomSymbol) = Self.rowSymbols(configuration.widget)
         let font = Self.stackedValueFont
         let cap = font.capHeight
         let gap: CGFloat = 2.5
         let bottomBaseline = floor((bounds.height - cap * 2 - gap) / 2)
         let rows: [(String, Double?, CGFloat)] = [
-            (Self.readSymbol, read, bottomBaseline + cap + gap), (Self.writeSymbol, write, bottomBaseline),
+            (topSymbol, read, bottomBaseline + cap + gap), (bottomSymbol, write, bottomBaseline),
         ]
         for (symbol, value, baseline) in rows {
             if configuration.showsLabel {
@@ -248,20 +302,20 @@ final class StatusItemView: NSView {
                     string: symbol, attributes: [.font: Self.stackedLabelFont, .foregroundColor: NSColor.labelColor])
                 label.draw(at: NSPoint(x: Self.padding, y: baseline + Self.stackedLabelFont.descender))
             }
-            let text = value.map(Self.decimalShort) ?? PercentFormat.placeholder
+            let text = value.map(format) ?? PercentFormat.placeholder
             let attributed = NSAttributedString(
                 string: text, attributes: [.font: font, .foregroundColor: value != nil ? color : NSColor.secondaryLabelColor])
             attributed.draw(
                 at: NSPoint(x: pixelAligned(bounds.width - Self.padding - attributed.size().width), y: baseline + font.descender))
         }
-        return "\(Self.readSymbol) \(read.map(Self.decimalShort) ?? "—") \(Self.writeSymbol) \(write.map(Self.decimalShort) ?? "—")"
+        return "\(topSymbol) \(read.map(format) ?? "—") \(bottomSymbol) \(write.map(format) ?? "—")"
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let widget = configuration.widget
         let label = Self.label(widget)
         let color = configuration.color.nsColor
-        if widget == .diskThroughput {
+        if Self.isTwoRow(widget) {
             setAccessibilityLabel(drawThroughput(color: color))
             return
         }
