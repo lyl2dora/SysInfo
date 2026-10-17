@@ -89,6 +89,8 @@ final class PanelState {
     var isMerged = false
     /// 切换器的顺序（合并模式下有效）。
     var switcherTabs: [PanelTab] = PanelTab.allCases
+    /// 面板高度上限（D66）：锚定时从菜单栏下方到屏幕可用区域底边，浮窗时为可用区域高度；由 PanelController 维护。
+    var maxPanelHeight: CGFloat = 900
     /// 「详情」与「中断来源」一开始是否展开（`--expand-details`）。
     var expandDetailsInitially = false
     /// 二级页（D64）：空为模块主页。换模块、关闭面板时清空。
@@ -104,15 +106,15 @@ struct PanelActions {
     var quit: () -> Void
     /// 合并模式下换模块（切换器、总览卡片，D65）。
     var selectTab: (PanelTab) -> Void
+    /// 推入二级页、返回一层（D64）。经 PanelController 走，量好高度后一次换完（D66）。
+    var navigate: (PanelRoute) -> Void
+    var back: () -> Void
 }
 
 /// 可以成为 key window 的无边框面板：Esc 等键盘事件要送到它这里（non-activating，不会激活 app）。
 final class PanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
-
-    /// 合并模式下换模块时改高的过渡时长（D64 §7.1：约 0.15 s）。
-    override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval { 0.15 }
 }
 
 final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
@@ -287,10 +289,20 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     /// 合并模式下用切换器或 ⌘1–⌘7 换模块（D65 MG4）：面板保持锚定，原地换内容。
     func switchTab(_ tab: PanelTab) {
         guard tab != state.selectedTab || !state.path.isEmpty else { return }
-        state.path = []
-        state.selectedTab = tab
-        animateNextFit = true
         Log.panel.info("切换到 \(tab.rawValue, privacy: .public)")
+        changePage {
+            $0.path = []
+            $0.selectedTab = tab
+        }
+    }
+
+    /// 换页（D66）：改状态、量新内容的高度、改窗口大小，在同一次提交里完成，不加动画、不出现按旧高度绘制的一帧。
+    func changePage(_ change: (PanelState) -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        change(state)
+        fitToContent()
+        CATransaction.commit()
     }
 
     /// 合并模式的结构变了（开关合并、合并顺序）：同步切换器。单 widget 模式下不可能停在总览。
@@ -349,6 +361,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             session.cancel()
         }
         sessionItem = nil
+        requestFit()  // 浮窗的高度上限与锚定时不同（D66）
         Log.panel.info("面板已固定为浮窗")
     }
 
@@ -627,7 +640,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。
             openSettings: { [weak self] in self?.onOpenSettings?() },
             quit: { NSApp.terminate(nil) },
-            selectTab: { [weak self] in self?.switchTab($0) })
+            selectTab: { [weak self] in self?.switchTab($0) },
+            navigate: { [weak self] route in self?.changePage { $0.push(route) } },
+            back: { [weak self] in self?.changePage { $0.pop() } })
         let hosting = NSHostingView(
             rootView: PanelRootView(
                 store: store, state: state, actions: actions, services: services, settings: settings,
@@ -635,6 +650,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 onTabChange: { [weak self] in self?.updateDemands() }))
         // 面板尺寸由 fitToContent 控制，不让 hosting view 平时维护固有尺寸约束（省掉每次更新后的约束求解）。
         hosting.sizingOptions = []
+        updateHeightCap(anchored: presentation != .pinned)
         let size = NSSize(width: Self.width, height: ceil(max(Self.idealHeight(of: hosting), 200)))
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.autoresizingMask = [.width, .height]
@@ -643,8 +659,6 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     }
 
     private var fitScheduled = false
-    /// 下一次改高带过渡（合并模式下换模块，D64 §7.1）；其余改高（展开、行数变化）直接改。
-    private var animateNextFit = false
 
     /// 内容结构变了（展开或收起、Top N 行数变化）：下一轮量一次高度。平时的数值更新不量，
     /// 免得每个 tick 对整个面板做一次理想尺寸测量（2026-10-15 实测是面板开销的大头之一）。
@@ -660,14 +674,15 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         }
     }
 
-    /// 按内容的理想高度改面板高度：锚定时保持顶边，浮窗时也保持顶边（向下长）。
+    /// 按内容的理想高度改面板高度（不加动画，D66）：锚定时顶边固定在菜单栏下方，浮窗时保持顶边（向下长）。
+    /// 理想高度已被面板高度上限截住（PanelRootView 的 maxPanelHeight），超出部分由内容区滚动。
     private func fitToContent() {
         guard let panel, presentation != .hidden, let hosting = glass?.contentView as? NSHostingView<PanelRootView>
         else { return }
+        updateHeightCap()
         let height = ceil(max(Self.idealHeight(of: hosting), 200))
-        let animate = animateNextFit
-        animateNextFit = false
         guard abs(panel.frame.height - height) >= 1 else { return }
+        Log.panel.info("面板改高：\(panel.frame.height, format: .fixed(precision: 0)) → \(height, format: .fixed(precision: 0))（上限 \(self.state.maxPanelHeight, format: .fixed(precision: 0))）")
         var frame = panel.frame
         frame.origin.y += frame.height - height
         frame.size.height = height
@@ -680,7 +695,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 frame.origin.y = min(visible.minY + margin, visible.maxY - margin - frame.height)
             }
         }
-        panel.setFrame(frame, display: true, animate: animate)
+        panel.setFrame(frame, display: true)
     }
 
     /// 量一次内容的理想高度：临时打开固有尺寸，量完关掉（平时不维护，见 installContent）。
@@ -710,9 +725,33 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         var x = anchorFrame.minX
         x = min(x, visible.maxX - size.width - Self.screenMargin)
         x = max(x, visible.minX + Self.screenMargin)
-        var y = min(anchorFrame.minY, visible.maxY) - Self.gap - size.height
-        y = max(y, visible.minY + Self.screenMargin)
-        return NSRect(x: x, y: y, width: size.width, height: size.height)
+        // D66：顶边固定在菜单栏下方，不再上推；高度已被上限截住，万一仍超出就只让底边越界，不盖菜单栏。
+        let top = Self.anchoredTop(anchorFrame: anchorFrame, visible: visible)
+        return NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
+    }
+
+    /// 锚定时面板顶边的位置：item 窗口（或可用区域顶边）下方 `gap`。
+    private static func anchoredTop(anchorFrame: NSRect, visible: NSRect) -> CGFloat {
+        min(anchorFrame.minY, visible.maxY) - gap
+    }
+
+    /// 面板高度上限（D66）：锚定时从顶边到可用区域底边减边距；浮窗时为可用区域高度减上下边距。变了才写入状态。
+    private func updateHeightCap(anchored: Bool? = nil) {
+        let anchored = anchored ?? (presentation != .pinned)
+        let cap: CGFloat
+        if anchored {
+            let validAnchor = validAnchorFrame()
+            let screen =
+                (validAnchor != nil ? statusItems?.anchorWindow?.screen : nil) ?? NSScreen.main ?? NSScreen.screens.first
+            let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            let anchorFrame = validAnchor ?? NSRect(x: visible.maxX, y: visible.maxY, width: 0, height: 0)
+            cap = Self.anchoredTop(anchorFrame: anchorFrame, visible: visible) - (visible.minY + Self.screenMargin)
+        } else {
+            let visible = (panel?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            cap = visible.height - 2 * Self.screenMargin
+        }
+        let rounded = floor(max(cap, 300))
+        if state.maxPanelHeight != rounded { state.maxPanelHeight = rounded }
     }
 
     // MARK: - 事件监视
@@ -760,7 +799,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             if !state.path.isEmpty {
                 // D64：在二级页时再次点击同一个 widget 回到模块主页，不关闭。
                 Log.panel.info("再次点击 item，回到模块主页")
-                state.path = []
+                changePage { $0.path = [] }
                 // 无 session 的面板：系统随后为这次点击开的 session 要接管，而不是被当成「关闭」。
                 if sessionItem == nil { switchRequestedAt = ProcessInfo.processInfo.systemUptime }
                 return
@@ -792,8 +831,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             return nil
         case .keyDown where event.keyCode == 53:  // Esc
             guard presentation != .hidden, event.window === panel else { return event }
-            if state.pop() {
+            if !state.path.isEmpty {
                 Log.panel.info("Esc，回退一层")
+                changePage { $0.pop() }
             } else {
                 Log.panel.info("Esc，关闭面板")
                 close()

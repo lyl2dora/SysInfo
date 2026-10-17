@@ -2,7 +2,7 @@
 //
 // - 顶栏换成「返回 + 标题」（PanelRootView），Esc 与再次点击同一个 widget 先回退，回到主页后才关闭面板；
 // - 换模块、关闭面板时清空；
-// - 二级页的内容放进限高滚动区，面板不超出屏幕；主页本身不滚动（D64：主页定高）。
+// - 面板超出屏幕时内容区滚动（D66），主页与二级页同一套机制。
 
 import SwiftUI
 import SysModel
@@ -50,23 +50,14 @@ extension PanelState {
     var isOnModuleRoot: Bool { path.isEmpty }
 }
 
-/// 二级页的统一外框：内容放进限高滚动区。
+/// 二级页的统一外框。限高与滚动由面板的内容区统一处理（D66），这里只排版。
 struct PanelSubpage<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                content
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            content
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(maxHeight: Self.maxHeight)
-    }
-
-    /// 滚动区的最大高度：屏幕可见高度减去顶栏、边距与菜单栏间距。
-    static var maxHeight: CGFloat {
-        max((NSScreen.main?.visibleFrame.height ?? 900) - 110, 300)
     }
 }
 

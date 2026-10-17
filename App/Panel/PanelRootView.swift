@@ -1,6 +1,8 @@
 // 面板内容（D21、D47，M0 设计 §6）：顶栏玻璃按钮 + 被点击 widget 所属模块的内容。
 // 单 widget 模式下不提供模块切换（D47）；合并模式（D65）下顶栏下面一行切换器，另有「总览」。
 // 二级页（D64）：顶栏换成「返回 + 标题」，内容换成 PanelRoute 对应的页；子视图用环境里的 panelNavigate 推入。
+// 高度（D66）：顶栏与切换器固定，下面的内容区放进只在超高时可滚动的区域；面板高度上限由 PanelController 按屏幕算好，
+// 放在 state.maxPanelHeight。换页时滚动位置回到顶部。
 // 玻璃只用在控件层；图表和数值层用标准材质（见 PanelCard）。
 
 import SwiftUI
@@ -29,21 +31,36 @@ struct PanelRootView: View {
                     .help("切换模块（⌘1–⌘\(state.switcherTabs.count)）")
             }
 
-            if let route = state.path.last {
-                subpage(route)
-            } else {
-                moduleRoot
+            ScrollView {
+                Group {
+                    if let route = state.path.last {
+                        subpage(route)
+                    } else {
+                        moduleRoot
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollBounceBehavior(.basedOnSize)
+            // 换页时回到顶部（D66）。
+            .id(pageIdentity)
         }
         .onChange(of: state.selectedTab) { onTabChange() }
         .onChange(of: state.path) { onTabChange() }
         .onChange(of: state.isMerged) { onTabChange() }
         .padding(14)
-        // 顶部对齐：内容先变、窗口下一轮才改高时，只是底边伸缩，整块内容不会上下跳（SwiftUI 默认把内容居中）。
+        // D66：面板高度上限（含上下边距）；超出时只有内容区滚动。
         .frame(width: PanelController.width)
+        .frame(maxHeight: state.maxPanelHeight, alignment: .top)
+        // 顶部对齐：窗口比内容高时（量高之前的一瞬），内容贴顶，不上下跳（SwiftUI 默认把内容居中）。
         .frame(maxHeight: .infinity, alignment: .top)
         .environment(\.panelLayoutChanged, PanelLayoutAction(action: onLayoutChange))
-        .environment(\.panelNavigate, PanelNavigateAction { [state] in state.push($0) })
+        .environment(\.panelNavigate, PanelNavigateAction(action: actions.navigate))
+    }
+
+    /// 当前页的标识：模块 + 二级页路径。变化时内容区重建、滚动回到顶部。
+    private var pageIdentity: String {
+        "\(state.selectedTab.rawValue)|\(state.path.map { String(describing: $0) }.joined(separator: "/"))"
     }
 
     @ViewBuilder
@@ -112,7 +129,7 @@ struct PanelRootView: View {
             if let route = state.path.last {
                 // D64：二级页的顶栏是「返回 + 标题」。
                 Button {
-                    state.pop()
+                    actions.back()
                 } label: {
                     Label("返回", systemImage: "chevron.left")
                 }
