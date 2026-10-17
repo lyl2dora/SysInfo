@@ -176,6 +176,30 @@ struct AppActivityHardwareTests {
         #expect(rows == rows.sorted { $0.cpu > $1.cpu })
     }
 
+    /// 应用详情（D64）：本 coalition 的各域值取自同一个窗口，成员里有本进程；不存在的 coalition 返回 nil。
+    @Test func appDetailForOwnCoalition() throws {
+        let sampler = AppSampler()
+        #expect(sampler.selfTest().isUsable)
+        _ = sampler.sample(at: .now())
+        let builder = TopNBuilder()
+        let mine = try #require(CoalitionReader.coalition(ofPID: getpid()))
+        _ = builder.detail(coalitionID: mine, window: nil, footprints: nil, slotsTrusted: true)  // 成员 CPU 建立基线
+        let end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 300_000_000
+        var x: UInt64 = 1
+        while clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < end { x = x &* 3 &+ 1 }
+        #expect(x != 0)
+        _ = sampler.sample(at: .now())
+        let detail = try #require(
+            builder.detail(
+                coalitionID: mine, window: sampler.latestWindow, footprints: sampler.latestFootprints, slotsTrusted: true))
+        #expect(detail.cpu > 0.5, "自旋 300 ms 应计入本 coalition")
+        let me = try #require(detail.members.first { $0.pid == getpid() })
+        #expect((me.cpu ?? 0) > 0.5)
+        #expect((me.footprint ?? 0) > 0)
+        #expect((detail.footprint ?? 0) > 0)
+        #expect(builder.detail(coalitionID: .max, window: sampler.latestWindow, footprints: nil, slotsTrusted: true) == nil)
+    }
+
     @Test func sameUIDFallbackListsOwnProcess() {
         let sampler = SameUIDSampler()
         _ = sampler.sample(rows: 50)

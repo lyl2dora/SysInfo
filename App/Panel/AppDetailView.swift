@@ -55,7 +55,7 @@ struct AppDetailView: View {
 
     private func memberSummary(_ detail: AppDetail) -> String {
         detail.memberCount <= 1
-            ? String(localized: "pid \(detail.representativePID)")
+            ? "pid " + String(detail.representativePID)
             : String(localized: "\(detail.memberCount) 个进程")
     }
 
@@ -88,7 +88,7 @@ struct AppDetailView: View {
             ForEach(sortedMembers(detail), id: \.pid) { member in
                 HStack(spacing: 6) {
                     Text(member.name).lineLimit(1).truncationMode(.middle)
-                    Text("\(member.pid)").foregroundStyle(.tertiary)
+                    Text(verbatim: String(member.pid)).foregroundStyle(.tertiary)
                     Spacer(minLength: 4)
                     Text(memberValue(member) ?? "—")
                     if member.eligibility.isAllowed {

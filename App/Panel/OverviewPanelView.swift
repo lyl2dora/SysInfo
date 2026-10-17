@@ -79,6 +79,9 @@ final class OverviewCardDrawView: LiveDrawView {
     }
 
     private static let title = NSFont.systemFont(ofSize: 11, weight: .semibold)
+    /// 数值列的起点：所有卡片对齐，取最长模块名的宽度。
+    private static let valueX: CGFloat = ceil(
+        PanelTab.allCases.map { text($0.title, title).size().width }.max() ?? 64) + 10
     private static let primary = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 
     init(store: MetricStore, services: AppServices, settings: AppSettings, tab: PanelTab) {
@@ -92,9 +95,9 @@ final class OverviewCardDrawView: LiveDrawView {
         countDraw()
         let latest = store.latest
         let (first, second, series) = lines(latest)
-        let titleWidth = Self.draw(Self.text(tab.title, Self.title, .secondaryLabelColor), x: 0, y: 2)
-        Self.draw(Self.text(first, Self.primary), x: max(titleWidth + 8, 64), y: 0)
-        Self.draw(Self.text(second, Self.caption2Digits, .secondaryLabelColor), x: max(titleWidth + 8, 64), y: 22)
+        Self.draw(Self.text(tab.title, Self.title, .secondaryLabelColor), x: 0, y: 2)
+        Self.draw(Self.text(first, Self.primary), x: Self.valueX, y: 0)
+        Self.draw(Self.text(second, Self.caption2Digits, .secondaryLabelColor), x: Self.valueX, y: 22)
         let rect = NSRect(x: bounds.width - Self.sparklineWidth, y: 4, width: Self.sparklineWidth, height: bounds.height - 8)
         drawSparklines(series, in: rect)
         setAccessibilityLabel("\(tab.title) \(first) \(second)")

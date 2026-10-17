@@ -53,11 +53,11 @@ enum PanelTab: String, CaseIterable, Identifiable {
     var shortTitle: String {
         switch self {
         case .overview: String(localized: "总览", comment: "面板切换器标签，两个字")
-        case .cpu: String(localized: "CPU", comment: "面板切换器标签")
+        case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗", comment: "面板切换器标签，两个字")
         case .memory: String(localized: "内存", comment: "面板切换器标签，两个字")
         case .storage: String(localized: "存储", comment: "面板切换器标签，两个字")
-        case .gpu: String(localized: "GPU", comment: "面板切换器标签")
+        case .gpu: String(localized: "GPU")
         case .network: String(localized: "网络", comment: "面板切换器标签，两个字")
         }
     }

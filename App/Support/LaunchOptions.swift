@@ -16,6 +16,10 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
     var panelTab: String?
     /// `--storage-detail=<n>`：存储 tab 直接打开第 n 块盘（从 0 起，按面板顺序）的详情页，截图与开销测量用。
     var storageDetailIndex: Int?
+    /// `--panel-route=<页>`：面板一开始推入的二级页（`virtual` 虚拟接口、`external` 外置盘、`raid` 第一个阵列的成员），截图用（D64）。
+    var panelRoute: String?
+    /// `--merged`：启动时打开合并模式（D65），截图与开销测量用；与 `--factory-defaults` 一起用时不写入设置。
+    var merged = false
     /// `--factory-defaults`：不读写持久化的设置，只用出厂默认值（开销测量用，不改动用户的偏好）。
     var factoryDefaults = false
     /// `--single-instance`：在 Debug 版上也按日用版的单实例规则执行（D48），截图自查与测试用。
@@ -31,6 +35,8 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
         pinPanel = arguments.contains("--pin-panel")
         expandDetails = arguments.contains("--expand-details")
         panelTab = arguments.first { $0.hasPrefix("--panel-tab=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)
+        panelRoute = arguments.first { $0.hasPrefix("--panel-route=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)
+        merged = arguments.contains("--merged")
         storageDetailIndex = arguments.first { $0.hasPrefix("--storage-detail=") }?.split(separator: "=", maxSplits: 1).last
             .flatMap { Int($0) }
     }

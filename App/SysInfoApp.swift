@@ -134,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         instance.onReopenRequest = { [weak self] in self?.openSettings() }
         instance.startListening()
 
+        if options.merged { settings.menuBarMerged = true }
         settings.onChange = { [weak self] in self?.applySettings() }
         // 盘插拔、容量组变化：widget 的绑定（内置盘、启动组）要重新解析。
         services.storageModel.onStructureChange = { [weak self] in self?.applySettings() }
@@ -153,6 +154,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let index = options.storageDetailIndex {
             openStorageDetail(index: index, attempt: 0)
+        }
+        if let route = options.panelRoute {
+            openPanelRoute(route, attempt: 0)
         }
         if options.openSettings || settings.visibleWidgets.isEmpty {
             settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
@@ -196,6 +200,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         panel.state.path = [.disk(disks[index].key)]
+    }
+
+    /// `--panel-route=<页>`：等清单出来后推入二级页（D64，截图用）。
+    private func openPanelRoute(_ name: String, attempt: Int) {
+        let inventory = services.storageModel.inventory
+        let route: PanelRoute? =
+            switch name {
+            case "virtual": services.networkModel.state.virtual.isEmpty ? nil : .virtualInterfaces
+            case "external": inventory.disks.contains { $0.location == .external } ? .externalDisks : nil
+            case "raid": inventory.raidSets.first.map { .raidMembers($0.key) }
+            default: nil
+            }
+        guard let route else {
+            if attempt < 50 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.openPanelRoute(name, attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        panel.state.path = [route]
     }
 
     // MARK: - 菜单动作
