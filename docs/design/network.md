@@ -161,3 +161,92 @@ xcrun clang -O2 -o costbench_net costbench_net.c -framework IOKit -framework Cor
 xcrun swiftc -O -o wifi_cost wifi_cost.swift -framework CoreWLAN && ./wifi_cost
 ./build_icmp_app.sh && open -n build/ICMPProbe.app --args icmp <网关>
 ```
+
+## 4. 数据模型（`SysModel/NetworkMetrics.swift`，发布后不改名）
+
+接口用 BSD 名作键（`en0`、`utun9`）：它不是设备唯一标识，和 macOS 的接口命名一样稳定。同一个名字被不同类型的接口复用（例如拔掉转接器后又插另一个）时，清单里的类型会变，历史按名字续写，这是可以接受的口径。
+
+| MetricID | 含义 | 单位 / 质量 | 采集器 |
+|---|---|---|---|
+| `net.if.<名>.in` / `.out` | 物理接口的入 / 出速率（IFMIB 差分） | B/s，measured；负差值 unavailable(`counterReset`) | `network.io` |
+| `net.vif.<名>.in` / `.out` | 虚拟接口（隧道、虚拟机网卡与网桥、awdl）的速率 | B/s | `network.io` |
+| `net.primary.in` / `.out` | 主接口（D60：隧道时取下层物理接口）的速率 | B/s；没有主接口时 unavailable(`offline`) | `network.io` |
+| `net.physical.in` / `.out` | 活跃物理接口合计 | B/s | `network.io` |
+| `net.wifi.rssi` / `.noise` / `.snr` | 当前 Wi-Fi 接口的信号、噪声、信噪比 | dBm、dBm、dB | `network.wifi` |
+| `net.wifi.txRate` | 发送速率 | bit/s | `network.wifi` |
+| `net.latency.gateway.rtt` / `net.latency.custom.rtt` | 最近一个间隔里收到的回包 RTT 均值 | s；全部丢失时 unavailable(`timeout`) | `network.latency` |
+| `net.latency.gateway.loss` / `net.latency.custom.loss` | 最近 10 个探测包的丢失比例 | 0…1 | `network.latency` |
+
+结构信息不随 tick 变化，不做成样本：`NetworkState`（接口清单、主接口、VPN、地址、网关、DNS、代理）由 `NetworkInventory` 在变更通知时重建；Wi-Fi 的信道 / 频段 / 带宽 / PHY / 原始发送功率由 `network.wifi` 的 `latestInfo` 提供。
+
+```swift
+public enum NetworkInterfaceKind: String { case ethernet, wifi, bridge, tunnel, virtualMachine, awdl, other }
+public struct NetworkInterface {          // 一次清单重建的结果
+    var name: String                      // BSD 名
+    var index: UInt32                     // if_index（只用于读 IFMIB，变化时重建基线）
+    var kind: NetworkInterfaceKind
+    var displayName: String?              // SCNetworkInterface 的本地化名（「以太网」「Wi-Fi」「雷雳网桥」）
+    var isPhysical: Bool                  // D60 的物理接口判定
+    var isActive: Bool                    // 链路 active 或有地址
+    var linkSpeed: Double?                // bit/s；以太网读 IOKit，Wi-Fi 为 nil（由 network.wifi 给出发送速率）
+    var controllerClass: String?          // 诊断页
+    var scType: String?                   // 诊断页
+    var ipv4: [String]; var ipv6: [String]   // 只在面板与 CLI 显示，不写日志、不进历史
+}
+public struct NetworkState {
+    var interfaces: [NetworkInterface]
+    var primary: String?                  // D60：隧道时为下层物理接口
+    var defaultRouteInterface: String?    // SCDynamicStore 的 PrimaryInterface 原值
+    var vpnActive: Bool
+    var gatewayIPv4: String?; var gatewayIPv6: String?   // 主接口所在服务的 Router
+    var dnsServers: [String]              // State:/Network/Global/DNS（反映 VPN 解析器）
+    var proxyEnabled: Bool                // HTTP / HTTPS / SOCKS / PAC 任一开启
+    var generation: UInt64
+}
+```
+
+## 5. 采集器
+
+### 5.1 `NetworkInventory`（共享，非采集器）
+- 在私有队列上订阅 SCDynamicStore：`State:/Network/Global/(IPv4|IPv6|DNS|Proxies)`、`Setup:/Network/Global/IPv4`、`State:/Network/Interface/[^/]+/(Link|IPv4|IPv6)`、`State:/Network/Service/[^/]+/(IPv4|IPv6|VPN)`，以及接口列表键 `State:/Network/Interface`。任一变化只置「脏」标记。
+- `snapshot()`：脏了才重建（同一秒内合并）：`if_nameindex` 枚举 → 每个接口读 IFMIB 的类型与标志、`SIOCGIFMEDIA`、`getifaddrs` 的地址 → 匹配 `SCNetworkInterfaceCopyAll` 的类型与本地化名 → IOKit（`IOBSDNameMatching`）读控制器类与链路速率。链路速率每个接口缓存，只在该接口的 Link 键变化时重读（1.9 ms/次）。
+- 分类（D60，按控制器与 SC 类型，不按名字写死）：
+  - 有 IOKit 控制器，且控制器类不是 `IOUserEthernetController`、不含 `USBDeviceNCM`：SC 类型 IEEE80211 → `wifi`，其他 → `ethernet`，`isPhysical = true`。雷电 IP 端口（`AppleThunderboltIPPort`）作为 bridge0 成员：`isPhysical = true`，但只在它自己 active 且不属于网桥时列出（实测都是 inactive）。
+  - SC 类型 Bridge（bridge0，Thunderbolt Bridge）→ `bridge`，`isPhysical = true`。
+  - IFT_OTHER / 点对点（utun、ipsec、ppp）→ `tunnel`；`IOUserEthernetController` 的 vmenet 与没有 SC 类型的 bridge1xx → `virtualMachine`；awdl0 / llw0（IEEE80211 媒体、无 IOKit）→ `awdl`；其余 → `other`。非物理的都算虚拟。
+  - 回环、gif、stf、链路 inactive 且无地址的接口不进清单。
+- 主接口（D60）：`PrimaryInterface` 不是隧道时就是它；是隧道时，按 `Setup:/Network/Global/IPv4` 的 `ServiceOrder` 找第一个有 `State:/Network/Service/<id>/IPv4` 且 `InterfaceName` 不是隧道的服务。VPN：`PrimaryService` 有 `VPN` 子键，或默认路由接口是隧道。网关取主接口所在服务的 `Router`。
+
+### 5.2 `network.io`（inline）
+- 每次取清单快照，按缓存的 index 逐个读清单里接口的 IFMIB（约 0.003 ms/个），按接口差分出 B/s。负差值按复位处理（该接口这一段 unavailable(`counterReset`)，不钳 0）；index 或类型变化、接口消失时丢弃该接口的基线。
+- 输出每个接口（物理 `net.if.*`、虚拟 `net.vif.*`）、主接口、物理合计。主接口没有基线时（刚切换）这一段不出样本。
+- 最近一次原始计数（包数、错误、丢包、组播、冲突）供诊断页读；`IOUserEthernet` 的丢包标「不可靠」。
+- 自检：至少一个接口能读 IFMIB 且 `ifmd_data` 布局有效（必需）；有主接口（提示，离线时不通过但照常出数）。
+
+### 5.3 `network.wifi`（inline，只在面板 Wi-Fi 卡片可见时有需求，5 s，D60 N5）
+- 懒创建 `CWWiFiClient`（首次 2–4 ms），读当前接口的 RSSI、噪声、发送速率、信道、PHY、发送功率（只进诊断页原值）。不读 SSID / BSSID。
+- 接口关闭或未关联（RSSI 为 0）时样本 unavailable(`notAssociated`)。
+- 自检：有 Wi-Fi 接口（提示：没有 Wi-Fi 的机器不算失败）。
+
+### 5.4 `network.latency`（inline，只在延迟开启、且网络面板可见或延迟 widget 打开时有需求，D61）
+- 目标由 app 设置：网关（来自清单）与 / 或自定义地址（IP 字面量或主机名，主机名在目标变化时与每 10 分钟用 `getaddrinfo` 解析一次）。
+- 每个目标一个 `SOCK_DGRAM` ICMP / ICMPv6 套接字，回包由私有队列上的 `DispatchSource` 异步接收，按 id + seq 匹配（IPv6 另按 type 过滤），记 RTT。`sample()` 只发新探测包、汇总上一间隔内收到的回包，不阻塞引擎。超过 2 s 没回的算丢失。
+- RTT 输出本间隔回包均值；丢包率按最近 10 个探测包。
+- 自检：能创建 ICMP DGRAM 套接字（必需）。
+
+## 6. 历史
+- `HistoryModule.network`，设置「记录网络历史」默认开。后台每 60 s 采 `network.io`（计数是累计值，60 s 一读不丢流量）。
+- 入库：`net.primary.*`、`net.if.*`（区间量，B/s）；`net.latency.*.rtt`、`.loss`（瞬时量，延迟采样期间才有）。虚拟接口、物理合计、Wi-Fi 不入库。
+- 今日 / 本月流量：Σ(分钟均值 × 覆盖秒数)。新增 `HistoryStore.total(metric:from:to:)`：29 天以内读分钟表，更早的读小时表。按本地时区切日、切月。
+
+## 7. App
+- **菜单栏**（`MenuModule.network`）：
+  - `netThroughput`：上下两行 ↑ / ↓（同存储读写 widget 的画法），标签开时画箭头。绑定 `network.widget.throughput.target`：`primary`（默认）、`physical`、`if:<名>`。单位 `network.widget.throughput.unit`：`bytes`（默认）/ `bits`。**出厂开**（D60）。
+  - `netLatency`：「PING / 12ms」，绑定 `network.widget.latency.target`：`gateway` / `custom`。只在延迟开启时可选；关掉延迟时自动隐藏。
+- **面板**（`PanelTab.network`）：概览（主接口名称与类型、链路速率、VPN 标记、↓↑ 大字）→ 历史图（主接口入，叠加出）→ 流量统计（今日 / 本月，接口可切换）→ 接口列表（物理接口各一行：名称、类型、速率与 60 s 短曲线；虚拟接口一组折叠，展开状态记住）→ 连接信息（IPv4、IPv6、网关、DNS、代理，点一下复制）→ Wi-Fi 卡片（有活跃 Wi-Fi 时）→ 延迟卡片（开启时）→ 公网 IP 行（按钮）。需求：`network.io` 1 s；`network.wifi` 5 s（有活跃 Wi-Fi 接口时）；`network.latency` 按设置。
+- **设置页「网络」**：菜单栏（2 个 widget 的开关、颜色、绑定、单位）、采集（常驻间隔覆盖）、延迟（总开关、网关 / 自定义两个勾选、地址、间隔 2 / 5 / 10 s，附「会向该地址发 ICMP 包」的说明）、公网 IP（服务地址）、面板（图表跨度、默认展开虚拟接口）、历史。
+- **隐私**：设置里列出出站目标（延迟目标、公网 IP 服务）；默认都为空或关闭。
+- **诊断页「网络」**：每个接口的分类依据（控制器类、SC 类型、链路状态、速率来源）与原始 IFMIB 计数；SCDynamicStore 原始键（主接口、PrimaryService、ServiceOrder 首项、VPN 判定）；NWPath（展开时启动 `NWPathMonitor`）的 linkQuality / expensive / constrained；CoreWLAN 原值。
+- **CLI**：`sysinfo-cli network [--count N] [--interval S] [--diag] [--latency <地址>]`：打印清单与主接口、逐秒打印各接口速率；`--diag` 加原始计数；`--latency` 测一次延迟。
+
+## 8. 偏离记录
