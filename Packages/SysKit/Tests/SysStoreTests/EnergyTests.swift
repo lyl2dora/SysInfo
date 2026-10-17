@@ -5,6 +5,7 @@ import Foundation
 import Testing
 import SysModel
 @testable import SysStore
+import SysCollectors
 
 private func t(_ seconds: Double, wall: Double) -> SampleTime {
     SampleTime(monotonicNanos: UInt64(seconds * 1e9), wallClock: Date(timeIntervalSince1970: wall))
@@ -146,7 +147,10 @@ private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReadi
             db.close()
         }
         let store = try HistoryStore(path: path)
-        #expect(try store.db.pragmaInt("user_version") == 2)
+        #expect(try store.db.pragmaInt("user_version") == HistoryStore.schemaVersion)
+        // schema 3（D68）：旧库补上新列，旧行新列为空
+        try store.write(rows: [], apps: [AppMinuteRow(minute: 1, app: .init(key: "k", name: "K"), cpuNanos: 1, energyNanojoules: 1, gpuNanos: 2)])
+        #expect(try store.appTotals(from: 0, to: 10).first?.gpuNanos == 2)
         try store.writeEnergy([EnergyMinuteRow(minute: 1, joules: 1, covered: 1)])
         try store.setValue("x", forKey: "k")
         #expect(try store.value(forKey: "k") == "x")

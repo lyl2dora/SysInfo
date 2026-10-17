@@ -56,6 +56,7 @@ struct PanelRootView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .environment(\.panelLayoutChanged, PanelLayoutAction(action: onLayoutChange))
         .environment(\.panelNavigate, PanelNavigateAction(action: actions.navigate))
+        .environment(\.openAppActivity, OpenAppActivityAction { [services] in services.openAppActivity($0, .now) })
     }
 
     /// 当前页的标识：模块 + 二级页路径。变化时内容区重建、滚动回到顶部。
@@ -140,6 +141,10 @@ struct PanelRootView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             } else {
+                Button(action: actions.openAppActivity) {
+                    Label("应用活动", systemImage: "list.bullet.rectangle")
+                }
+                .help("打开应用活动窗口")
                 Button(action: actions.openActivityMonitor) {
                     Label("活动监视器", systemImage: "chart.bar.xaxis")
                 }
@@ -196,7 +201,14 @@ struct PanelNavigateAction {
     func callAsFunction(_ route: PanelRoute) { action(route) }
 }
 
+/// 打开应用活动窗口并按某一列排序（Top N 的「查看全部」、总览卡片，D64、D70）。
+struct OpenAppActivityAction {
+    var action: (AppActivityColumn?) -> Void = { _ in }
+    func callAsFunction(_ column: AppActivityColumn?) { action(column) }
+}
+
 extension EnvironmentValues {
+    @Entry var openAppActivity = OpenAppActivityAction()
     @Entry var panelLayoutChanged = PanelLayoutAction()
     @Entry var panelNavigate = PanelNavigateAction()
 }

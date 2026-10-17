@@ -112,8 +112,9 @@ public struct HistoryStats: Hashable, Sendable {
 
 public final class HistoryStore {
     /// 当前表结构版本。
-    /// 1：CPU 模块（D30）；2：能耗与 kv 表（功耗与散热模块设计 §6，D46）。
-    public static let schemaVersion: Int64 = 2
+    /// 1：CPU 模块（D30）；2：能耗与 kv 表（功耗与散热模块设计 §6，D46）；
+    /// 3：每应用扩列与电源断言（应用活动设计 §3.2，D68、D69）。
+    public static let schemaVersion: Int64 = 3
     /// 分钟级与每应用数据的保留期（D30）。
     public static let minuteRetention: TimeInterval = 30 * 86_400
 
@@ -192,6 +193,23 @@ public final class HistoryStore {
                     CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
                     """)
             }
+            if version < 3 {
+                // 旧行的新列为空（D68 之前只记 CPU 时间与能耗）。
+                try db.execute(
+                    """
+                    ALTER TABLE app_minute ADD COLUMN gpu_ns INTEGER;
+                    ALTER TABLE app_minute ADD COLUMN gpu_nj INTEGER;
+                    ALTER TABLE app_minute ADD COLUMN ane_nj INTEGER;
+                    ALTER TABLE app_minute ADD COLUMN disk_r INTEGER;
+                    ALTER TABLE app_minute ADD COLUMN disk_w INTEGER;
+                    ALTER TABLE app_minute ADD COLUMN wakeups INTEGER;
+                    ALTER TABLE app_minute ADD COLUMN footprint INTEGER;
+                    CREATE TABLE power_assertion(
+                        id INTEGER PRIMARY KEY, app INTEGER NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL,
+                        holder TEXT NOT NULL, start_s REAL NOT NULL, end_s REAL, end_estimated INTEGER NOT NULL DEFAULT 0);
+                    CREATE INDEX power_assertion_start ON power_assertion(start_s);
+                    """)
+            }
             try db.execute("PRAGMA user_version = \(Self.schemaVersion)")
         }
     }
@@ -232,6 +250,11 @@ public final class HistoryStore {
         return id
     }
 
+    /// 断言表用的应用行 id（与分钟数据共用 app 表）。
+    func appRowIDForAssertion(_ app: AppIdentity) throws -> Int64 {
+        try appRowID(app)
+    }
+
     /// 在一个事务里写入分钟数据与每应用数据。
     public func write(rows: [MinuteRow], apps: [AppMinuteRow]) throws {
         guard !rows.isEmpty || !apps.isEmpty else { return }
@@ -254,17 +277,27 @@ public final class HistoryStore {
             }
             let upsertApp = try db.statement(
                 """
-                INSERT INTO app_minute(t, app, cpu_ns, energy_nj) VALUES(?, ?, ?, ?)
+                INSERT INTO app_minute(t, app, cpu_ns, energy_nj, gpu_ns, gpu_nj, ane_nj, disk_r, disk_w, wakeups, footprint)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(t, app) DO UPDATE SET
                     cpu_ns = cpu_ns + excluded.cpu_ns,
                     energy_nj = CASE WHEN energy_nj IS NULL OR excluded.energy_nj IS NULL THEN NULL
-                                     ELSE energy_nj + excluded.energy_nj END
+                                     ELSE energy_nj + excluded.energy_nj END,
+                    gpu_ns = COALESCE(gpu_ns, 0) + excluded.gpu_ns,
+                    gpu_nj = COALESCE(gpu_nj, 0) + excluded.gpu_nj,
+                    ane_nj = COALESCE(ane_nj, 0) + excluded.ane_nj,
+                    disk_r = COALESCE(disk_r, 0) + excluded.disk_r,
+                    disk_w = COALESCE(disk_w, 0) + excluded.disk_w,
+                    wakeups = COALESCE(wakeups, 0) + excluded.wakeups,
+                    footprint = MAX(COALESCE(footprint, 0), excluded.footprint)
                 """)
             for row in apps {
                 let app = try appRowID(row.app)
+                func v(_ x: UInt64) -> SQLiteValue { .int(Int64(clamping: x)) }
                 try upsertApp.run([
-                    .int(row.minute), .int(app), .int(Int64(clamping: row.cpuNanos)),
-                    .optional(row.energyNanojoules.map { Int64(clamping: $0) }),
+                    .int(row.minute), .int(app), v(row.cpuNanos), .optional(row.energyNanojoules.map { Int64(clamping: $0) }),
+                    v(row.gpuNanos), v(row.gpuEnergyNanojoules), v(row.aneEnergyNanojoules), v(row.diskReadBytes),
+                    v(row.diskWrittenBytes), v(row.wakeups), v(row.footprintBytes),
                 ])
             }
         }
@@ -305,7 +338,12 @@ public final class HistoryStore {
             try db.statement("DELETE FROM app_minute WHERE t < ?").run([.int(minute)])
             try db.statement("DELETE FROM energy_minute WHERE t < ?").run([.int(minute)])
             try db.statement("DELETE FROM energy_fill_minute WHERE t < ?").run([.int(minute)])
-            try db.execute("DELETE FROM app WHERE id NOT IN (SELECT DISTINCT app FROM app_minute)")
+            try db.statement("DELETE FROM power_assertion WHERE end_s IS NOT NULL AND end_s < ?").run([.double(Double(minute) * 60)])
+            try db.execute(
+                """
+                DELETE FROM app WHERE id NOT IN (SELECT DISTINCT app FROM app_minute)
+                    AND id NOT IN (SELECT DISTINCT app FROM power_assertion)
+                """)
         }
         try reloadApps()
         try db.execute("PRAGMA incremental_vacuum")
@@ -314,7 +352,7 @@ public final class HistoryStore {
     /// 一键清除每应用数据（D30）。
     public func clearAppData() throws {
         try db.transaction { () throws(SQLiteError) in
-            try db.execute("DELETE FROM app_minute; DELETE FROM app;")
+            try db.execute("DELETE FROM app_minute; DELETE FROM power_assertion; DELETE FROM app;")
         }
         appIDs = [:]
         try db.execute("PRAGMA incremental_vacuum")
@@ -426,13 +464,21 @@ public final class HistoryStore {
     }
 
     /// 导出用：每应用的分钟数据（只有分钟粒度）。
-    func appRows(from: Int64, to: Int64) throws -> [(minute: Int64, key: String, name: String, cpuNanos: Int64, energy: Int64?)] {
+    func appRows(from: Int64, to: Int64) throws -> [ExportAppRow] {
         try db.statement(
             """
-            SELECT a.t, p.key, p.name, a.cpu_ns, a.energy_nj FROM app_minute a JOIN app p ON p.id = a.app
+            SELECT a.t, p.key, p.name, a.cpu_ns, a.energy_nj, a.gpu_ns, a.gpu_nj, a.ane_nj, a.disk_r, a.disk_w, a.wakeups,
+                   a.footprint
+            FROM app_minute a JOIN app p ON p.id = a.app
             WHERE a.t >= ? AND a.t < ? ORDER BY a.t, a.cpu_ns DESC
             """
-        ).query([.int(from), .int(to)]) { ($0.int(0), $0.text(1), $0.text(2), $0.int(3), $0.optionalInt(4)) }
+        ).query([.int(from), .int(to)]) {
+            ExportAppRow(
+                minute: $0.int(0), key: $0.text(1), name: $0.text(2), cpuNanos: $0.int(3), energy: $0.optionalInt(4),
+                gpuNanos: $0.optionalInt(5), gpuEnergy: $0.optionalInt(6), aneEnergy: $0.optionalInt(7),
+                diskRead: $0.optionalInt(8), diskWrite: $0.optionalInt(9), wakeups: $0.optionalInt(10),
+                footprint: $0.optionalInt(11))
+        }
     }
 
     /// 某一段时间里 CPU 用量最多的应用（面板「按应用浏览较长时段」将来用；CLI 也用）。

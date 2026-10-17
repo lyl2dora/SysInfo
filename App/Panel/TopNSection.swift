@@ -7,7 +7,8 @@
 // - coalition 不可用时只列同 uid 进程，并提供手动「刷新全部」（setuid ps，只在点击时运行；内存没有，D49）；
 // - GPU 面板（D57 G7）：数值列是 GPU 时间占比，副标题列 GPU 与 ANE 能耗；成员只列名字（没有按进程的公开 GPU 计数）；
 // - 内存面板（D49）复用同一套行：数值列换成 footprint，副标题、成员、外部成员合计都按 footprint；
-// - 存储面板（存储模块设计 §4.5）同样复用：数值列是「读 / 写」速率（B/s，按 1000 换算）。
+// - 存储面板（存储模块设计 §4.5）同样复用：数值列是「读 / 写」速率（B/s，按 1000 换算）；
+// - 底部「在应用活动中查看全部 ›」打开应用活动窗口，按该模块对应的列排序（D64、D67）。
 
 import AppKit
 import SwiftUI
@@ -20,6 +21,7 @@ struct TopNSection: View {
     let slots: Int
     @Environment(\.panelLayoutChanged) private var layoutChanged
     @Environment(\.panelNavigate) private var navigate
+    @Environment(\.openAppActivity) private var openAppActivity
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -61,6 +63,11 @@ struct TopNSection: View {
             ForEach(model.rows.count..<max(slots, model.rows.count), id: \.self) { index in
                 TopNRowView.placeholder(index == 0 ? String(localized: "等待数据…") : nil)
             }
+            SummaryRow(title: String(localized: "在应用活动中查看全部"), action: { openAppActivity(AppActivityColumn(metric: model.metric)) }) {
+                EmptyView()
+            }
+            .foregroundStyle(.secondary)
+            .help("打开应用活动窗口，按这一项排序")
         }
         .onHover { model.isFrozen = $0 }
         .onChange(of: layoutSignature) { layoutChanged() }

@@ -2,8 +2,8 @@
 //
 // - 用 `NSHostingSceneRepresentation` 把 SwiftUI `Settings` 场景挂到 AppKit 生命周期上，
 //   打开用它的 `environment.openSettings()`；
-// - 窗口打开期间 `NSApp.setActivationPolicy(.regular)` 并激活（有 Dock 图标和主菜单，⌘, ⌘Q 可用），
-//   关闭后切回 `.accessory`；
+// - 窗口打开期间切换为 `.regular` 并激活（有 Dock 图标和主菜单，⌘, ⌘Q 可用），
+//   关闭后切回 `.accessory`（与应用活动窗口共用计数，见 ForegroundWindows）；
 // - 窗口关闭后把内容换成空视图：设置窗口不在屏幕上时不读 MetricStore，不随每个 tick 重算；
 // - 诊断页可见期间登记「诊断页」需求（app.self，1 s），用于显示本进程开销。
 
@@ -23,6 +23,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case storage
     case gpu
     case network
+    case appActivity
     case history
     case privacy
     case diagnostics
@@ -40,6 +41,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
         case .network: String(localized: "网络")
+        case .appActivity: String(localized: "应用活动")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -57,6 +59,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .storage: "internaldrive"
         case .gpu: "cpu.fill"
         case .network: "network"
+        case .appActivity: "list.bullet.rectangle"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"
@@ -150,7 +153,7 @@ final class SettingsController {
         }
         Log.settings.info("打开设置窗口（\(page?.rawValue ?? "上次的页面", privacy: .public)）")
         state.isWindowOpen = true
-        NSApp.setActivationPolicy(.regular)
+        ForegroundWindows.retain("settings")
         openSettingsAction?()
         NSApp.activate()
         bringWindowToFront()
@@ -195,7 +198,7 @@ final class SettingsController {
         Log.settings.info("设置窗口关闭，切回 accessory")
         state.isWindowOpen = false
         setDiagnosticsVisible(false)
-        NSApp.setActivationPolicy(.accessory)
+        ForegroundWindows.release("settings")
     }
 
     private func setDiagnosticsVisible(_ visible: Bool) {

@@ -7,6 +7,7 @@
 // - 23：cpu_time_eqos_len，必须等于 7（自检 S3）；
 // - 24–30：按 QoS 拆分的 CPU 时间（mach tick），之和就是总 CPU 时间。不用 slot 3；
 // - 31 / 32：instructions / cycles；35 / 36：perflevel0 上的 instructions / cycles；
+// - 4 / 5：中断唤醒 / 空闲（package）唤醒次数（slot 5 与 `top IDLEW` 522/522 相等，调研报告 §1.8）；
 // - 40：phys_footprint；49：pageins（与成员 rusage_info_v6 逐位相等，自检 S4，processes/coal_check.c）。
 // 结构体以后可能在尾部追加字段，所以缓冲给 512 字节，自检只要求「写出 ≥400 字节」，不做等值判断。
 
@@ -38,6 +39,8 @@ public struct CoalitionUsage: Hashable, Sendable {
 
     public var tasksStarted: UInt64 { slot(0) }
     public var tasksExited: UInt64 { slot(1) }
+    /// 累计唤醒次数：中断唤醒（槽位 4）+ 空闲唤醒（槽位 5）（应用活动的「唤醒」列，D67）。
+    public var wakeups: UInt64 { slot(4) &+ slot(5) }
     /// 累计磁盘读 / 写字节（6、7 号槽，含 root 成员；存储模块设计 §4.5，调研报告 disk-review/coal_validate）。
     public var diskBytesRead: UInt64 { slot(6) }
     public var diskBytesWritten: UInt64 { slot(7) }

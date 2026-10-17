@@ -38,6 +38,12 @@ public struct CoalitionDelta: Hashable, Sendable {
     public var gpuEnergyNanojoules: UInt64 = 0
     public var aneNanos: UInt64 = 0
     public var aneEnergyNanojoules: UInt64 = 0
+    /// 唤醒次数（槽位 4 + 5）、pageins（槽位 49）（应用活动，D67）。
+    public var wakeups: UInt64 = 0
+    public var pageins: UInt64 = 0
+    /// 窗口结束时的当前值：footprint（槽位 40，字节）与开机以来的累计 CPU 时间（纳秒）（应用活动，D67）。
+    public var footprintBytes: UInt64 = 0
+    public var cpuTotalNanos: UInt64 = 0
     /// 窗口内成员有没有变化（tasks_started / tasks_exited 变了）。残差归因只在没有变化时做（边界稿 §5.3）。
     public var membershipChanged: Bool
     /// 窗口开始时还不存在（新出现的 coalition）。
@@ -68,6 +74,10 @@ public struct AppActivityWindow: Hashable, Sendable {
     public var slotsTrusted: Bool = true
 
     public var totalCPUNanos: UInt64 { coalitions.reduce(0) { $0 &+ $1.cpuNanos } }
+    /// 全部 coalition 的 CPU + GPU + ANE 能耗之和，nJ（应用活动的「应用合计」，D67）。
+    public var totalEnergyNanojoules: UInt64 {
+        coalitions.reduce(0) { $0 &+ $1.energyNanojoules &+ $1.gpuEnergyNanojoules &+ $1.aneEnergyNanojoules }
+    }
     /// 全部 coalition 的 ANE 能耗之和，nJ（ANE 功率估算，D58）。
     public var totalANEEnergyNanojoules: UInt64 { coalitions.reduce(0) { $0 &+ $1.aneEnergyNanojoules } }
 }
@@ -283,6 +293,8 @@ public final class AppSampler: Collector {
                     gpuEnergyNanojoules: d(now.gpuEnergyNanojoules, before?.gpuEnergyNanojoules),
                     aneNanos: timebase.nanoseconds(fromTicks: d(now.aneTicks, before?.aneTicks)),
                     aneEnergyNanojoules: d(now.aneEnergyNanojoules, before?.aneEnergyNanojoules),
+                    wakeups: d(now.wakeups, before?.wakeups), pageins: d(now.pageins, before?.pageins),
+                    footprintBytes: now.physFootprint, cpuTotalNanos: timebase.nanoseconds(fromTicks: now.cpuTicks),
                     membershipChanged: before.map {
                         $0.tasksStarted != now.tasksStarted || $0.tasksExited != now.tasksExited
                     } ?? true,
@@ -320,7 +332,12 @@ public final class AppSampler: Collector {
 
     // MARK: - 自检
 
-    /// S4：同 uid 单成员 coalition 上，槽位与成员 rusage_info_v6 逐位相等的比例。
+    /// S4：同 uid 单成员 coalition 上，槽位与成员 rusage_info_v6 一致的比例。
+    /// 进程在两次读取之间可能还在跑，所以 rusage 在读槽位前后各读一次：footprint 逐位相等，
+    /// 能耗与 perflevel0 时间（单调增）落在前后两次之间即算一致。只比对没有成员退出过的 coalition
+    /// （tasks_started ≤ 2：launchd 拉起一个进程时这个计数就是 2）：有成员退出过的，coalition 的累计值包含已退出成员的
+    /// 用量，本来就比现存成员大。2026-10-17 M5 实测：同 uid 单成员 345 个，tasks_started ≤ 2 的 294 个全部一致，
+    /// > 2 的 52 个里 51 个不一致；不排除时能耗只有 51/60 一致，S4 会误判。
     static func slotCrossCheck(_ entries: [CoalitionEntry]) -> (passed: Bool, detail: String) {
         let uid = getuid()
         var used = 0
@@ -329,17 +346,26 @@ public final class AppSampler: Collector {
         var ptime = 0
         for entry in entries where entry.tasks == 1 {
             guard used < 60, let pids = CoalitionReader.members(of: entry.id, tasksHint: 1), pids.count == 1,
-                ProcessInfoReader.uid(of: pids[0]) == uid, let usage = CoalitionReader.usage(of: entry.id),
-                let r = ProcessInfoReader.rusage(of: pids[0])
+                ProcessInfoReader.uid(of: pids[0]) == uid, let before = ProcessInfoReader.rusage(of: pids[0]),
+                let usage = CoalitionReader.usage(of: entry.id), let after = ProcessInfoReader.rusage(of: pids[0]),
+                usage.tasksStarted <= 2
             else { continue }
             used += 1
-            if usage.physFootprint == r.ri_phys_footprint { footprint += 1 }
-            if usage.energyNanojoules == r.ri_energy_nj { energy += 1 }
-            if usage.perfLevel0Ticks == r.ri_user_ptime + r.ri_system_ptime { ptime += 1 }
+            if usage.physFootprint == before.ri_phys_footprint || usage.physFootprint == after.ri_phys_footprint { footprint += 1 }
+            if Self.between(usage.energyNanojoules, before.ri_energy_nj, after.ri_energy_nj) { energy += 1 }
+            if Self.between(
+                usage.perfLevel0Ticks, before.ri_user_ptime + before.ri_system_ptime, after.ri_user_ptime + after.ri_system_ptime)
+            {
+                ptime += 1
+            }
         }
         guard used >= 5 else { return (true, "inconclusive: \(used) same-uid single-member coalitions") }
         let ok = [footprint, energy, ptime].allSatisfy { Double($0) >= 0.9 * Double(used) }
-        return (ok, "of \(used): footprint \(footprint), energy \(energy), ptime \(ptime) exact")
+        return (ok, "of \(used): footprint \(footprint), energy \(energy), ptime \(ptime) consistent")
+    }
+
+    static func between(_ value: UInt64, _ low: UInt64, _ high: UInt64) -> Bool {
+        value >= min(low, high) && value <= max(low, high)
     }
 
     /// S5：本线程自旋 60 ms，本 coalition 的 CPU 增量与本进程 rusage 增量一致。

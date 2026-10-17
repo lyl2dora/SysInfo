@@ -24,6 +24,11 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
     var factoryDefaults = false
     /// `--single-instance`：在 Debug 版上也按日用版的单实例规则执行（D48），截图自查与测试用。
     var singleInstance = false
+    /// `--open-app-activity[=<时间段>]`：启动后打开应用活动窗口（D67）；时间段为 now、hour、today、week、month，默认 now。
+    /// 截图自查与「窗口打开」档的开销测量用。
+    var appActivityRange: String?
+    /// `--app-activity-select=<n>`：与 `--open-app-activity` 一起用，数据到达后选中表格第 n 行（从 0 起），截图看详情用。
+    var appActivitySelectIndex: Int?
 
     init(arguments: [String]) {
         openPanel = arguments.contains("--open-panel")
@@ -37,6 +42,11 @@ nonisolated struct LaunchOptions: Sendable, Equatable {
         panelTab = arguments.first { $0.hasPrefix("--panel-tab=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)
         panelRoute = arguments.first { $0.hasPrefix("--panel-route=") }?.split(separator: "=", maxSplits: 1).last.map(String.init)
         merged = arguments.contains("--merged")
+        if let argument = arguments.first(where: { $0 == "--open-app-activity" || $0.hasPrefix("--open-app-activity=") }) {
+            appActivityRange = argument.split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init) ?? "now"
+        }
+        appActivitySelectIndex = arguments.first { $0.hasPrefix("--app-activity-select=") }?.split(separator: "=", maxSplits: 1).last
+            .flatMap { Int($0) }
         storageDetailIndex = arguments.first { $0.hasPrefix("--storage-detail=") }?.split(separator: "=", maxSplits: 1).last
             .flatMap { Int($0) }
     }

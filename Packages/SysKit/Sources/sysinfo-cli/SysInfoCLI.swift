@@ -173,6 +173,26 @@ struct SysInfoCLI {
                     runCatalog(
                         samples: try options.int("--samples", default: 4, range: 1...60), json: options.flag("--json"),
                         all: options.flag("--all")))
+            case "apps":
+                let options = try Options(arguments, flags: ["--json"], values: ["--interval", "--count", "--rows", "--sort", "--range", "--db"])
+                guard let sort = AppSortKey(rawValue: options.value("--sort") ?? "cpu") else {
+                    throw UsageError("--sort 取 \(AppSortKey.allCases.map(\.rawValue).joined(separator: "、"))")
+                }
+                guard let range = AppActivityRange(rawValue: options.value("--range") ?? "now") else {
+                    throw UsageError("--range 取 \(AppActivityRange.allCases.map(\.rawValue).joined(separator: "、"))")
+                }
+                exit(
+                    runApps(
+                        interval: try options.double("--interval", default: 2, range: 0.5...60),
+                        count: try options.int("--count", default: 1, range: 1...1_000_000),
+                        rows: try options.int("--rows", default: 20, range: 1...10_000), sort: sort, range: range,
+                        db: options.value("--db"), json: options.flag("--json")))
+            case "assertions":
+                let options = try Options(arguments, flags: ["--json"], values: ["--watch"])
+                exit(
+                    runAssertions(
+                        watchSeconds: try options.value("--watch").map { _ in try options.double("--watch", default: 30, range: 1...3600) },
+                        json: options.flag("--json")))
             case "history":
                 exit(try await runHistory(arguments))
             case "engine":
@@ -242,6 +262,11 @@ struct SysInfoCLI {
               storage [--interval 1] [--count 3] [--json]
                                                       物理盘清单、RAID 组、容量组，以及每盘读写、IOPS、延迟、温度与寿命
               smart [--json]                          每块物理盘的 NVMe SMART 全字段
+              apps [--interval 2] [--count 1] [--rows 20] [--sort cpu|power|memory|gpu|ane|disk|wakeups]
+                   [--range now|hour|today|week|month] [--db PATH] [--json]
+                                                      应用活动全表（D67）：「现在」为实时扫描，附应用合计与 SoC 功率；
+                                                      其余时段读历史库的按应用汇总与电源断言区间
+              assertions [--watch 秒]                 当前电源断言（合并、归属、coalition）与通知自检；--watch 事件驱动地打印变化
               disktop [--interval 2] [--count 1] [--rows 10] [--by-process] [--fallback] [--json]
                                                       按磁盘读写的 Top N（按应用或按进程）；--fallback 为同 uid 回退
               verify storage [--seconds 5]            每盘读写与 iostat -d 同一时间窗对照，容量组可用空间与 df -k 对照

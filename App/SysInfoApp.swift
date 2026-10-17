@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 临时历史库所在目录（`--factory-defaults`、Debug 从实例）；退出时删除。
     private var temporaryHistoryDirectory: URL?
     private var services: AppServices!
+    private var appActivity: AppActivityWindowController!
 
     /// 把 SIGTERM（`make stop`、登出、`kill`）转成正常的 `NSApp.terminate`，让 applicationWillTerminate 有机会收尾。
     private var terminateSignalSource: DispatchSourceSignal?
@@ -92,7 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         temporaryHistoryDirectory = temporaryName.map(Self.temporaryHistoryDirectory)
         let storage = StorageCollectors(collectors)
         let history = Self.makeHistory(
-            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first, power: power, storage: storage,
+            engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first,
+            assertions: collectors.compactMap { $0 as? PowerAssertionCollector }.first, power: power, storage: storage,
             temporaryDirectory: temporaryHistoryDirectory, settings: settings)
         self.history = history
         let services = AppServices(
@@ -101,6 +103,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             history: history, engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
+        // 应用活动窗口（D67）：模型挂在 services 上，引擎的 coalition 结果经 services.handle 转给它。
+        let appActivityModel = AppActivityModel(services: services, settings: settings, engine: engine)
+        services.appActivity = appActivityModel
+        let appActivity = AppActivityWindowController(model: appActivityModel, store: store, services: services, settings: settings)
+        self.appActivity = appActivity
+        services.openAppActivity = { [weak self] sort, range in self?.openAppActivity(sort: sort, range: range) }
         eventPump = Task {
             for await event in await engine.events() {
                 store.apply(event)
@@ -158,6 +166,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let route = options.panelRoute {
             openPanelRoute(route, attempt: 0)
         }
+        if let range = options.appActivityRange {
+            appActivity.open(range: AppActivityRange(rawValue: range) ?? .now)
+            if let index = options.appActivitySelectIndex { selectAppActivityRow(index, attempt: 0) }
+        }
         if options.openSettings || settings.visibleWidgets.isEmpty {
             settingsWindow.open(page: options.settingsPage.flatMap(SettingsPage.init(rawValue:)))
         }
@@ -202,6 +214,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.state.path = [.disk(disks[index].key)]
     }
 
+    /// `--app-activity-select=<n>`：等表格有数据后选中第 n 行（截图用）。
+    private func selectAppActivityRow(_ index: Int, attempt: Int) {
+        let rows = appActivity.model.visibleRows
+        guard index < rows.count else {
+            if attempt < 100 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.selectAppActivityRow(index, attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        appActivity.model.selection = rows[index].id
+    }
+
     /// `--panel-route=<页>`：等清单出来后推入二级页（D64，截图用）。
     private func openPanelRoute(_ name: String, attempt: Int) {
         let inventory = services.storageModel.inventory
@@ -243,6 +269,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.open(page: page)
     }
 
+    /// 打开应用活动窗口（D67）。锚在 item 下方的面板会盖住窗口，先关掉它；固定的浮窗保留。
+    private func openAppActivity(sort: AppActivityColumn?, range: AppActivityRange?) {
+        panel.dismissAnchored()
+        appActivity.open(sort: sort, range: range)
+    }
+
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
         let settings: AppSettings = self.settings
@@ -276,6 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { [history] in await history?.setConfiguration(configuration) }
         panel?.syncMergedState()
         panel?.updateDemands()
+        services?.appActivity?.settingsChanged()
     }
 
     private static func historyConfiguration(_ settings: AppSettings) -> HistoryRecorder.Configuration {
@@ -290,8 +323,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）；
     /// Debug 版的从实例同样用临时目录（`SysInfo-secondary-<pid>`），不与主实例同写一个库（D48）。退出时删除临时目录。
     private static func makeHistory(
-        engine: SamplingEngine, appSampler: AppSampler?, power: PowerCollectors, storage: StorageCollectors,
-        temporaryDirectory: URL?, settings: AppSettings
+        engine: SamplingEngine, appSampler: AppSampler?, assertions: PowerAssertionCollector?, power: PowerCollectors,
+        storage: StorageCollectors, temporaryDirectory: URL?, settings: AppSettings
     ) -> HistoryRecorder? {
         let url: URL?
         if let temporaryDirectory {
@@ -303,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let store = try HistoryStore(url: url)
             let recorder = HistoryRecorder(
-                store: store, engine: engine, appSampler: appSampler,
+                store: store, engine: engine, appSampler: appSampler, assertions: assertions,
                 power: .init(ledger: power.ledger, pmgr: power.pmgr), storageCapacity: storage.capacity,
                 configuration: historyConfiguration(settings))
             Task { await recorder.start() }

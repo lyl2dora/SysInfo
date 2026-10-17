@@ -90,6 +90,51 @@ import SysModel
         #expect(try store.appRows(from: 0, to: 10).isEmpty)
     }
 
+    @Test func appTotalsSumColumnsAndTakePeakFootprint() throws {
+        let store = try HistoryStore.inMemory()
+        let a = AppIdentity(key: "a", name: "A")
+        try store.write(
+            rows: [],
+            apps: [
+                AppMinuteRow(
+                    minute: 1, app: a, cpuNanos: 60_000_000_000, energyNanojoules: 1_000_000_000, gpuNanos: 5, gpuEnergyNanojoules: 2_000_000_000,
+                    aneEnergyNanojoules: 0, diskReadBytes: 10, diskWrittenBytes: 20, wakeups: 3, footprintBytes: 100),
+                AppMinuteRow(minute: 2, app: a, cpuNanos: 0, energyNanojoules: 0, wakeups: 4, footprintBytes: 300),
+            ])
+        let total = try #require(try store.appTotals(from: 0, to: 10).first)
+        #expect(total.cpuNanos == 60_000_000_000)
+        #expect(total.energyNanojoules == 3_000_000_000)
+        #expect(total.wakeups == 7)
+        #expect(total.footprintPeak == 300)
+        #expect(total.minutes == 2)
+        let series = try store.appSeries(key: "a", from: 0, to: 10, bucketMinutes: 1)
+        #expect(series.first?.cpu == 1)
+        #expect(abs((series.first?.watts ?? 0) - 0.05) < 1e-9)  // 3 J ÷ 60 s
+    }
+
+    @Test func assertionSpansOpenCloseAndReopen() throws {
+        let store = try HistoryStore.inMemory()
+        let app = AppIdentity(key: "com.example.vm", name: "VM")
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let id = try store.openAssertion(app: app, type: "PreventUserIdleSystemSleep", name: "VM running", holder: "", start: start)
+        #expect(try store.assertionSpans(from: start, to: start.addingTimeInterval(10)).first?.end == nil)
+        // 退出时还开着：按退出时刻收尾，标「估计」
+        try store.closeOpenAssertions(end: start.addingTimeInterval(60))
+        var span = try #require(try store.assertionSpans(from: start, to: start.addingTimeInterval(120)).first)
+        #expect(span.endEstimated)
+        // 重启后同一条断言还在：重新打开同一行
+        let again = try store.openAssertion(app: app, type: "PreventUserIdleSystemSleep", name: "VM running", holder: "", start: start)
+        #expect(again == id)
+        try store.closeAssertion(id: again, end: start.addingTimeInterval(300))
+        span = try #require(try store.assertionSpans(from: start, to: start.addingTimeInterval(400)).first)
+        #expect(!span.endEstimated)
+        #expect(span.seconds(from: start, to: start.addingTimeInterval(400), now: Date()) == 300)
+        #expect(span.kind == .preventSleep)
+        // 过期清理按结束时刻
+        try store.prune(before: Int64(start.timeIntervalSince1970 / 60) + 10)
+        #expect(try store.assertionSpans(from: start, to: start.addingTimeInterval(400)).isEmpty)
+    }
+
     @Test func epochOpensOnlyWhenTheMachineChanges() throws {
         let store = try HistoryStore.inMemory()
         #expect(try store.recordEpoch(epoch(10)))

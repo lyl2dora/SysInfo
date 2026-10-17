@@ -3,6 +3,7 @@
 // - 登记 background 层需求（锁屏、显示器睡眠时继续采，不受降频影响）：
 //   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）；内存每 10 s（D49）；
 //   存储（读写、SMART、容量）每 60 s（存储模块设计 §5）；网络每 60 s（网络模块设计 §6）。
+//   电源断言（D69）：事件驱动（`app.assertions` 的通知），通知不可用时每 60 s 轮询；只在记录每应用数据时。
 //   用户开启「后台高精度」时，频率、温度与功耗改为每 5 s（D19 的高开销项）。
 //   菜单栏、面板的前台需求更密时，引擎按较短的间隔采样，记录器直接用这些样本，峰值随之更准；
 // - 每 5 分钟（整 5 分之后 1 分钟，即 :01、:06…）提交一次事务：写入已结束的分钟、新开 epoch、小时汇总、
@@ -24,7 +25,7 @@ public actor HistoryRecorder {
     public struct Configuration: Sendable, Hashable {
         /// 记录整机 CPU 指标（设置「是否记录 CPU 历史」）。
         public var recordSystem: Bool
-        /// 记录每应用 CPU（设置「是否记录每应用 CPU」）。
+        /// 记录每应用数据（D68：CPU、能耗、GPU、ANE、磁盘、唤醒、内存）与电源断言（D69）。
         public var recordApps: Bool
         /// 后台高精度：频率、温度与功耗改为每 5 s（用户开启的高开销项，D19、CPU 模块设计 §7.3）。
         public var highPrecision: Bool
@@ -86,13 +87,25 @@ public actor HistoryRecorder {
     /// 提交周期，分钟；在周期边界之后这么多秒提交（让上一分钟最后一个 1 s 样本先到）。
     static let flushPeriodMinutes: Int64 = 5
     static let flushOffsetSeconds: Int64 = 62
-    /// 每个窗口为前多少个 coalition 解析应用身份。每分钟的前 10 几乎总在各窗口的前列里；
-    /// coalition 退出后就解析不到，所以要在窗口到达时就解析。
+    /// 每个窗口为各列前多少个 coalition 解析应用身份（D68：写库时取各列前 10 的并集，每分钟的前 10 几乎总在
+    /// 各窗口的前列里）。coalition 退出后就解析不到，所以要在窗口到达时就解析；其余记进「其余合计」。
     static let identitiesPerWindow = 16
+    /// 电源断言轮询的间隔（事件驱动不可用时，D69）。
+    public static let assertionPollInterval = 60
+    static let assertionsLastSeenKey = "assertions.lastSeen"
+    /// 总览「最耗能的应用」的统计时长，秒（D70）。
+    static let recentEnergySeconds: TimeInterval = 60
 
     private let store: HistoryStore
     private let engine: SamplingEngine
     private let appSampler: AppSampler?
+    private let assertions: PowerAssertionCollector?
+    /// 正在进行的断言：spanKey → 断言表行 id。
+    private var openSpans: [String: Int64] = [:]
+    /// 当前是否登记了断言轮询需求。
+    private var assertionPolling = false
+    /// 最近 60 s 的窗口里各应用的能耗（D70）。
+    private var recentEnergy: [(time: Date, seconds: Double, apps: [String: (name: String, nanojoules: UInt64)])] = []
     private let power: PowerSources
     /// 容量组（标签用）；nil 时只记盘的标签。
     private let storageCapacity: StorageCapacityCollector?
@@ -125,6 +138,7 @@ public actor HistoryRecorder {
     ///   - epoch: 返回当前机器的 epoch（参数是起始分钟）；默认按 `HistoryRecorder.currentEpoch` 读取。
     public init(
         store: sending HistoryStore, engine: SamplingEngine, appSampler: AppSampler?,
+        assertions: PowerAssertionCollector? = nil,
         power: PowerSources = PowerSources(ledger: nil, pmgr: nil), storageCapacity: StorageCapacityCollector? = nil,
         configuration: Configuration = Configuration(),
         epoch: @escaping @Sendable (Int64) -> HistoryEpoch? = { HistoryRecorder.currentEpoch(startMinute: $0) }
@@ -133,6 +147,7 @@ public actor HistoryRecorder {
         self.store = store
         self.engine = engine
         self.appSampler = appSampler
+        self.assertions = assertions
         self.power = power
         self.configuration = configuration
         self.epoch = epoch
@@ -168,6 +183,7 @@ public actor HistoryRecorder {
             }
         }
         await applyDemands()
+        startAssertions()
         scheduleFlush()
         logger.info("历史记录开始：\(self.store.path, privacy: .private)")
     }
@@ -177,6 +193,7 @@ public actor HistoryRecorder {
         tokens.forEach { $0.cancel() }
         tokens = []
         appSampler?.setRetainsWindows(false)
+        stopAssertions(at: Date())
         pump?.cancel()
         pump = nil
         timer?.cancel()
@@ -187,9 +204,14 @@ public actor HistoryRecorder {
 
     public func setConfiguration(_ configuration: Configuration) async {
         guard configuration != self.configuration else { return }
+        let wasRecordingApps = self.configuration.recordApps
         self.configuration = configuration
         if !configuration.recordApps { aggregator.clearApps() }
-        if pump != nil { await applyDemands() }
+        if pump != nil {
+            if wasRecordingApps, !configuration.recordApps { stopAssertions(at: Date()) }
+            if !wasRecordingApps, configuration.recordApps { startAssertions() }
+            await applyDemands()
+        }
     }
 
     private func applyDemands() async {
@@ -259,6 +281,13 @@ public actor HistoryRecorder {
                     collectors: [PowerRailCollector.collectorID], interval: Self.energyInterval, source: .history,
                     tier: .background))
         }
+        assertionPolling = recordApps && assertions != nil && assertions?.isEventDriven != true
+        if assertionPolling {
+            demands.append(
+                Demand(
+                    collectors: [PowerAssertionCollector.collectorID], interval: Self.assertionPollInterval, source: .history,
+                    tier: .background))
+        }
         appSampler?.setRetainsWindows(recordApps)
         for demand in demands {
             tokens.append(await engine.addDemand(demand))
@@ -274,7 +303,15 @@ public actor HistoryRecorder {
 
     // MARK: - 事件
 
-    private func handle(_ event: EngineEvent) {
+    private func handle(_ event: EngineEvent) async {
+        if case .status = event {
+            // 自检之后断言通知可能变得可用或不可用：轮询需求随之增减（D69）。
+            let wantsPolling = configuration.recordApps && assertions != nil && assertions?.isEventDriven != true
+            if wantsPolling != assertionPolling { await applyDemands() }
+            // 自检刚读过一次断言：用它核对（启动时记录器可能早于自检开始，拿不到第一次快照；事件驱动只在变化时交付）。
+            if configuration.recordApps, let latest = assertions?.latestSnapshot { ingestAssertions(latest) }
+            return
+        }
         guard case .tick(let result) = event else { return }
         var modules: Set<HistoryModule> = []
         if configuration.recordSystem { modules.insert(.cpu) }
@@ -290,11 +327,120 @@ public actor HistoryRecorder {
         }
         if result.collectors.contains(AppSampler.collectorID), configuration.recordApps, let appSampler {
             for window in appSampler.drainRetainedWindows() {
-                let top = window.coalitions.prefix(Self.identitiesPerWindow).filter { $0.cpuNanos > 0 }
-                let identities = resolver.resolve(top.map { ($0.id, $0.tasks) })
+                let wanted = Self.identityCandidates(window)
+                let identities = resolver.resolve(wanted.map { ($0.id, $0.tasks) })
                 aggregator.ingestApps(window, identities: identities)
+                noteRecentEnergy(window, identities: identities)
             }
         }
+    }
+
+    /// 各列前 `identitiesPerWindow` 名的并集（D68）。
+    static func identityCandidates(_ window: AppActivityWindow) -> [CoalitionDelta] {
+        let columns: [(CoalitionDelta) -> UInt64] = [
+            \.cpuNanos, { $0.energyNanojoules &+ $0.gpuEnergyNanojoules &+ $0.aneEnergyNanojoules }, \.gpuNanos,
+            \.aneEnergyNanojoules, { $0.diskReadBytes &+ $0.diskWrittenBytes }, \.wakeups, \.footprintBytes,
+        ]
+        var seen = Set<UInt64>()
+        var out: [CoalitionDelta] = []
+        for column in columns {
+            for delta in window.coalitions.filter({ column($0) > 0 }).sorted(by: { column($0) > column($1) })
+                .prefix(identitiesPerWindow) where seen.insert(delta.id).inserted
+            {
+                out.append(delta)
+            }
+        }
+        return out
+    }
+
+    // MARK: - 最近最耗能的应用（D70）
+
+    private func noteRecentEnergy(_ window: AppActivityWindow, identities: [UInt64: AppIdentity]) {
+        guard window.slotsTrusted, window.elapsedNanos > 0 else { return }
+        var apps: [String: (name: String, nanojoules: UInt64)] = [:]
+        for delta in window.coalitions {
+            guard let identity = identities[delta.id] else { continue }
+            let energy = delta.energyNanojoules &+ delta.gpuEnergyNanojoules &+ delta.aneEnergyNanojoules
+            guard energy > 0 else { continue }
+            apps[identity.key, default: (identity.name, 0)].nanojoules &+= energy
+        }
+        let now = window.time.wallClock
+        recentEnergy.append((now, Double(window.elapsedNanos) / 1e9, apps))
+        recentEnergy.removeAll { now.timeIntervalSince($0.time) > Self.recentEnergySeconds }
+    }
+
+    /// 最近 60 s 平均功率最高的应用（CPU + GPU + ANE，D67 口径），W。来自后台已有的扫描，不另外采样（D70）。
+    public func recentTopEnergy(limit: Int) -> [(key: String, name: String, watts: Double)] {
+        let seconds = recentEnergy.reduce(0) { $0 + $1.seconds }
+        guard seconds > 0 else { return [] }
+        var totals: [String: (name: String, nanojoules: UInt64)] = [:]
+        for window in recentEnergy {
+            for (key, value) in window.apps { totals[key, default: (value.name, 0)].nanojoules &+= value.nanojoules }
+        }
+        return totals.sorted { $0.value.nanojoules > $1.value.nanojoules }.prefix(limit).map {
+            ($0.key, $0.value.name, Double($0.value.nanojoules) / 1e9 / seconds)
+        }
+    }
+
+    // MARK: - 电源断言（D69）
+
+    private func startAssertions() {
+        guard configuration.recordApps, let assertions else { return }
+        // 上次运行遗留的未结束行：按上次提交时刻收尾，标「估计」。
+        let lastSeen = (try? store.decoded(Double.self, forKey: Self.assertionsLastSeenKey)).map(Date.init(timeIntervalSince1970:))
+        do {
+            try store.closeOpenAssertions(end: lastSeen ?? Date())
+        } catch {
+            logger.error("收尾遗留断言失败：\(String(describing: error), privacy: .public)")
+        }
+        openSpans = [:]
+        assertions.setChangeHandler { [weak self] snapshot in
+            Task { await self?.ingestAssertions(snapshot) }
+        }
+        if let latest = assertions.latestSnapshot { ingestAssertions(latest) }
+    }
+
+    private func stopAssertions(at date: Date) {
+        assertions?.setChangeHandler(nil)
+        guard !openSpans.isEmpty else { return }
+        do {
+            try store.closeOpenAssertions(end: date)
+        } catch {
+            logger.error("收尾断言失败：\(String(describing: error), privacy: .public)")
+        }
+        openSpans = [:]
+    }
+
+    /// 与上一次比较，得到开始 / 结束。只记阻止睡眠与阻止显示器睡眠的断言。
+    func ingestAssertions(_ snapshot: PowerAssertionSnapshot) {
+        guard configuration.recordApps else { return }
+        let current = snapshot.assertions.filter { $0.kind.preventsSleep }
+        let currentKeys = Set(current.map(\.spanKey))
+        do {
+            for (key, id) in openSpans where !currentKeys.contains(key) {
+                try store.closeAssertion(id: id, end: snapshot.time)
+                openSpans[key] = nil
+            }
+            let new = current.filter { openSpans[$0.spanKey] == nil }
+            guard !new.isEmpty else { return }
+            let identities = resolver.resolve(new.compactMap { $0.coalitionID.map { ($0, UInt32(8)) } })
+            for assertion in new {
+                let identity =
+                    assertion.coalitionID.flatMap { identities[$0] }
+                    ?? AppIdentity(key: "pid:\(assertion.pid)", name: assertion.holderName)
+                let start = min(assertion.since ?? snapshot.time, snapshot.time)
+                openSpans[assertion.spanKey] = try store.openAssertion(
+                    app: identity, type: assertion.type, name: assertion.name,
+                    holder: assertion.isOnBehalf ? assertion.holderName : "", start: start)
+            }
+        } catch {
+            logger.error("记录断言失败：\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// 时段内的断言区间（先不需要提交：断言是即时写入的）。
+    public func assertionSpans(from: Date, to: Date) throws -> [PowerAssertionSpan] {
+        try store.assertionSpans(from: from, to: to)
     }
 
     // MARK: - 提交
@@ -342,6 +488,9 @@ public actor HistoryRecorder {
             try store.rollUpEnergyHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try saveAnchorAndPMGR()
             try saveStorageLabels()
+            if configuration.recordApps, assertions != nil {
+                try store.setEncoded(now.timeIntervalSince1970, forKey: Self.assertionsLastSeenKey)
+            }
             if lastPrune.map({ now.timeIntervalSince($0) >= 86_400 }) ?? true {
                 try store.prune(before: current - Int64(HistoryStore.minuteRetention / 60))
                 lastPrune = now
@@ -435,6 +584,20 @@ public actor HistoryRecorder {
 
     public func stats() throws -> HistoryStats {
         try store.stats()
+    }
+
+    /// 时段内按应用汇总（应用活动的历史时段，D67）。先提交内存里的数据。
+    public func appTotals(from: Date, to: Date) throws -> [AppTotal] {
+        flush()
+        return try store.appTotals(from: MinuteAggregator.minute(of: from), to: MinuteAggregator.minute(of: to) + 1)
+    }
+
+    /// 一个应用的 CPU 与功率曲线（应用详情）。先提交内存里的数据。
+    public func appSeries(key: String, from: Date, to: Date, bucketMinutes: Int64) throws -> [AppSeriesPoint] {
+        flush()
+        return try store.appSeries(
+            key: key, from: MinuteAggregator.minute(of: from), to: MinuteAggregator.minute(of: to) + 1,
+            bucketMinutes: bucketMinutes)
     }
 
     public func topApps(from: Date, to: Date, limit: Int) throws -> [(key: String, name: String, cpuNanos: Int64)] {

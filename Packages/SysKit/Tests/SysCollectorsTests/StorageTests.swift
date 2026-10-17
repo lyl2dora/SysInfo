@@ -265,7 +265,9 @@ import Testing
     }
 }
 
-@Suite(.tags(.hardware), .hardwareOnly)
+/// 串行：NVMe SMART 的用户态连接是独占的（D56），同一套件里的几个测试并行读同一块盘时会互相拿到
+/// kIOReturnExclusiveAccess，偶发失败（2026-10-17 实测单独跑这一套件约一半次数失败）。
+@Suite(.tags(.hardware), .hardwareOnly, .serialized)
 struct StorageHardwareTests {
     @Test func findsPhysicalDisksWithStatistics() throws {
         let io = StorageIOCollector()
