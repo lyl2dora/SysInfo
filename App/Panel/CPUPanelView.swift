@@ -87,12 +87,12 @@ private struct CPUDetailsSection: View {
                 DisclosureGroup(isExpanded: $sourcesExpanded) {
                     interruptSources
                 } label: {
-                    toggleLabel($sourcesExpanded) { Text("中断来源").font(.caption) }
+                    toggleLabel($sourcesExpanded) { Text("中断来源").font(.panelRow) }
                 }
             }
             .padding(.top, 4)
         } label: {
-            toggleLabel($expanded) { Text("详情").font(.caption.weight(.semibold)) }
+            toggleLabel($expanded) { Text("详情").font(.panelRow.weight(.semibold)) }
         }
         .onChange(of: expanded) { layoutChanged() }
         .onChange(of: sourcesExpanded) { layoutChanged() }
@@ -113,13 +113,13 @@ private struct CPUDetailsSection: View {
         let sources = services.collectors.interrupts?.latestSources ?? []
         VStack(alignment: .leading, spacing: 2) {
             if sources.isEmpty {
-                Text("约 5 秒后显示").font(.caption2).foregroundStyle(.tertiary)
+                Text("约 5 秒后显示").font(.panelNote).foregroundStyle(.tertiary)
             }
             ForEach(sources.prefix(8), id: \.device) { source in
                 HStack {
-                    Text(source.device).font(.caption2.monospaced())
+                    Text(source.device).font(.panelNote.monospaced())
                     Spacer()
-                    Text(Formatting.rate(source.perSecond)).font(.caption2).monospacedDigit()
+                    Text(Formatting.rate(source.perSecond)).font(.panelNote).monospacedDigit()
                 }
                 .foregroundStyle(.secondary)
             }
@@ -149,7 +149,7 @@ private struct CPUDetailsSection: View {
             Spacer()
             Text(value).monospacedDigit()
         }
-        .font(.caption)
+        .font(.panelRow)
         .help(help ?? "")
     }
 

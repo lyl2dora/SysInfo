@@ -57,7 +57,7 @@ struct HistoryChart: View {
             chart
                 .frame(height: 110)
             if current.usesHistory, history == nil || loadError {
-                Text("历史库不可用").font(.caption2).foregroundStyle(.secondary)
+                Text("历史库不可用").font(.panelNote).foregroundStyle(.secondary)
             }
         }
         .task(id: TaskKey(span: current, metric: series.metric, overlay: series.overlay)) {
@@ -144,7 +144,7 @@ struct HistoryChart: View {
                         Spacer()
                         Text(PercentFormat.string(fromRatio: 0))
                     }
-                    .font(.caption2)
+                    .font(.panelNote)
                     .foregroundStyle(.secondary)
                     .frame(width: 34, alignment: .leading)
                 }
@@ -156,7 +156,7 @@ struct HistoryChart: View {
                 Spacer()
                 Text(Self.axisLabel(0))
             }
-            .font(.caption2)
+            .font(.panelNote)
             .foregroundStyle(.secondary)
             .padding(.trailing, series.scale == .unit ? 38 : 0)
         }

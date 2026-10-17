@@ -105,10 +105,10 @@ struct PMGRBatchCard: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 // 批次超过 1 小时没更新（多半是 app 没在运行）时不再叫「最近 30 分钟」。
-                (batch.map(isStale) == true ? Text("最近一批（30 分钟）") : Text("最近 30 分钟")).font(.caption.weight(.semibold))
+                (batch.map(isStale) == true ? Text("最近一批（30 分钟）") : Text("最近 30 分钟")).font(.panelRow.weight(.semibold))
                 Spacer()
                 if let batch {
-                    Text(windowText(batch)).font(.caption2).foregroundStyle(.secondary)
+                    Text(windowText(batch)).font(.panelNote).foregroundStyle(.secondary)
                 }
             }
             if let batch {
@@ -123,12 +123,12 @@ struct PMGRBatchCard: View {
                     line(name.uppercased(), watts: batch.watts(name) ?? 0, extra: nil)
                 }
                 Text("Apple 功耗模型口径，每 30 分钟更新一次；神经网络引擎、媒体引擎只有这一个来源。")
-                    .font(.caption2)
+                    .font(.panelNote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("等待首个批次：开机后约每 30 分钟发布一次，app 运行期间才能收到。")
-                    .font(.caption2)
+                    .font(.panelNote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -152,12 +152,12 @@ struct PMGRBatchCard: View {
         HStack {
             Text(title).foregroundStyle(.secondary)
             if let extra {
-                Text(extra).font(.caption2).foregroundStyle(.tertiary)
+                Text(extra).font(.panelNote).foregroundStyle(.tertiary)
             }
             Spacer()
             Text(Formatting.watts(watts)).monospacedDigit()
         }
-        .font(.caption)
+        .font(.panelRow)
     }
 
     private func isStale(_ batch: PMGRBatch) -> Bool { now.timeIntervalSince(batch.end) > 3600 }
@@ -204,11 +204,11 @@ struct EnergyCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("能耗").font(.caption.weight(.semibold))
+            Text("能耗").font(.panelRow.weight(.semibold))
             if !enabled {
-                Text("未记录能耗，可以在设置的「功耗与散热」页开启。").font(.caption2).foregroundStyle(.secondary)
+                Text("未记录能耗，可以在设置的「功耗与散热」页开启。").font(.panelNote).foregroundStyle(.secondary)
             } else if history == nil {
-                Text("历史库不可用").font(.caption2).foregroundStyle(.secondary)
+                Text("历史库不可用").font(.panelNote).foregroundStyle(.secondary)
             } else {
                 // 行数固定（读到之前显示「—」），说明行也总在：高度不随异步读取变化（D47）。
                 ForEach(Self.titles, id: \.self) { title in
@@ -217,13 +217,13 @@ struct EnergyCard: View {
                         Spacer()
                         Text(rows.first { $0.title == title }.map { Formatting.energy($0.summary.total) } ?? "—").monospacedDigit()
                     }
-                    .font(.caption)
+                    .font(.panelRow)
                 }
                 Text(
                     rows.contains(where: { $0.summary.filled > 0 })
                         ? "含 SysInfo 未运行时段的系统累计值，满载时可能偏低。" : "按整机功率每秒积分。"
                 )
-                .font(.caption2)
+                .font(.panelNote)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }

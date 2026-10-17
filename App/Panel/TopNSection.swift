@@ -27,20 +27,20 @@ struct TopNSection: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(heading)
-                    .font(.caption.weight(.semibold))
+                    .font(.panelRow.weight(.semibold))
                 Spacer()
                 if model.isFrozen {
-                    Image(systemName: "pause.circle").font(.caption).foregroundStyle(.secondary).help("悬停时暂停排序")
+                    Image(systemName: "pause.circle").font(.panelRow).foregroundStyle(.secondary).help("悬停时暂停排序")
                 }
             }
             if model.isFallback, model.metric == .gpu {
                 Text("应用活动数据不可用：没有按进程的公开 GPU 计数，无法列出")
-                    .font(.caption2)
+                    .font(.panelNote)
                     .foregroundStyle(.secondary)
             } else if model.isFallback {
                 HStack {
                     Text("只列出你自己的进程（另有 \(model.hiddenCount) 个读不到）")
-                        .font(.caption2)
+                        .font(.panelNote)
                         .foregroundStyle(.secondary)
                     Spacer()
                     if model.supportsRefreshAll {
@@ -119,7 +119,7 @@ private struct TopNRowView: View {
                             }
                             if let top = row.topMember {
                                 Text("\(top.name) \(memberValue(top) ?? "")")
-                                    .font(.caption2)
+                                    .font(.panelNote)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -128,20 +128,20 @@ private struct TopNRowView: View {
                     Spacer(minLength: 4)
                     if let share = row.perfLevel0Share {
                         Text("P0 \(PercentFormat.string(fromRatio: share))")
-                            .font(.caption2)
+                            .font(.panelNote)
                             .foregroundStyle(.tertiary)
                             .help("在最快一档上运行的时间占比")
                     }
                     if let watts = row.energyWatts {
-                        Text(Formatting.watts(watts)).font(.caption2).foregroundStyle(.secondary)
+                        Text(Formatting.watts(watts)).font(.panelNote).foregroundStyle(.secondary)
                     }
                     if metric == .gpu {
                         if let ane = row.aneWatts, ane >= 0.005 {
-                            Text("ANE \(Formatting.watts(ane))").font(.caption2).foregroundStyle(.tertiary)
+                            Text("ANE \(Formatting.watts(ane))").font(.panelNote).foregroundStyle(.tertiary)
                                 .help("ANE 能耗（coalition 记账，估算）")
                         }
                         if let watts = row.gpuWatts {
-                            Text(Formatting.watts(watts)).font(.caption2).foregroundStyle(.secondary).help("GPU 能耗")
+                            Text(Formatting.watts(watts)).font(.panelNote).foregroundStyle(.secondary).help("GPU 能耗")
                         }
                     }
                     Text(rowValue)
@@ -158,13 +158,13 @@ private struct TopNRowView: View {
                 Color.clear.frame(width: 16)
             }
             Image(systemName: "chevron.right")
-                .font(.caption2)
+                .font(.panelNote)
                 .foregroundStyle(.tertiary)
                 .opacity(open == nil ? 0 : 1)
                 .frame(width: 8)
                 .accessibilityHidden(true)
         }
-        .font(.caption)
+        .font(.panelRow)
         .monospacedDigit()
     }
 
@@ -201,7 +201,7 @@ private struct TopNRowView: View {
         ZStack(alignment: .leading) {
             VStack(spacing: 0) {
                 Text(" ")
-                Text(" ").font(.caption2)
+                Text(" ").font(.panelNote)
             }
             .hidden()
             content()
@@ -215,7 +215,7 @@ private struct TopNRowView: View {
             twoLineSlot { Text(text ?? " ").foregroundStyle(.tertiary).lineLimit(1) }
             Spacer()
         }
-        .font(.caption)
+        .font(.panelRow)
         .accessibilityHidden(text == nil)
     }
 

@@ -42,14 +42,14 @@ struct GPUPanelView: View {
 // MARK: - 概览
 
 final class GPUOverviewDrawView: LiveDrawView {
-    static let height: CGFloat = 86
+    static let height: CGFloat = 94
 
     private static let big: NSFont = {
-        let base = NSFont.monospacedDigitSystemFont(ofSize: 34, weight: .semibold)
-        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 34) } ?? base
+        let base = NSFont.monospacedDigitSystemFont(ofSize: PanelType.hero, weight: .semibold)
+        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: PanelType.hero) } ?? base
     }()
-    private static let subheadline = NSFont.systemFont(ofSize: 13)
-    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    private static let subheadline = NSFont.systemFont(ofSize: PanelType.title)
+    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: PanelType.title, weight: .medium)
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
@@ -57,17 +57,17 @@ final class GPUOverviewDrawView: LiveDrawView {
         Self.draw(Self.text(String(localized: "GPU 活跃"), Self.subheadline, .secondaryLabelColor), x: 0, y: 0)
         let active = latest[.gpuActive]
         let activeText = active?.value.map { PercentFormat.string(fromRatio: $0) } ?? PercentFormat.placeholder
-        Self.draw(Self.text(activeText, Self.big), x: 0, y: 16)
+        Self.draw(Self.text(activeText, Self.big), x: 0, y: 17)
         // 活跃的含义（D57 G1）：上电时间，不是算力占用。
         Self.draw(
-            Self.text(String(localized: "上电运行的时间比例，不是算力占用"), Self.caption2, .secondaryLabelColor), x: 0, y: 64)
+            Self.text(String(localized: "上电运行的时间比例，不是算力占用"), Self.caption2, .secondaryLabelColor), x: 0, y: 66)
 
         let right = bounds.width
         var y: CGFloat = 0
         func item(_ title: String, _ value: String) {
             Self.drawRight(Self.text(title, Self.caption2, .secondaryLabelColor), right: right, y: y)
-            Self.drawRight(Self.text(value, Self.callout), right: right, y: y + 12)
-            y += 29
+            Self.drawRight(Self.text(value, Self.callout), right: right, y: y + 14)
+            y += 31
         }
         item(String(localized: "频率"), Self.frequencyText(latest[.gpuFrequency]))
         item(String(localized: "功率"), store.smoothed[.powerGPU].map(Formatting.watts) ?? "—")
@@ -96,8 +96,8 @@ final class GPUOverviewDrawView: LiveDrawView {
 
 /// ANE（开 / 关与估算功率）、媒体引擎（编码 / 解码 / ProRes 的活动与相对强度）、GPU 占用的统一内存。
 final class AcceleratorDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 18
-    static let height: CGFloat = 16 + rowHeight * 2 + 8 + 16 + rowHeight * 3 + 8 + rowHeight + 28
+    static let rowHeight: CGFloat = 19
+    static let height: CGFloat = 17 + rowHeight * 2 + 8 + 17 + rowHeight * 3 + 8 + rowHeight + 30
 
     /// 媒体引擎的相对强度：除以本次运行观察到的最大速率（每个引擎至少按 `minimumScale` 算，避免空闲时的零星中断显得很满）。
     private var maxima: [MetricID: Double] = [:]
@@ -119,7 +119,7 @@ final class AcceleratorDrawView: LiveDrawView {
 
         // ANE
         Self.draw(Self.text(String(localized: "神经网络引擎（ANE）"), Self.captionBold), x: 0, y: y)
-        y += 16
+        y += 17
         let powered = latest[.anePowered]
         let state: (String, NSColor) =
             switch powered?.value {
@@ -136,11 +136,11 @@ final class AcceleratorDrawView: LiveDrawView {
 
         // 媒体引擎
         Self.draw(Self.text(String(localized: "媒体引擎"), Self.captionBold), x: 0, y: y)
-        y += 16
+        y += 17
         for (id, title) in Self.engines {
             Self.draw(Self.text(title, Self.caption, .secondaryLabelColor), x: 0, y: y)
             let sample = latest[id]
-            let bar = NSRect(x: 80, y: y + 5, width: max(width - 80 - 64, 20), height: 5)
+            let bar = NSRect(x: 80, y: y + 5.5, width: max(width - 80 - 70, 20), height: 5)
             NSColor.quaternaryLabelColor.setFill()
             NSBezierPath(roundedRect: bar, xRadius: 2, yRadius: 2).fill()
             var label = "—"
@@ -172,7 +172,7 @@ final class AcceleratorDrawView: LiveDrawView {
         Self.draw(
             Self.text(String(localized: "ANE 关断滞后约 5 秒；功率按应用的能耗记账估算。"), Self.caption2, .secondaryLabelColor), x: 0, y: y)
         Self.draw(
-            Self.text(String(localized: "媒体引擎只给相对强度；内存为在用 / 已分配。"), Self.caption2, .secondaryLabelColor), x: 0, y: y + 13)
+            Self.text(String(localized: "媒体引擎只给相对强度；内存为在用 / 已分配。"), Self.caption2, .secondaryLabelColor), x: 0, y: y + 14)
         setAccessibilityLabel(String(localized: "加速器：ANE \(state.0)"))
     }
 

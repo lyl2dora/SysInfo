@@ -12,14 +12,14 @@ final class PowerOverviewDrawView: LiveDrawView {
         didSet { if hasFans != oldValue { needsDisplay = true } }
     }
 
-    static let height: CGFloat = 86
+    static let height: CGFloat = 94
 
     private static let big: NSFont = {
-        let base = NSFont.monospacedDigitSystemFont(ofSize: 34, weight: .semibold)
-        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 34) } ?? base
+        let base = NSFont.monospacedDigitSystemFont(ofSize: PanelType.hero, weight: .semibold)
+        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: PanelType.hero) } ?? base
     }()
-    private static let subheadline = NSFont.systemFont(ofSize: 13)
-    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    private static let subheadline = NSFont.systemFont(ofSize: PanelType.title)
+    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: PanelType.title, weight: .medium)
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
@@ -27,22 +27,22 @@ final class PowerOverviewDrawView: LiveDrawView {
         let latest = store.latest
         Self.draw(Self.text(String(localized: "整机功率"), Self.subheadline, .secondaryLabelColor), x: 0, y: 0)
         let system = smoothed[.powerSystem].map(Formatting.watts) ?? "—"
-        let w = Self.draw(Self.text(system, Self.big), x: 0, y: 16)
+        let w = Self.draw(Self.text(system, Self.big), x: 0, y: 17)
         if latest[.powerSystem]?.quality == .inferred {
-            Self.draw(Self.text(String(localized: "推断"), Self.caption, .secondaryLabelColor), x: w + 6, y: 38)
+            Self.draw(Self.text(String(localized: "推断"), Self.caption, .secondaryLabelColor), x: w + 6, y: 39)
         }
         // 墙插功率只是公式值（D46），放在次要位置并标「估算」。
         if let wall = latest[.powerWall]?.value {
             let text = String(localized: "墙插约 \(Formatting.watts(wall))（估算）")
-            Self.draw(Self.text(text, Self.caption2Digits, .secondaryLabelColor), x: 0, y: 64)
+            Self.draw(Self.text(text, Self.caption2Digits, .secondaryLabelColor), x: 0, y: 66)
         }
 
         let right = bounds.width
         var y: CGFloat = 0
         func item(_ title: String, _ value: String) {
             Self.drawRight(Self.text(title, Self.caption2, .secondaryLabelColor), right: right, y: y)
-            Self.drawRight(Self.text(value, Self.callout), right: right, y: y + 12)
-            y += 29
+            Self.drawRight(Self.text(value, Self.callout), right: right, y: y + 14)
+            y += 31
         }
         item(String(localized: "SoC"), smoothed[.powerSoC].map(Formatting.watts) ?? "—")
         item(String(localized: "最热点"), latest[.thermalSoCHotspot]?.value.map(Formatting.temperature) ?? "—")
@@ -57,8 +57,8 @@ final class PowerOverviewDrawView: LiveDrawView {
 // MARK: - 功率分解（D44 PT4：各部件一行、SoC 合计单独一行，不相减）
 
 final class PowerBreakdownDrawView: LiveDrawView {
-    static let rowHeight: CGFloat = 17
-    static let height: CGFloat = 16 + rowHeight * 4 + 6 + 15
+    static let rowHeight: CGFloat = 18
+    static let height: CGFloat = 17 + rowHeight * 4 + 6 + 16
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
@@ -72,7 +72,7 @@ final class PowerBreakdownDrawView: LiveDrawView {
             (String(localized: "DRAM"), latest[.powerDRAM]?.value, Self.reason(latest[.powerDRAM])),
         ]
         let scale = max(soc ?? 0, rows.compactMap(\.1).max() ?? 0, 1)
-        var y: CGFloat = 16
+        var y: CGFloat = 17
         for (title, value, reason) in rows {
             drawRow(title, value: value, reason: reason, scale: scale, y: y, color: .controlAccentColor)
             y += Self.rowHeight
@@ -89,7 +89,7 @@ final class PowerBreakdownDrawView: LiveDrawView {
 
     private func drawRow(_ title: String, value: Double?, reason: String?, scale: Double, y: CGFloat, color: NSColor) {
         Self.draw(Self.text(title, Self.caption, .secondaryLabelColor), x: 0, y: y)
-        let bar = NSRect(x: 80, y: y + 5, width: bounds.width - 80 - 70, height: 5)
+        let bar = NSRect(x: 80, y: y + 5.5, width: bounds.width - 80 - 76, height: 5)
         NSColor.quaternaryLabelColor.setFill()
         NSBezierPath(roundedRect: bar, xRadius: 2, yRadius: 2).fill()
         if let value {
@@ -118,17 +118,17 @@ final class ThermalDrawView: LiveDrawView {
         didSet { if fanCount != oldValue { needsDisplay = true } }
     }
 
-    static let rowHeight: CGFloat = 17
+    static let rowHeight: CGFloat = 18
 
     static func height(fans: Int) -> CGFloat {
-        16 + rowHeight * CGFloat(1 + fans) + 22
+        17 + rowHeight * CGFloat(1 + fans) + 23
     }
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
         let latest = store.latest
         Self.draw(Self.text(String(localized: "散热"), Self.captionBold), x: 0, y: 0)
-        var y: CGFloat = 16
+        var y: CGFloat = 17
         Self.draw(Self.text(String(localized: "SoC 最热点"), Self.caption, .secondaryLabelColor), x: 0, y: y)
         let hotspot = latest[.thermalSoCHotspot]
         let hotspotText: String
@@ -151,7 +151,7 @@ final class ThermalDrawView: LiveDrawView {
             let forced = (latest[.fanMode(index)]?.value ?? 0) != 0
             // 占范围百分比：(实际 − 最低) / (最高 − 最低)。
             if let rpm, let low, let high, high > low {
-                let bar = NSRect(x: 80, y: y + 5, width: bounds.width - 80 - 150, height: 5)
+                let bar = NSRect(x: 80, y: y + 5.5, width: bounds.width - 80 - 164, height: 5)
                 NSColor.quaternaryLabelColor.setFill()
                 NSBezierPath(roundedRect: bar, xRadius: 2, yRadius: 2).fill()
                 NSColor.systemTeal.setFill()

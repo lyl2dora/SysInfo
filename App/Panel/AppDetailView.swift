@@ -21,9 +21,9 @@ struct AppDetailView: View {
                 PanelCard { values(detail) }
                 PanelCard { members(detail) }
             } else if model.ended {
-                PanelCard { Text("这个应用已经退出").font(.caption).foregroundStyle(.secondary) }
+                PanelCard { Text("这个应用已经退出").font(.panelRow).foregroundStyle(.secondary) }
             } else {
-                PanelCard { Text("正在读取…").font(.caption).foregroundStyle(.secondary) }
+                PanelCard { Text("正在读取…").font(.panelRow).foregroundStyle(.secondary) }
             }
         }
         .onChange(of: layoutSignature) { layoutChanged() }
@@ -39,8 +39,8 @@ struct AppDetailView: View {
         HStack(spacing: 8) {
             AppIcon(path: detail.appPath, size: 28)
             VStack(alignment: .leading, spacing: 0) {
-                Text(detail.name).font(.callout.weight(.semibold)).lineLimit(1)
-                Text(memberSummary(detail)).font(.caption2).foregroundStyle(.secondary)
+                Text(detail.name).font(.panelTitle.weight(.semibold)).lineLimit(1)
+                Text(memberSummary(detail)).font(.panelNote).foregroundStyle(.secondary)
             }
             Spacer()
             if detail.eligibility.isAllowed {
@@ -61,7 +61,7 @@ struct AppDetailView: View {
 
     private func values(_ detail: AppDetail) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("当前").font(.caption.weight(.semibold))
+            Text("当前").font(.panelRow.weight(.semibold))
             KeyValue(title: String(localized: "CPU"), value: PercentFormat.string(fromRatio: detail.cpu))
             KeyValue(title: String(localized: "内存"), value: detail.footprint.map { Formatting.memory(Double($0)) } ?? "—")
             KeyValue(title: String(localized: "能耗"), value: detail.energyWatts.map(Formatting.watts) ?? "—")
@@ -77,13 +77,13 @@ struct AppDetailView: View {
     private func members(_ detail: AppDetail) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text("成员").font(.caption.weight(.semibold))
+                Text("成员").font(.panelRow.weight(.semibold))
                 Spacer()
-                Text(memberColumnTitle).font(.caption2).foregroundStyle(.secondary)
+                Text(memberColumnTitle).font(.panelNote).foregroundStyle(.secondary)
                 Color.clear.frame(width: 16, height: 1)
             }
             if detail.members.isEmpty {
-                Text("没有你自己的进程").font(.caption2).foregroundStyle(.secondary)
+                Text("没有你自己的进程").font(.panelNote).foregroundStyle(.secondary)
             }
             ForEach(sortedMembers(detail), id: \.pid) { member in
                 HStack(spacing: 6) {
@@ -105,12 +105,12 @@ struct AppDetailView: View {
                         Color.clear.frame(width: 16)
                     }
                 }
-                .font(.caption2)
+                .font(.panelNote)
                 .monospacedDigit()
             }
             if detail.residualCount > 0 {
                 Text("另有 \(detail.residualCount) 个其他用户或 root 的进程（读不到细节）")
-                    .font(.caption2)
+                    .font(.panelNote)
                     .foregroundStyle(.secondary)
             }
         }

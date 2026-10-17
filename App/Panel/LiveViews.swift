@@ -63,11 +63,16 @@ class LiveDrawView: NSView {
         s.draw(at: NSPoint(x: right - s.size().width, y: y))
     }
 
-    static let caption = NSFont.systemFont(ofSize: 11)
-    static let captionDigits = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-    static let captionBold = NSFont.systemFont(ofSize: 11, weight: .semibold)
-    static let caption2 = NSFont.systemFont(ofSize: 10)
-    static let caption2Digits = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+    // 字号见 PanelType（D73）。名字沿用 caption / caption2：行文字 / 注释。
+    static let caption = NSFont.systemFont(ofSize: PanelType.row)
+    static let captionDigits = NSFont.monospacedDigitSystemFont(ofSize: PanelType.row, weight: .regular)
+    static let captionBold = NSFont.systemFont(ofSize: PanelType.row, weight: .semibold)
+    static let caption2 = NSFont.systemFont(ofSize: PanelType.note)
+    static let caption2Digits = NSFont.monospacedDigitSystemFont(ofSize: PanelType.note, weight: .regular)
+
+    /// 各字号的行高（ascender − descender + leading，向上取整），自绘卡片按它排行距。
+    static let rowLine = ceil(NSLayoutManager().defaultLineHeight(for: caption))
+    static let noteLine = ceil(NSLayoutManager().defaultLineHeight(for: caption2))
 }
 
 // MARK: - 概览
@@ -77,14 +82,14 @@ final class OverviewDrawView: LiveDrawView {
         didSet { needsDisplay = true }
     }
 
-    static let height: CGFloat = 86
+    static let height: CGFloat = 94
 
     private static let big: NSFont = {
-        let base = NSFont.monospacedDigitSystemFont(ofSize: 34, weight: .semibold)
-        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 34) } ?? base
+        let base = NSFont.monospacedDigitSystemFont(ofSize: PanelType.hero, weight: .semibold)
+        return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: PanelType.hero) } ?? base
     }()
-    private static let subheadline = NSFont.systemFont(ofSize: 13)
-    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    private static let subheadline = NSFont.systemFont(ofSize: PanelType.title)
+    private static let callout = NSFont.monospacedDigitSystemFont(ofSize: PanelType.title, weight: .medium)
 
     override func draw(_ dirtyRect: NSRect) {
         countDraw()
@@ -92,14 +97,14 @@ final class OverviewDrawView: LiveDrawView {
         let total = latest[.cpuUsageTotal]
         Self.draw(Self.text(String(localized: "总占用"), Self.subheadline, .secondaryLabelColor), x: 0, y: 0)
         let value = total?.value.map { PercentFormat.string(fromRatio: $0) } ?? PercentFormat.placeholder
-        let w = Self.draw(Self.text(value, Self.big), x: 0, y: 16)
+        let w = Self.draw(Self.text(value, Self.big), x: 0, y: 17)
         if total?.quality == .estimated {
-            Self.draw(Self.text(String(localized: "估算"), Self.caption, .secondaryLabelColor), x: w + 6, y: 38)
+            Self.draw(Self.text(String(localized: "估算"), Self.caption, .secondaryLabelColor), x: w + 6, y: 39)
         }
         if splitUserSystem {
             let user = latest[.cpuUsageUser]?.value
             let system = latest[.cpuUsageSystem]?.value
-            let bar = NSRect(x: 0, y: 60, width: 150, height: 5)
+            let bar = NSRect(x: 0, y: 61, width: 150, height: 5)
             NSColor.quaternaryLabelColor.setFill()
             NSBezierPath(roundedRect: bar, xRadius: 2, yRadius: 2).fill()
             let uw = bar.width * CGFloat(min(max(user ?? 0, 0), 1))
@@ -114,22 +119,22 @@ final class OverviewDrawView: LiveDrawView {
                 (NSColor.systemOrange, String(localized: "系统"), system),
             ] {
                 color.setFill()
-                NSBezierPath(ovalIn: NSRect(x: x, y: 72, width: 6, height: 6)).fill()
+                NSBezierPath(ovalIn: NSRect(x: x, y: 74, width: 6, height: 6)).fill()
                 let label = "\(title) \(v.map { PercentFormat.string(fromRatio: $0) } ?? "—")"
-                x += 9 + Self.draw(Self.text(label, Self.caption2Digits, .secondaryLabelColor), x: x + 9, y: 69) + 8
+                x += 9 + Self.draw(Self.text(label, Self.caption2Digits, .secondaryLabelColor), x: x + 9, y: 70) + 8
             }
         }
         // 右列：最快档频率、CPU 最高温、热状态徽标
         let right = bounds.width
         Self.drawRight(Self.text(String(localized: "频率"), Self.caption2, .secondaryLabelColor), right: right, y: 0)
-        Self.drawRight(Self.text(fastestFrequency(latest), Self.callout), right: right, y: 12)
-        Self.drawRight(Self.text(String(localized: "最高温"), Self.caption2, .secondaryLabelColor), right: right, y: 34)
+        Self.drawRight(Self.text(fastestFrequency(latest), Self.callout), right: right, y: 14)
+        Self.drawRight(Self.text(String(localized: "最高温"), Self.caption2, .secondaryLabelColor), right: right, y: 35)
         let temp = latest[.cpuTemperatureMax]?.value.map(Formatting.temperature) ?? "—"
-        Self.drawRight(Self.text(temp, Self.callout), right: right, y: 46)
+        Self.drawRight(Self.text(temp, Self.callout), right: right, y: 49)
         if let state = latest[.cpuThermalState]?.value, let badge = DisplayNames.thermalState(state) {
             let label = Self.text(badge.text, Self.captionBold)
             let size = label.size()
-            let rect = NSRect(x: right - size.width - 12, y: 68, width: size.width + 12, height: size.height + 4)
+            let rect = NSRect(x: right - size.width - 12, y: 71, width: size.width + 12, height: size.height + 4)
             NSColor(badge.color).withAlphaComponent(0.25).setFill()
             NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
             label.draw(at: NSPoint(x: rect.minX + 6, y: rect.minY + 2))
@@ -158,19 +163,19 @@ final class CoresDrawView: LiveDrawView {
         super.init(store: store)
     }
 
-    static let headerHeight: CGFloat = 16
-    static let rowHeight: CGFloat = 15
+    static let headerHeight: CGFloat = 17
+    static let rowHeight: CGFloat = 16
     static let barsHeight: CGFloat = 18
     static let clusterGap: CGFloat = 4
     static let levelGap: CGFloat = 8
-    static let footnoteHeight: CGFloat = 16
-    /// 列的右边缘：簇名左对齐在 0，占用、频率、温度、功耗右对齐。
-    static let columns: [CGFloat] = [82, 158, 210, 272]
+    static let footnoteHeight: CGFloat = 17
+    /// 列的右边缘：簇名左对齐在 0，占用、频率、温度、功耗右对齐（D73 后按 12 pt 数字留宽）。
+    static let columns: [CGFloat] = [84, 164, 220, 284]
 
     /// 按拓扑算出的固定高度（拓扑在一次运行中不变；变了由面板重新量高）。
     static func height(for topology: CPUTopology?, cores: Int) -> CGFloat {
         let cluster = rowHeight + 3 + barsHeight + clusterGap
-        guard let topology, topology.logicalCPUCount == cores, cores > 0 else { return 16 + barsHeight }
+        guard let topology, topology.logicalCPUCount == cores, cores > 0 else { return 17 + barsHeight }
         switch topology.quality {
         case .ok:
             let levels = CGFloat(topology.perfLevels.count)
@@ -198,7 +203,7 @@ final class CoresDrawView: LiveDrawView {
         else {
             Self.draw(
                 Self.text(String(localized: "每核占用（\(cores.count) 个逻辑核）"), Self.caption, .secondaryLabelColor), x: 0, y: 0)
-            drawBars(Array(cores.indices), cores: cores, color: .controlAccentColor, y: 16)
+            drawBars(Array(cores.indices), cores: cores, color: .controlAccentColor, y: 17)
             return
         }
         var y: CGFloat = 0
@@ -216,7 +221,7 @@ final class CoresDrawView: LiveDrawView {
                     title += " · \(Formatting.temperature(t))"
                 }
                 color.setFill()
-                NSBezierPath(ovalIn: NSRect(x: 0, y: y + 4, width: 7, height: 7)).fill()
+                NSBezierPath(ovalIn: NSRect(x: 0, y: y + 4.5, width: 7, height: 7)).fill()
                 Self.draw(Self.text(title, Self.captionBold), x: 12, y: y)
                 summary.append(title)
                 y += Self.headerHeight
