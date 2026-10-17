@@ -34,3 +34,4 @@ research/probes/network-module/net_struct
 research/probes/network-module/costbench_net
 research/probes/network-module/net_watch
 research/probes/network-module/wifi_cost
+research/probes/app-activity/out/

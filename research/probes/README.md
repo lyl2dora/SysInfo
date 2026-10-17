@@ -23,3 +23,9 @@
 - `gpu_watch.c`：1 Hz 记录器（GPUPH 等状态通道、GPU Energy、PMGR 批次、媒体中断、PMP 带宽、Tg/Ta、coalition、ANE 电源状态），附每段读取的线程 CPU。
 - `orchestrate.sh` 在一个 PMGR 30 分钟窗口里跑负载序列（每段 ≤60 s），`tiny.sh` 补测小 kernel，`costbench_gpu.c` 测真实节奏开销，`analyze.py` 汇总。`build.sh <outdir>` 编译全部（负载程序沿用 power-thermal/、gpu/、gpu-review/ 的源码）。
 - 结论见 `docs/design/gpu.md`。原始输出（`out/`）按 `.gitignore` 只留在本地。
+
+## app-activity/（2026-10-17，应用活动模块开工前）
+- `assert_watch.c`：电源断言的可见范围、归属（uid、coalition、代他人持有）、开销、变化通知（含私有 `IOPMAssertionNotify` 登记）、私有活动日志、内核侧断言。会自建一个约 3 s 的断言后释放，并派生一次 `caffeinate -d -t 1`。
+- `appact_density.c`：每分钟活跃应用密度、各列 Top-K 并集的覆盖率与行数，以及应用能耗合计（槽位 11+41+39）对 SMC `PZC0` / `PDTR` 的覆盖。
+- `appact_cost.c`：应用活动窗口全表刷新（约 660 个 coalition）在 1 / 2 / 5 s 真实节奏下的开销。
+- 编译：`xcrun clang -O2 -framework IOKit -framework CoreFoundation <x>.c -o <x>`（`appact_*` 引用 `../cpu-module/processes/coal.h`）。结论见 `docs/design/app-activity.md` §1。输出（`out/`）按 `.gitignore` 只留在本地。
