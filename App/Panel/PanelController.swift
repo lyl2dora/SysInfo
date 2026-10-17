@@ -13,6 +13,7 @@
 //   在「存储」tab 时（存储模块设计 §4.6）：读写 1 s，SMART 按设置（默认 2 s，读全部盘），容量 10 s，磁盘 Top N 按设置；
 //   在「GPU 与加速器」tab 时（GPU 模块设计 §8）：活跃、频率与功率 1 s，温度、ANE、媒体引擎与 GPU 内存按设置（默认 2 s），
 //   coalition 扫描按 Top N 的间隔（Top N 行数为 0 时也扫，ANE 估算要用，D58）；
+//   在「网络」tab 时（网络模块设计 §7）：速率 1 s，Wi-Fi 卡片可见时 CoreWLAN 每 5 s（D60 N5），延迟开启时按延迟间隔（D61）；
 //   隐藏时注销，并拆掉 SwiftUI 内容，关闭后不再随数据刷新；
 // - 内容高度会变（展开详情、Top N 行数），面板跟着内容改高，锚定时保持顶边不动。
 
@@ -30,6 +31,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case memory
     case storage
     case gpu
+    case network
 
     var id: String { rawValue }
 
@@ -40,6 +42,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .memory: String(localized: "内存")
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
+        case .network: String(localized: "网络")
         }
     }
 
@@ -50,6 +53,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .memory: self = .memory
         case .storage: self = .storage
         case .gpu: self = .gpu
+        case .network: self = .network
         }
     }
 }
@@ -124,6 +128,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let gpuDemand: DemandSlot
     private let gpuDetailDemand: DemandSlot
     private let gpuTopNDemand: DemandSlot
+    private let networkDemand: DemandSlot
+    private let wifiDemand: DemandSlot
+    private let latencyDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -162,6 +169,9 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.gpuDemand = DemandSlot(engine: engine)
         self.gpuDetailDemand = DemandSlot(engine: engine)
         self.gpuTopNDemand = DemandSlot(engine: engine)
+        self.networkDemand = DemandSlot(engine: engine)
+        self.wifiDemand = DemandSlot(engine: engine)
+        self.latencyDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -297,6 +307,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         updateMemoryDemands(visible: visible && state.selectedTab == .memory)
         updateStorageDemands(visible: visible && state.selectedTab == .storage)
         updateGPUDemands(visible: visible && state.selectedTab == .gpu)
+        updateNetworkDemands(visible: visible && state.selectedTab == .network)
         let cpuVisible = visible && state.selectedTab == .cpu
         guard cpuVisible else {
             [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
@@ -383,6 +394,22 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             coalitionUsable
                 ? Demand(collectors: [AppSampler.collectorID], interval: settings.gpuTopNInterval, source: .panel) : nil)
         topN.setActive(settings.gpuTopNRows > 0, coalitionUsable: coalitionUsable)
+    }
+
+    /// 网络 tab（网络模块设计 §7，D60、D61）。
+    private func updateNetworkDemands(visible: Bool) {
+        guard visible else {
+            [networkDemand, wifiDemand, latencyDemand].forEach { $0.set(nil) }
+            return
+        }
+        networkDemand.set(Demand(collectors: [NetworkIOCollector.collectorID], interval: 1, source: .panel))
+        // Wi-Fi 卡片只在有活跃 Wi-Fi 接口时出现；CoreWLAN 只在这时读（D10）。
+        let hasWiFi = services.networkModel.state.activeWiFi != nil || services.networkModel.state.interfaces.isEmpty
+        wifiDemand.set(hasWiFi ? Demand(collectors: [WiFiCollector.collectorID], interval: 5, source: .panel) : nil)
+        latencyDemand.set(
+            settings.latencyTargets != nil
+                ? Demand(collectors: [LatencyCollector.collectorID], interval: max(settings.latencyInterval, 2), source: .panel)
+                : nil)
     }
 
     private func updateStorageDemands(visible: Bool) {

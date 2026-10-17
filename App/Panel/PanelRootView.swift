@@ -31,6 +31,8 @@ struct PanelRootView: View {
                 StoragePanelView(store: store, services: services, settings: settings, state: state)
             case .gpu:
                 GPUPanelView(store: store, services: services, settings: settings)
+            case .network:
+                NetworkPanelView(store: store, services: services, settings: settings)
             }
         }
         .onChange(of: state.selectedTab) { onTabChange() }

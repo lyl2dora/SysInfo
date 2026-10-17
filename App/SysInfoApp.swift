@@ -97,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.history = history
         let services = AppServices(
             collectors: CPUCollectors(collectors), power: power, memory: MemoryCollectors(collectors), storage: storage,
-            gpu: GPUCollectors(collectors),
+            gpu: GPUCollectors(collectors), network: NetworkCollectors(collectors),
             history: history, engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
@@ -136,6 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onChange = { [weak self] in self?.applySettings() }
         // 盘插拔、容量组变化：widget 的绑定（内置盘、启动组）要重新解析。
         services.storageModel.onStructureChange = { [weak self] in self?.applySettings() }
+        // 接口增减、主接口切换：网速 widget 绑定的接口是物理还是虚拟，要重新解析。
+        services.networkModel.onStructureChange = { [weak self] in self?.applySettings() }
         applySettings()
         throttle.start()
 
@@ -223,7 +225,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let widgets = settings.visibleWidgets.filter { $0 != .fan || hasFans }
         statusItems.update(
             widgets.map { StatusItemConfiguration(widget: $0, settings: settings) },
-            intervals: { settings.interval(for: $0) })
+            intervals: { settings.interval(for: $0) }, latencyInterval: settings.latencyInterval)
+        // 延迟目标（D61）：关闭时不发包。
+        services?.network.latency?.setTargets(settings.latencyTargets ?? .none)
         // SMART 焦点盘（D55）：只每次读盘温 widget 绑定的盘；「所有盘最高温」时读全部。
         if let storageModel = services?.storageModel {
             if widgets.contains(.diskTemperature) {
@@ -245,7 +249,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordSystem: settings.historyCPUEnabled, recordApps: settings.historyAppsEnabled,
             highPrecision: settings.historyHighPrecision, recordPower: settings.historyPowerEnabled,
             recordEnergy: settings.historyEnergyEnabled, recordMemory: settings.historyMemoryEnabled,
-            recordStorage: settings.historyStorageEnabled, recordGPU: settings.historyGPUEnabled)
+            recordStorage: settings.historyStorageEnabled, recordGPU: settings.historyGPUEnabled,
+            recordNetwork: settings.historyNetworkEnabled)
     }
 
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）；

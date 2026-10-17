@@ -28,3 +28,9 @@ research/probes/**/*.plist
 .claude/*.lock
 .claude/settings.local.json
 research/probes/gpu-module/out/
+research/probes/network-module/out/
+research/probes/network-module/build/
+research/probes/network-module/net_struct
+research/probes/network-module/costbench_net
+research/probes/network-module/net_watch
+research/probes/network-module/wifi_cost

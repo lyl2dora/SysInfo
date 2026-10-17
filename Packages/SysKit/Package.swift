@@ -44,7 +44,9 @@ let package = Package(
             dependencies: ["SysModel", "CSysPrivate", "CSysStorage"],
             // 内置芯片档案（CPU 模块设计 §4.3）。
             resources: [.copy("Resources/ChipProfiles")],
-            swiftSettings: swiftSettings
+            swiftSettings: swiftSettings,
+            // 网络模块（网络模块设计 §5）：全部是公开框架。不链接蓝牙、定位框架（D22）。
+            linkerSettings: [.linkedFramework("SystemConfiguration"), .linkedFramework("CoreWLAN")]
         ),
 
         // 历史库（CPU 模块设计 §6，D30）：系统 libsqlite3，不依赖私有层。

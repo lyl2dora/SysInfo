@@ -63,10 +63,13 @@ private struct SettingsSplitView: View {
                 settings: context.settings, store: context.store, model: context.services.storageModel, openPage: openPage)
         case .gpu:
             GPUSettingsView(settings: context.settings, store: context.store, openPage: openPage)
+        case .network:
+            NetworkSettingsView(
+                settings: context.settings, store: context.store, model: context.services.networkModel, openPage: openPage)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
-            PrivacySettingsView()
+            PrivacySettingsView(settings: context.settings, openPage: openPage)
         case .diagnostics:
             DiagnosticsView(
                 store: context.store, throttle: context.throttle, runSelfTests: context.runSelfTests,
@@ -182,19 +185,37 @@ private struct MenuBarSettingsView: View {
     }
 }
 
-/// D22：列出所有可能的出站连接与授权申请。目前两者都没有；以后加入联网或需授权的功能时，在这里逐项列出目标与用途（D27）。
+/// D22：列出所有可能的出站连接与授权申请。出站目标只有网络模块的延迟（D61）与公网 IP（D62），都默认关闭或为空。
 private struct PrivacySettingsView: View {
+    @Bindable var settings: AppSettings
+    let openPage: (SettingsPage) -> Void
+
     var body: some View {
         Form {
-            Section("网络连接") {
-                LabeledContent("出站连接", value: String(localized: "无"))
-                Text("SysInfo 目前不连接任何网络服务。以后如果加入需要联网的功能，都要你在这里手动开启，并会列出连接目标和用途。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            Section {
+                if let targets = settings.latencyTargets {
+                    LabeledContent("延迟（ICMP）") {
+                        Text([targets.gateway ? String(localized: "默认网关") : nil, targets.custom].compactMap { $0 }.joined(separator: "、"))
+                    }
+                } else {
+                    LabeledContent("延迟（ICMP）", value: String(localized: "关闭"))
+                }
+                LabeledContent("公网 IP 查询") {
+                    Text(settings.publicIPService.isEmpty ? String(localized: "未设置（只在点击「查询」时连接）") : settings.publicIPService)
+                }
+                HStack(spacing: 4) {
+                    Text("除此之外 SysInfo 不连接任何网络服务。延迟只在网络面板可见或延迟 widget 打开时发包；公网 IP 只在你点击时查询一次。")
+                    Button("在「网络」页设置") { openPage(.network) }
+                        .buttonStyle(.link)
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            } header: {
+                Text("网络连接")
             }
             Section("系统授权") {
                 LabeledContent("申请的授权", value: String(localized: "无"))
-                Text("SysInfo 不申请定位、蓝牙、辅助功能、本地网络、通知等授权。以后如果有功能需要授权，只会在你手动开启该功能时才申请。")
+                Text("SysInfo 不申请定位、蓝牙、辅助功能、本地网络、通知等授权。延迟只测默认网关和你填写的地址，不向局域网内的其他设备发包，所以不需要「本地网络」授权。以后如果有功能需要授权，只会在你手动开启该功能时才申请。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
