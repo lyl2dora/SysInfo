@@ -24,8 +24,10 @@ import SysCollectors
 import SysModel
 import OSLog
 
-/// 面板里的模块（D21、D47）：单 widget 模式下面板只显示被点击 widget 所属的模块。
+/// 面板里的模块（D21、D47）：单 widget 模式下面板只显示被点击 widget 所属的模块；
+/// 合并模式（D65）下多一个「总览」，并可以用切换器在模块之间切换。
 enum PanelTab: String, CaseIterable, Identifiable {
+    case overview
     case cpu
     case power
     case memory
@@ -37,6 +39,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .overview: String(localized: "总览")
         case .cpu: String(localized: "CPU")
         case .power: String(localized: "功耗与散热")
         case .memory: String(localized: "内存")
@@ -44,6 +47,25 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .gpu: String(localized: "GPU 与加速器")
         case .network: String(localized: "网络")
         }
+    }
+
+    /// 切换器上的两字标签（D65 MG4）。
+    var shortTitle: String {
+        switch self {
+        case .overview: String(localized: "总览", comment: "面板切换器标签，两个字")
+        case .cpu: String(localized: "CPU", comment: "面板切换器标签")
+        case .power: String(localized: "功耗", comment: "面板切换器标签，两个字")
+        case .memory: String(localized: "内存", comment: "面板切换器标签，两个字")
+        case .storage: String(localized: "存储", comment: "面板切换器标签，两个字")
+        case .gpu: String(localized: "GPU", comment: "面板切换器标签")
+        case .network: String(localized: "网络", comment: "面板切换器标签，两个字")
+        }
+    }
+
+    /// 切换器的顺序（D65 MG3）：总览；合并 item 里出现的模块按出现顺序；其余按 D53 的模块顺序。
+    static func switcherOrder(mergedModules: [MenuModule]) -> [PanelTab] {
+        let modules = mergedModules + MenuModule.allCases.filter { !mergedModules.contains($0) }
+        return [.overview] + modules.map(PanelTab.init)
     }
 
     init(_ module: MenuModule) {
@@ -63,6 +85,10 @@ enum PanelTab: String, CaseIterable, Identifiable {
 final class PanelState {
     var selectedTab: PanelTab = .cpu
     var isPinned = false
+    /// 合并模式（D65）：显示切换器与总览。
+    var isMerged = false
+    /// 切换器的顺序（合并模式下有效）。
+    var switcherTabs: [PanelTab] = PanelTab.allCases
     /// 「详情」与「中断来源」一开始是否展开（`--expand-details`）。
     var expandDetailsInitially = false
     /// 二级页（D64）：空为模块主页。换模块、关闭面板时清空。
@@ -76,12 +102,17 @@ struct PanelActions {
     var close: () -> Void
     var openSettings: () -> Void
     var quit: () -> Void
+    /// 合并模式下换模块（切换器、总览卡片，D65）。
+    var selectTab: (PanelTab) -> Void
 }
 
 /// 可以成为 key window 的无边框面板：Esc 等键盘事件要送到它这里（non-activating，不会激活 app）。
 final class PanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// 合并模式下换模块时改高的过渡时长（D64 §7.1：约 0.15 s）。
+    override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval { 0.15 }
 }
 
 final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
@@ -132,6 +163,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let wifiDemand: DemandSlot
     private let latencyDemand: DemandSlot
     private let appDetailDemand: DemandSlot
+    private let overviewDemand: DemandSlot
+    private let overviewSlowDemand: DemandSlot
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -174,6 +207,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.wifiDemand = DemandSlot(engine: engine)
         self.latencyDemand = DemandSlot(engine: engine)
         self.appDetailDemand = DemandSlot(engine: engine)
+        self.overviewDemand = DemandSlot(engine: engine)
+        self.overviewSlowDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -204,10 +239,16 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         Log.panel.info("expanded interface session 开始")
         sessionItem = statusItem
         statusItems?.activeItem = statusItem
-        if let widget = statusItems?.widget(for: statusItem) {
-            let tab = PanelTab(widget.module)
-            if tab != state.selectedTab { state.path = [] }
-            state.selectedTab = tab
+        if statusItems?.isMerged(statusItem) == true {
+            // D65 MG2：按点击的 x 坐标打开那一段所属的模块；拿不到坐标时打开总览。
+            let location = NSEvent.mouseLocation
+            let widget = statusItems?.mergedWidget(at: location)
+            Log.panel.info(
+                "合并 item 被点击：\(NSStringFromPoint(location), privacy: .public) → \(widget?.rawValue ?? "（不在 item 上，打开总览）", privacy: .public)"
+            )
+            select(widget.map { PanelTab($0.module) } ?? .overview)
+        } else if let widget = statusItems?.widget(for: statusItem) {
+            select(PanelTab(widget.module))
         }
         if switching, presentation == .anchored {
             swapInPlace()
@@ -235,6 +276,30 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             return
         }
         hide()
+    }
+
+    /// 选择面板显示的模块；换模块时回到主页（D64）。
+    private func select(_ tab: PanelTab) {
+        if tab != state.selectedTab { state.path = [] }
+        state.selectedTab = tab
+    }
+
+    /// 合并模式下用切换器或 ⌘1–⌘7 换模块（D65 MG4）：面板保持锚定，原地换内容。
+    func switchTab(_ tab: PanelTab) {
+        guard tab != state.selectedTab || !state.path.isEmpty else { return }
+        state.path = []
+        state.selectedTab = tab
+        animateNextFit = true
+        Log.panel.info("切换到 \(tab.rawValue, privacy: .public)")
+    }
+
+    /// 合并模式的结构变了（开关合并、合并顺序）：同步切换器。单 widget 模式下不可能停在总览。
+    func syncMergedState() {
+        let merged = settings.menuBarMerged
+        let tabs = PanelTab.switcherOrder(mergedModules: statusItems?.mergedModules ?? [])
+        if state.isMerged != merged { state.isMerged = merged }
+        if state.switcherTabs != tabs { state.switcherTabs = tabs }
+        if !merged, state.selectedTab == .overview { state.selectedTab = .cpu }
     }
 
     // MARK: - 打开与关闭
@@ -292,6 +357,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         requestFit()  // Top N 行数等设置可能变了
         let visible = presentation != .hidden
         updateAppDetailDemand(visible: visible)
+        updateOverviewDemands(visible: visible && state.selectedTab == .overview)
         let powerVisible = visible && state.selectedTab == .power
         if powerVisible {
             powerDemand.set(
@@ -369,6 +435,24 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             memoryTopNDemand.set(nil)
             topN.setActive(false, coalitionUsable: coalitionUsable)
         }
+    }
+
+    /// 总览（D65 MG5）：只用各模块的常驻采集器，不扫 Top N、不读全部盘 SMART、不读 CoreWLAN。
+    private func updateOverviewDemands(visible: Bool) {
+        guard visible else {
+            [overviewDemand, overviewSlowDemand].forEach { $0.set(nil) }
+            return
+        }
+        overviewDemand.set(
+            Demand(
+                collectors: [
+                    CPULoadCollector.collectorID, PowerRailCollector.collectorID, MemoryCollector.collectorID,
+                    StorageIOCollector.collectorID, GPUPowerCollector.collectorID, NetworkIOCollector.collectorID,
+                ], interval: 1, source: .panel))
+        overviewSlowDemand.set(
+            Demand(
+                collectors: [PowerSensorCollector.collectorID, GPUTemperatureCollector.collectorID, StorageCapacityCollector.collectorID],
+                interval: 5, source: .panel))
     }
 
     /// 应用详情页（D64）：可见时按所属模块 Top N 的间隔扫描 coalition，离开即停。
@@ -542,7 +626,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             close: { [weak self] in self?.close() },
             // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。
             openSettings: { [weak self] in self?.onOpenSettings?() },
-            quit: { NSApp.terminate(nil) })
+            quit: { NSApp.terminate(nil) },
+            selectTab: { [weak self] in self?.switchTab($0) })
         let hosting = NSHostingView(
             rootView: PanelRootView(
                 store: store, state: state, actions: actions, services: services, settings: settings,
@@ -558,6 +643,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     }
 
     private var fitScheduled = false
+    /// 下一次改高带过渡（合并模式下换模块，D64 §7.1）；其余改高（展开、行数变化）直接改。
+    private var animateNextFit = false
 
     /// 内容结构变了（展开或收起、Top N 行数变化）：下一轮量一次高度。平时的数值更新不量，
     /// 免得每个 tick 对整个面板做一次理想尺寸测量（2026-10-15 实测是面板开销的大头之一）。
@@ -578,6 +665,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         guard let panel, presentation != .hidden, let hosting = glass?.contentView as? NSHostingView<PanelRootView>
         else { return }
         let height = ceil(max(Self.idealHeight(of: hosting), 200))
+        let animate = animateNextFit
+        animateNextFit = false
         guard abs(panel.frame.height - height) >= 1 else { return }
         var frame = panel.frame
         frame.origin.y += frame.height - height
@@ -591,7 +680,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
                 frame.origin.y = min(visible.minY + margin, visible.maxY - margin - frame.height)
             }
         }
-        panel.setFrame(frame, display: true)
+        panel.setFrame(frame, display: true, animate: animate)
     }
 
     /// 量一次内容的理想高度：临时打开固有尺寸，量完关掉（平时不维护，见 installContent）。
@@ -651,6 +740,22 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private func handleGlobalMouseDown(timestamp: TimeInterval) {
         guard presentation == .anchored, timestamp >= shownAt else { return }
         let location = NSEvent.mouseLocation
+        if let widget = statusItems?.mergedWidget(at: location) {
+            // D65 MG2：合并 item 上点另一段原地换模块；点同一段时在二级页回主页、在主页关闭。
+            // 无 session 的面板（--open-panel）：系统随后为这次点击开的 session 要接管（换模块、回主页）或取消（关闭）。
+            let now = ProcessInfo.processInfo.systemUptime
+            let tab = PanelTab(widget.module)
+            if tab != state.selectedTab || !state.path.isEmpty {
+                Log.panel.info("合并 item：点到 \(widget.rawValue, privacy: .public)，原地换到该模块主页")
+                switchTab(tab)
+                if sessionItem == nil { switchRequestedAt = now }
+                return
+            }
+            Log.panel.info("合并 item：再次点击同一段，关闭面板")
+            if sessionItem == nil { sessionlessClosedByItemClickAt = now }
+            close()
+            return
+        }
         if let anchor = statusItems?.anchorWindow?.frame, anchor.contains(location) {
             if !state.path.isEmpty {
                 // D64：在二级页时再次点击同一个 widget 回到模块主页，不关闭。
@@ -677,6 +782,14 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
 
     private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
         switch event.type {
+        case .keyDown
+        where state.isMerged && event.window === panel && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command:
+            // D65 MG4：⌘1–⌘7 按切换器顺序换模块。
+            guard let digit = event.charactersIgnoringModifiers.flatMap(Int.init), digit >= 1,
+                digit <= state.switcherTabs.count
+            else { return event }
+            switchTab(state.switcherTabs[digit - 1])
+            return nil
         case .keyDown where event.keyCode == 53:  // Esc
             guard presentation != .hidden, event.window === panel else { return event }
             if state.pop() {

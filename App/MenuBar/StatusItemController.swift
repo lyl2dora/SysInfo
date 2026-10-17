@@ -13,7 +13,9 @@
 //   存储：盘温 → storage.smart（只读绑定的盘，D55），读写 → storage.io，可用空间 → storage.capacity（60 s）；
 //   网络：网速 → network.io，延迟 → network.latency（按延迟设置的间隔，D61）；
 //   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
-// - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）。
+// - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）；
+// - 合并模式（D65）：所有开着的 widget 并排放进一个 item（autosaveName "<bundle id>.merged"，MergedStatusItemView），
+//   各段的采样需求照旧各占一个槽；点击落在哪一段由 `mergedWidget(at:)` 判断。
 
 import AppKit
 import SysCollectors
@@ -34,30 +36,57 @@ final class StatusItemController {
         }
     }
 
+    /// 合并模式下唯一的 item。
+    private final class MergedEntry {
+        let item: NSStatusItem
+        let view: MergedStatusItemView
+        var demands: [MenuWidget: DemandSlot] = [:]
+        var observation: NSKeyValueObservation?
+
+        init(item: NSStatusItem, view: MergedStatusItemView) {
+            self.item = item
+            self.view = view
+        }
+    }
+
     private let store: MetricStore
     private let engine: SamplingEngine
     private var entries: [MenuWidget: Entry] = [:]
+    private var merged: MergedEntry?
 
     /// 最近一次被点击（开启 session）的 item；面板锚在它下方。
     weak var activeItem: NSStatusItem?
 
     /// 面板控制器，负责 expanded interface session。
     weak var expandedInterfaceDelegate: (any NSStatusItemExpandedInterfaceDelegate)? {
-        didSet { entries.values.forEach { $0.item.expandedInterfaceDelegate = expandedInterfaceDelegate } }
+        didSet {
+            entries.values.forEach { $0.item.expandedInterfaceDelegate = expandedInterfaceDelegate }
+            merged?.item.expandedInterfaceDelegate = expandedInterfaceDelegate
+        }
     }
 
     /// 用户在菜单栏里把某个 widget 移除（⌘ 拖走或在系统设置里关闭）后调用。
     var onUserRemoved: ((MenuWidget) -> Void)?
+    /// 用户在菜单栏里把合并 item 移除后调用（退出合并模式，不关掉任何 widget）。
+    var onUserRemovedMerged: (() -> Void)?
 
     init(store: MetricStore, engine: SamplingEngine) {
         self.store = store
         self.engine = engine
     }
 
-    /// 按设置显示或移除各 widget，并同步采样需求与显示配置。`configurations` 里只有要显示的 widget。
+    /// 按设置显示或移除各 widget，并同步采样需求与显示配置。`configurations` 里只有要显示的 widget，
+    /// 合并模式下按合并顺序排好。
     func update(
-        _ configurations: [StatusItemConfiguration], intervals: (MenuModule) -> SamplingInterval, latencyInterval: Int = 5
+        _ configurations: [StatusItemConfiguration], merged mergedMode: Bool = false, separator: MergedSeparator = .line,
+        intervals: (MenuModule) -> SamplingInterval, latencyInterval: Int = 5
     ) {
+        if mergedMode, !configurations.isEmpty {
+            MenuWidget.allCases.forEach(remove)
+            updateMerged(configurations, separator: separator, intervals: intervals, latencyInterval: latencyInterval)
+            return
+        }
+        removeMerged()
         let wanted = Dictionary(uniqueKeysWithValues: configurations.map { ($0.widget, $0) })
         for widget in MenuWidget.allCases {
             if let configuration = wanted[widget] {
@@ -107,6 +136,36 @@ final class StatusItemController {
         widget == .usage ? .menubarCPU : DemandSource("menubar.\(widget.module.rawValue).\(widget.rawValue)")
     }
 
+    /// 各 widget item 当前在屏幕上从左到右的顺序（第一次切换到合并模式时定初始顺序，D65 MG1）。
+    /// 窗口还没摆到菜单栏上、或被收进溢出区（窗口不在屏幕顶边）的排在后面，按模块顺序。
+    func screenOrder() -> [MenuWidget] {
+        let placed = entries.compactMap { widget, entry -> (MenuWidget, CGFloat)? in
+            guard let window = entry.item.view?.window ?? entry.item.button?.window, let screen = window.screen,
+                window.frame.width > 0, window.frame.maxY >= screen.frame.maxY - 1
+            else { return nil }
+            return (widget, window.frame.minX)
+        }
+        let ordered = placed.sorted { $0.1 < $1.1 }.map(\.0)
+        return ordered + MenuWidget.allCases.filter { entries[$0] != nil && !ordered.contains($0) }
+    }
+
+    /// 是否为合并 item。
+    func isMerged(_ item: NSStatusItem) -> Bool { merged?.item === item }
+
+    /// 合并模式下屏幕上的一点落在哪一段（D65 MG2）；不在合并 item 上时为 nil。
+    func mergedWidget(at point: NSPoint) -> MenuWidget? {
+        merged?.view.widget(atScreenPoint: point)
+    }
+
+    /// 合并 item 里出现的模块，按段的顺序去重（切换器排序，D65 MG3）。
+    var mergedModules: [MenuModule] {
+        var out: [MenuModule] = []
+        for widget in merged?.view.segments.map(\.configuration.widget) ?? [] where !out.contains(widget.module) {
+            out.append(widget.module)
+        }
+        return out
+    }
+
     /// 屏幕上的这一点是否落在本 app 除 `excluded` 以外的某个 widget 上（从一个 widget 点到另一个时原地换面板，D47）。
     func isOtherItem(at point: NSPoint, excluding excluded: NSStatusItem?) -> Bool {
         entries.values.contains { entry in
@@ -119,10 +178,80 @@ final class StatusItemController {
         entries.first { $0.value.item === item }?.key
     }
 
-    /// 面板锚点：被点击的 widget 所在的菜单栏窗口；没有时取第一个显示的 widget。
+    /// 面板锚点：被点击的 widget 所在的菜单栏窗口；没有时取第一个显示的 widget。合并模式下是合并 item。
     var anchorWindow: NSWindow? {
+        if let merged { return merged.item.view?.window ?? merged.item.button?.window }
         let item = activeItem ?? MenuWidget.allCases.lazy.compactMap { self.entries[$0]?.item }.first
         return item?.view?.window ?? item?.button?.window
+    }
+
+    // MARK: - 合并模式
+
+    private func updateMerged(
+        _ configurations: [StatusItemConfiguration], separator: MergedSeparator, intervals: (MenuModule) -> SamplingInterval,
+        latencyInterval: Int
+    ) {
+        let entry = installMergedIfNeeded()
+        let width = MergedStatusItemView.fixedWidth(for: configurations, separator: separator)
+        if entry.view.segments.map(\.configuration) != configurations || entry.view.separator != separator {
+            entry.view.apply(configurations, separator: separator)
+            if entry.item.length != width {
+                entry.item.length = width
+                Log.menubar.info(
+                    "合并 item：\(configurations.map(\.widget.rawValue).joined(separator: ","), privacy: .public)，宽度 \(width, format: .fixed(precision: 1)) pt"
+                )
+            }
+        }
+        let wanted = Set(configurations.map(\.widget))
+        for widget in Array(entry.demands.keys) where !wanted.contains(widget) {
+            entry.demands.removeValue(forKey: widget)?.set(nil)
+        }
+        for configuration in configurations {
+            let widget = configuration.widget
+            let slot = entry.demands[widget] ?? DemandSlot(engine: engine)
+            entry.demands[widget] = slot
+            slot.set(
+                Demand(
+                    collectors: [Self.collector(for: widget)],
+                    interval: Self.interval(for: widget, moduleInterval: intervals(widget.module), latencyInterval: latencyInterval),
+                    source: Self.source(widget)))
+        }
+    }
+
+    private func installMergedIfNeeded() -> MergedEntry {
+        if let merged { return merged }
+        let item = NSStatusBar.system.statusItem(withLength: 0)
+        item.autosaveName = "\(BuildInfo.bundleIdentifier).merged"
+        item.behavior = .removalAllowed
+        item.isVisible = true
+        let view = MergedStatusItemView(store: store, height: NSStatusBar.system.thickness)
+        item.view = view
+        item.expandedInterfaceDelegate = expandedInterfaceDelegate
+        let entry = MergedEntry(item: item, view: view)
+        entry.observation = item.observe(\.isVisible, options: [.new]) { [weak self] _, change in
+            guard change.newValue == false else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.merged != nil else { return }
+                    Log.menubar.info("用户移除了合并 item，退出合并模式")
+                    self.onUserRemovedMerged?()
+                }
+            }
+        }
+        merged = entry
+        Log.menubar.info("合并 item 已创建")
+        return entry
+    }
+
+    private func removeMerged() {
+        guard let entry = merged else { return }
+        merged = nil
+        entry.demands.values.forEach { $0.set(nil) }
+        entry.observation?.invalidate()
+        entry.item.expandedInterfaceDelegate = nil
+        if activeItem === entry.item { activeItem = nil }
+        NSStatusBar.system.removeStatusItem(entry.item)
+        Log.menubar.info("合并 item 已移除")
     }
 
     // MARK: - 私有

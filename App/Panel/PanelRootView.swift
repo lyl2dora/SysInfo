@@ -1,5 +1,5 @@
 // 面板内容（D21、D47，M0 设计 §6）：顶栏玻璃按钮 + 被点击 widget 所属模块的内容。
-// 单 widget 模式下不提供模块切换（D47）；合并模式（D06）上线后再恢复。
+// 单 widget 模式下不提供模块切换（D47）；合并模式（D65）下顶栏下面一行切换器，另有「总览」。
 // 二级页（D64）：顶栏换成「返回 + 标题」，内容换成 PanelRoute 对应的页；子视图用环境里的 panelNavigate 推入。
 // 玻璃只用在控件层；图表和数值层用标准材质（见 PanelCard）。
 
@@ -21,6 +21,14 @@ struct PanelRootView: View {
         VStack(spacing: 12) {
             topBar
 
+            if state.isMerged, state.path.isEmpty {
+                // D65 MG4：合并模式的切换器，只在模块主页与总览出现。
+                SegmentedButtons(
+                    selection: Binding(get: { state.selectedTab }, set: { actions.selectTab($0) }),
+                    options: state.switcherTabs.map { ($0, $0.shortTitle) })
+                    .help("切换模块（⌘1–⌘\(state.switcherTabs.count)）")
+            }
+
             if let route = state.path.last {
                 subpage(route)
             } else {
@@ -29,6 +37,7 @@ struct PanelRootView: View {
         }
         .onChange(of: state.selectedTab) { onTabChange() }
         .onChange(of: state.path) { onTabChange() }
+        .onChange(of: state.isMerged) { onTabChange() }
         .padding(14)
         // 顶部对齐：内容先变、窗口下一轮才改高时，只是底边伸缩，整块内容不会上下跳（SwiftUI 默认把内容居中）。
         .frame(width: PanelController.width)
@@ -40,6 +49,9 @@ struct PanelRootView: View {
     @ViewBuilder
     private var moduleRoot: some View {
         switch state.selectedTab {
+        case .overview:
+            OverviewPanelView(
+                store: store, services: services, settings: settings, tabs: state.switcherTabs, select: actions.selectTab)
         case .cpu:
             CPUPanelView(
                 store: store, services: services, settings: settings, expandDetails: state.expandDetailsInitially)
