@@ -79,7 +79,7 @@ private final class SMARTHandle {
 
 public final class SMARTCollector: Collector {
     public static let collectorID: CollectorID = "storage.smart"
-    public static let dataPath = "NVMeSMARTLibExternal（SMARTReadData + GetIdentifyData，常驻连接）"
+    public static let dataPath = "NVMeSMARTLibExternal（SMARTReadData + GetIdentifyData，每次读取打开后即关闭）"
 
     public var id: CollectorID { Self.collectorID }
     public let lane: CollectorLane = .blocking
