@@ -148,7 +148,7 @@ final class MemoryCompositionDrawView: LiveDrawView {
         }
         y += 4
         Self.draw(
-            Self.text(String(localized: "已用 = App + 联动 + 被压缩（同活动监视器）；缓存可随时回收。"), Self.caption2, .tertiaryLabelColor),
+            Self.text(String(localized: "已用 = App + 联动 + 被压缩（同活动监视器）；缓存可随时回收。"), Self.caption2, .secondaryLabelColor),
             x: 0, y: y)
         setAccessibilityLabel(String(localized: "内存构成"))
     }

@@ -238,7 +238,7 @@ final class CoresDrawView: LiveDrawView {
         }
         Self.draw(
             Self.text(
-                String(localized: "温度为簇所在位置的温度，GPU 重载时也会升高；功耗不含 GPU。"), Self.caption2, .tertiaryLabelColor),
+                String(localized: "温度为簇所在位置的温度，GPU 重载时也会升高；功耗不含 GPU。"), Self.caption2, .secondaryLabelColor),
             x: 0, y: y + 2)
         setAccessibilityLabel(summary.joined(separator: "；"))
     }

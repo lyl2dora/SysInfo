@@ -111,7 +111,7 @@ struct AppDetailView: View {
             if detail.residualCount > 0 {
                 Text("另有 \(detail.residualCount) 个其他用户或 root 的进程（读不到细节）")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
     }

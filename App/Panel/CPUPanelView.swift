@@ -87,15 +87,23 @@ private struct CPUDetailsSection: View {
                 DisclosureGroup(isExpanded: $sourcesExpanded) {
                     interruptSources
                 } label: {
-                    Text("中断来源").font(.caption)
+                    toggleLabel($sourcesExpanded) { Text("中断来源").font(.caption) }
                 }
             }
             .padding(.top, 4)
         } label: {
-            Text("详情").font(.caption.weight(.semibold))
+            toggleLabel($expanded) { Text("详情").font(.caption.weight(.semibold)) }
         }
         .onChange(of: expanded) { layoutChanged() }
         .onChange(of: sourcesExpanded) { layoutChanged() }
+    }
+
+    /// macOS 的 DisclosureGroup 只有三角能点；标签整行也能展开 / 收起（D71 全量验收发现）。
+    private func toggleLabel(_ isOn: Binding<Bool>, @ViewBuilder _ label: () -> some View) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            label().frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// 按设备的中断次数（IOReport，展开时每 5 秒更新一次）。

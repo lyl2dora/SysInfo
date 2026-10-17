@@ -104,7 +104,8 @@ struct PMGRBatchCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("最近 30 分钟").font(.caption.weight(.semibold))
+                // 批次超过 1 小时没更新（多半是 app 没在运行）时不再叫「最近 30 分钟」。
+                (batch.map(isStale) == true ? Text("最近一批（30 分钟）") : Text("最近 30 分钟")).font(.caption.weight(.semibold))
                 Spacer()
                 if let batch {
                     Text(windowText(batch)).font(.caption2).foregroundStyle(.secondary)
@@ -123,7 +124,7 @@ struct PMGRBatchCard: View {
                 }
                 Text("Apple 功耗模型口径，每 30 分钟更新一次；神经网络引擎、媒体引擎只有这一个来源。")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("等待首个批次：开机后约每 30 分钟发布一次，app 运行期间才能收到。")
@@ -159,11 +160,17 @@ struct PMGRBatchCard: View {
         .font(.caption)
     }
 
+    private func isStale(_ batch: PMGRBatch) -> Bool { now.timeIntervalSince(batch.end) > 3600 }
+
     private func windowText(_ batch: PMGRBatch) -> String {
+        let sameDay = Calendar.current.isDate(batch.end, inSameDayAs: now)
         let f = Date.FormatStyle(date: .omitted, time: .shortened)
+        let start = sameDay ? batch.start.formatted(f) : batch.start.formatted(.dateTime.month().day().hour().minute())
         let minutes = Int(now.timeIntervalSince(batch.end) / 60)
-        let age = minutes < 1 ? String(localized: "刚刚更新") : String(localized: "\(minutes) 分钟前更新")
-        return "\(batch.start.formatted(f))–\(batch.end.formatted(f)) · \(age)"
+        let age =
+            minutes < 1 ? String(localized: "刚刚更新")
+            : minutes < 120 ? String(localized: "\(minutes) 分钟前更新") : String(localized: "\(minutes / 60) 小时前更新")
+        return "\(start)–\(batch.end.formatted(f)) · \(age)"
     }
 
     private func reload() async {
@@ -217,7 +224,7 @@ struct EnergyCard: View {
                         ? "含 SysInfo 未运行时段的系统累计值，满载时可能偏低。" : "按整机功率每秒积分。"
                 )
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
         }

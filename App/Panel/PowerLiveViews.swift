@@ -83,7 +83,7 @@ final class PowerBreakdownDrawView: LiveDrawView {
         drawRow(String(localized: "SoC 合计"), value: soc, reason: Self.reason(latest[.powerSoC]), scale: scale, y: y, color: .systemOrange)
         y += Self.rowHeight + 2
         Self.draw(
-            Self.text(String(localized: "CPU 为专用轨实测，其余为功耗模型口径，两者不相减。"), Self.caption2, .tertiaryLabelColor), x: 0, y: y)
+            Self.text(String(localized: "CPU 为专用轨实测，其余为功耗模型口径，两者不相减。"), Self.caption2, .secondaryLabelColor), x: 0, y: y)
         setAccessibilityLabel(String(localized: "功率分解"))
     }
 
