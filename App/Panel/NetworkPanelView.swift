@@ -82,7 +82,8 @@ struct NetworkPanelView: View {
             if state.physical.isEmpty {
                 Text("没有活跃的物理接口").font(.caption).foregroundStyle(.secondary)
             }
-            ForEach(state.physical) { interface in
+            // 主接口排最前，其余按 index。
+            ForEach(state.physical.sorted { ($0.name == state.primary ? 0 : 1) < ($1.name == state.primary ? 0 : 1) }) { interface in
                 row(interface, primary: interface.name == state.primary)
             }
             if !state.virtual.isEmpty {

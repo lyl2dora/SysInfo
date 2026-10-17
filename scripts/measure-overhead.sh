@@ -3,14 +3,15 @@
 #
 # 用 Release 配置构建 app，按四档各测一次，结果追加到 docs/perf/cpu.md：
 #   0. 基线：不运行 SysInfo；
-#   1. 出厂默认配置：CPU 占用、整机功率、内存占用与盘温四个 item（D38、D44、D51、D54），面板关闭，历史与能耗记录开启（--factory-defaults 时历史库在临时目录）；
+#   1. 出厂默认配置：CPU 占用、整机功率、内存占用、盘温与网速五个 item（D38、D44、D51、D54、D60），面板关闭，历史与能耗记录开启（--factory-defaults 时历史库在临时目录）；
 #   2. 面板打开：CPU tab 可见（含 Top N 5 行），固定为浮窗（--open-panel --pin-panel），测量期间点别处也不会关；
 #   3. 面板打开且「详情」「中断来源」展开（再加 --expand-details），面板内最重的一档；
 #   power：面板打开且在「功耗与散热」tab（--panel-tab=power，功耗与散热模块设计 §1 第 8 项）；
 #   memory：面板打开且在「内存」tab（--panel-tab=memory，Top N 5 行，内存模块设计 §10）；
 #   storage：面板打开且在「存储」tab 概览页（--panel-tab=storage，SMART 每 2 s 读全部盘，Top N 5 行，存储模块设计 §9）；
 #   storage-detail：存储 tab 的第一块盘详情页（--storage-detail=0）；
-#   gpu：面板打开且在「GPU 与加速器」tab（--panel-tab=gpu，温度 / ANE / 媒体 2 s，coalition 2 s，Top N 5 行，GPU 模块设计 §8）。
+#   gpu：面板打开且在「GPU 与加速器」tab（--panel-tab=gpu，温度 / ANE / 媒体 2 s，coalition 2 s，Top N 5 行，GPU 模块设计 §8）；
+#   network：面板打开且在「网络」tab（--panel-tab=network，速率 1 s，Wi-Fi 卡片 5 s，延迟出厂关，网络模块设计 §7）。
 # 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D40：用 sysinfo-cli rusage 读 app 的按档计数，把其他档的指令
 # 折算成最快档的等效时间（按单核的比例）；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
@@ -225,6 +226,7 @@ for tier in ${TIERS}; do
         storage) measure storage --factory-defaults --open-panel --pin-panel --panel-tab=storage ;;
         storage-detail) measure storage-detail --factory-defaults --open-panel --pin-panel --panel-tab=storage --storage-detail=0 ;;
         gpu) measure gpu --factory-defaults --open-panel --pin-panel --panel-tab=gpu ;;
+        network) measure network --factory-defaults --open-panel --pin-panel --panel-tab=network ;;
         *) echo "未知档位：${tier}" >&2; exit 64 ;;
     esac
 done
@@ -263,7 +265,7 @@ fi
         IFS=$'\t' read -r label app_pct equiv cyc p0share mw mba_pct ws_pct footprint note <<<"${row}"
         case "${label}" in
             baseline) name="基线（不运行 SysInfo）" ;;
-            default) name="出厂默认（CPU 占用、整机功率、内存占用、盘温四个 item，面板关闭，历史与能耗开启）" ;;
+            default) name="出厂默认（CPU 占用、整机功率、内存占用、盘温、网速五个 item，面板关闭，历史与能耗开启）" ;;
             panel) name="面板打开（CPU tab，Top N 5 行）" ;;
             details) name="面板打开 + 详情与中断来源展开" ;;
             power) name="面板打开（功耗与散热 tab）" ;;
@@ -271,6 +273,7 @@ fi
             storage) name="面板打开（存储 tab 概览，SMART 2 s 读全部盘，Top N 5 行）" ;;
             storage-detail) name="面板打开（存储 tab，第一块盘详情页）" ;;
             gpu) name="面板打开（GPU 与加速器 tab，温度 / ANE / 媒体 2 s，Top N 5 行）" ;;
+            network) name="面板打开（网络 tab，速率 1 s，Wi-Fi 5 s，延迟关）" ;;
             *) name="${label}" ;;
         esac
         echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
