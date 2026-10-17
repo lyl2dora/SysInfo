@@ -2,7 +2,7 @@
 //
 // CPU 每分钟约 12–16 行；功耗与散热每分钟约 6 行（整机、SoC、GPU、DRAM 功率，最热点，风扇转速）；
 // 内存每分钟 13 行（已用、占用率、App、联动、被压缩、已缓存、Swap、压力与等级、页入 / 页出、换入 / 换出）；
-// GPU 与加速器每分钟 3 行（GPU 活跃、GPU 温度、ANE 上电比例），随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
+// GPU 与加速器每分钟 3 行（GPU 活跃、GPU 温度、ANE 上电比例）；网络每分钟 2 ×（1 + 活跃物理接口数）行，延迟开启时另加每目标 2 行；随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
 // 每簇与总功耗、1 分钟负载均值、热状态与热压力。每核、每簇占用、中断、任务数不入库。
 //
 // 两类聚合：
@@ -28,6 +28,7 @@ public enum HistoryModule: String, Sendable, Hashable, Codable, CaseIterable {
     case memory
     case storage
     case gpu
+    case network
 }
 
 /// 历史库里一个指标的说明。
@@ -115,6 +116,19 @@ public enum HistoryCatalog {
             case .readOps, .writeOps, .readLatency, .writeLatency, .warning:
                 return nil
             }
+        }
+        // 网络（网络模块设计 §6，D60 N7）：主接口与每个物理接口的入 / 出；延迟 RTT 与丢包。虚拟接口、物理合计、Wi-Fi 不入库。
+        if let (_, _, physical) = id.networkInterfaceMetric {
+            // IFMIB 计数的差分：样本本身就是一段区间的平均速率。
+            return physical
+                ? HistoryMetricSpec(aggregation: .interval, unit: "B/s", collector: NetworkIOCollector.collectorID, module: .network) : nil
+        }
+        if id == .networkPrimaryIn || id == .networkPrimaryOut {
+            return HistoryMetricSpec(aggregation: .interval, unit: "B/s", collector: NetworkIOCollector.collectorID, module: .network)
+        }
+        if let (_, isRTT) = id.networkLatencyMetric {
+            return HistoryMetricSpec(
+                aggregation: .instant, unit: isRTT ? "s" : "ratio", collector: LatencyCollector.collectorID, module: .network)
         }
         if let (_, metric) = id.storageGroupMetric, metric != .total {
             return HistoryMetricSpec(

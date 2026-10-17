@@ -2,7 +2,7 @@
 //
 // - 登记 background 层需求（锁屏、显示器睡眠时继续采，不受降频影响）：
 //   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）；内存每 10 s（D49）；
-//   存储（读写、SMART、容量）每 60 s（存储模块设计 §5）。
+//   存储（读写、SMART、容量）每 60 s（存储模块设计 §5）；网络每 60 s（网络模块设计 §6）。
 //   用户开启「后台高精度」时，频率、温度与功耗改为每 5 s（D19 的高开销项）。
 //   菜单栏、面板的前台需求更密时，引擎按较短的间隔采样，记录器直接用这些样本，峰值随之更准；
 // - 每 5 分钟（整 5 分之后 1 分钟，即 :01、:06…）提交一次事务：写入已结束的分钟、新开 epoch、小时汇总、
@@ -38,12 +38,16 @@ public actor HistoryRecorder {
         public var recordStorage: Bool
         /// 记录 GPU 与加速器指标（D57 G9）：GPU 活跃、温度、ANE 上电，后台每 10 s。
         public var recordGPU: Bool
+        /// 记录网络指标（D60 N7）：主接口与每个物理接口的入 / 出，后台每 60 s；延迟采样期间的 RTT 与丢包。
+        public var recordNetwork: Bool
 
         public init(
             recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false, recordPower: Bool = true,
-            recordEnergy: Bool = true, recordMemory: Bool = true, recordStorage: Bool = true, recordGPU: Bool = true
+            recordEnergy: Bool = true, recordMemory: Bool = true, recordStorage: Bool = true, recordGPU: Bool = true,
+            recordNetwork: Bool = true
         ) {
             self.recordGPU = recordGPU
+            self.recordNetwork = recordNetwork
             self.recordSystem = recordSystem
             self.recordApps = recordApps
             self.highPrecision = highPrecision
@@ -243,6 +247,12 @@ public actor HistoryRecorder {
                     collectors: [StorageIOCollector.collectorID, SMARTCollector.collectorID, StorageCapacityCollector.collectorID],
                     interval: Self.slowInterval, source: .history, tier: .background))
         }
+        if configuration.recordNetwork {
+            // IFMIB 是累计计数：60 s 一读不丢流量（网络模块设计 §6）。
+            demands.append(
+                Demand(
+                    collectors: [NetworkIOCollector.collectorID], interval: Self.slowInterval, source: .history, tier: .background))
+        }
         if configuration.recordEnergy {
             demands.append(
                 Demand(
@@ -272,6 +282,7 @@ public actor HistoryRecorder {
         if configuration.recordMemory { modules.insert(.memory) }
         if configuration.recordStorage { modules.insert(.storage) }
         if configuration.recordGPU { modules.insert(.gpu) }
+        if configuration.recordNetwork { modules.insert(.network) }
         if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
         if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
             energy.ingest(watts: watts, at: sample.time)
@@ -413,6 +424,13 @@ public actor HistoryRecorder {
         return try store.series(
             metric, from: MinuteAggregator.minute(of: from), to: MinuteAggregator.minute(of: to) + 1,
             granularity: granularity, bucketMinutes: bucketMinutes)
+    }
+
+    /// 一个速率指标在 [from, to) 内的总量（Σ 均值 × 覆盖秒数），例如网络的今日 / 本月流量（网络模块设计 §6）。
+    /// 先提交内存里的数据。
+    public func total(_ metric: MetricID, from: Date, to: Date) throws -> Double {
+        flush()
+        return try store.total(metric, from: MinuteAggregator.minute(of: from), to: MinuteAggregator.minute(of: to) + 1)
     }
 
     public func stats() throws -> HistoryStats {

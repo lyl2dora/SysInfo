@@ -374,6 +374,31 @@ public final class HistoryStore {
         }
     }
 
+    /// 速率指标在 [from, to) 分钟内的总量：Σ(avg × n)。分钟表只保留 `minuteRetention`，更早的部分读小时表
+    /// （小时表的 avg、n 是同样口径的汇总，Σ(avg × n) 不变）。
+    public func total(_ metric: MetricID, from: Int64, to: Int64, now: Date = Date()) throws -> Double {
+        guard let id = metricIDs[metric], to > from else { return 0 }
+        // 留一天余量：清理按天进行，分钟表里最老的一天可能已被删掉一部分。对齐到整小时，和小时表无缝衔接
+        // （from 不在整小时上时，第一个小时按整小时计；本地时区切日、切月一般都在整小时上）。
+        let minuteFloor = (Self.floorDiv(MinuteAggregator.minute(of: now) - Int64(Self.minuteRetention / 60), 60) + 25) * 60
+        var total = 0.0
+        let minuteStart = Swift.max(from, minuteFloor)
+        if minuteStart < to {
+            total += try db.statement("SELECT COALESCE(SUM(avg * n), 0) FROM sample_minute WHERE metric = ? AND t >= ? AND t < ?")
+                .query([.int(id), .int(minuteStart), .int(to)]) { $0.double(0) }.first ?? 0
+        }
+        if from < minuteFloor {
+            // 小时表按整小时：[from, minuteFloor) 覆盖到的小时。
+            let hourFrom = Self.floorDiv(from, 60)
+            let hourTo = Self.floorDiv(Swift.min(minuteFloor, to), 60)
+            if hourFrom < hourTo {
+                total += try db.statement("SELECT COALESCE(SUM(avg * n), 0) FROM sample_hour WHERE metric = ? AND t >= ? AND t < ?")
+                    .query([.int(id), .int(hourFrom), .int(hourTo)]) { $0.double(0) }.first ?? 0
+            }
+        }
+        return total
+    }
+
     /// 导出用：全部指标在 [from, to) 内的行，按时间、指标排序。
     func rows(
         from: Int64, to: Int64, granularity: HistoryGranularity, metrics filter: ((MetricID) -> Bool)?
