@@ -73,6 +73,8 @@ final class SettingsState {
     var selection: SettingsPage? = .general
     /// 设置窗口是否在屏幕上。为 false 时窗口内容换成空视图。
     var isWindowOpen = false
+    /// 侧栏收起为只显示图标的窄栏（不写偏好，重开 app 恢复展开）。
+    var sidebarCompact = false
 }
 
 final class SettingsController {
@@ -167,6 +169,9 @@ final class SettingsController {
             NotificationCenter.default.removeObserver(observer)
         }
         self.window = window
+        // Settings 场景默认是偏好设置式的高工具栏，侧栏按钮会落在标题下方一整行里；
+        // 改成统一样式，标题与工具栏同一行，侧栏按钮紧挨红绿灯。
+        window.toolbarStyle = .unified
         windowObservers = [
             NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main

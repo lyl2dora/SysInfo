@@ -292,3 +292,7 @@ fi
 } >>"${OUTPUT}"
 
 echo "==> 结果已追加到 ${OUTPUT}"
+
+# 测量用的 Release 副本 Bundle ID 也是 .dev：留在 LaunchServices 里会被当成 SysInfo Dev 拉起（P0 全量验收时
+# 出现过一次无参数启动、读写 .dev 偏好），测完取消登记。
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "${app}" 2>/dev/null || true

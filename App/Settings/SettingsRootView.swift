@@ -28,15 +28,41 @@ private struct SettingsSplitView: View {
 
     var body: some View {
         @Bindable var state = context.state
-        NavigationSplitView {
+        // 不用 NavigationSplitView：它在统一样式的标题栏下给侧栏留了最小宽度（红绿灯在侧栏里），
+        // 收起成图标栏时宽度改不下来；自己排两栏，宽度完全由收起状态决定。
+        HStack(spacing: 0) {
             List(SettingsPage.allCases, selection: $state.selection) { page in
-                Label(page.title, systemImage: page.symbol)
-                    .tag(page)
+                Group {
+                    if state.sidebarCompact {
+                        // 收起时只留图标，名字放进提示与辅助功能标签。
+                        Image(systemName: page.symbol)
+                            .frame(maxWidth: .infinity)
+                            .help(page.title)
+                            .accessibilityLabel(page.title)
+                    } else {
+                        Label(page.title, systemImage: page.symbol)
+                    }
+                }
+                .tag(page)
             }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
-        } detail: {
+            .listStyle(.sidebar)
+            .frame(width: state.sidebarCompact ? 56 : 180)
+            Divider()
             detail(for: state.selection ?? .general)
-                .navigationTitle(state.selection?.title ?? "")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .navigationTitle(state.selection?.title ?? "")
+        .toolbar {
+            // 侧栏开关放在标题栏红绿灯右侧；收起时保留图标栏而不是整栏隐藏。
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    state.sidebarCompact.toggle()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .help(state.sidebarCompact ? "展开边栏" : "收起边栏")
+                .accessibilityLabel(state.sidebarCompact ? "展开边栏" : "收起边栏")
+            }
         }
     }
 
