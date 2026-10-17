@@ -69,10 +69,6 @@ class LiveDrawView: NSView {
     static let captionBold = NSFont.systemFont(ofSize: PanelType.row, weight: .semibold)
     static let caption2 = NSFont.systemFont(ofSize: PanelType.note)
     static let caption2Digits = NSFont.monospacedDigitSystemFont(ofSize: PanelType.note, weight: .regular)
-
-    /// 各字号的行高（ascender − descender + leading，向上取整），自绘卡片按它排行距。
-    static let rowLine = ceil(NSLayoutManager().defaultLineHeight(for: caption))
-    static let noteLine = ceil(NSLayoutManager().defaultLineHeight(for: caption2))
 }
 
 // MARK: - 概览
