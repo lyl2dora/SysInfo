@@ -11,9 +11,6 @@ macOS 菜单栏系统监控，面向 Apple 芯片 Mac。
 
 macOS 27.0 或更新，Apple 芯片。
 
-## 下载
-
-在 [Releases](https://github.com/lyl2dora/SysInfo/releases) 下载，已签名并经 Apple 公证。app 内可以检查更新。
 
 ## 隐私
 
