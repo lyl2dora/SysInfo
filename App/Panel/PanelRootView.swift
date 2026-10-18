@@ -153,6 +153,13 @@ struct PanelRootView: View {
 
             Spacer(minLength: 4)
 
+            if let offer = services.updater?.availableOffer {
+                Button(action: services.openUpdateSettings) {
+                    Label("有新版本", systemImage: "arrow.down.circle")
+                }
+                .tint(.accentColor)
+                .help("SysInfo \(offer.version.description) 可以更新，点开设置查看")
+            }
             if !state.isPinned {
                 Button(action: actions.pin) {
                     Label("固定", systemImage: "pin")

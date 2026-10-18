@@ -72,7 +72,7 @@ private struct SettingsSplitView: View {
     private func detail(for page: SettingsPage) -> some View {
         switch page {
         case .general:
-            GeneralSettingsView(settings: context.settings)
+            GeneralSettingsView(settings: context.settings, updater: context.services.updater)
         case .menuBar:
             MenuBarSettingsView(settings: context.settings, store: context.store, openPage: openPage)
         case .cpu:
@@ -244,11 +244,13 @@ private struct HoverAnchorKey: PreferenceKey {
 
 private struct GeneralSettingsView: View {
     @Bindable var settings: AppSettings
+    let updater: Updater?
     @State private var loginItem = LoginItemModel()
 
     var body: some View {
         Form {
             LoginItemSection(model: loginItem)
+            UpdateSection(settings: settings, updater: updater)
             Section {
                 Picker("默认采集间隔", selection: $settings.globalInterval) {
                     ForEach(SamplingInterval.allCases) { interval in
@@ -271,6 +273,81 @@ private struct GeneralSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItem.refresh()
         }
+    }
+}
+
+/// 检查更新（D76）：出厂每周检查、只提示；只有日用版启用。
+private struct UpdateSection: View {
+    @Bindable var settings: AppSettings
+    let updater: Updater?
+
+    var body: some View {
+        Section {
+            if let updater, updater.isEnabled {
+                Picker("检查更新", selection: $settings.updateFrequency) {
+                    Text("关闭").tag(UpdateCheckFrequency.off)
+                    Text("每天").tag(UpdateCheckFrequency.daily)
+                    Text("每周").tag(UpdateCheckFrequency.weekly)
+                }
+                Toggle("发现新版本时自动下载并安装", isOn: $settings.updateAutoInstall)
+                    .disabled(!updater.canInstall || settings.updateFrequency == .off)
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        if updater.isBusy { ProgressView().controlSize(.small) }
+                        Button("立即检查") { updater.checkNow() }
+                            .disabled(updater.isBusy)
+                    }
+                } label: {
+                    Text(Self.statusTitle(updater))
+                    Text(Self.lastCheckText(updater.lastCheck))
+                }
+                if let offer = updater.availableOffer {
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            Button("查看说明") { updater.openReleasePage() }
+                            if updater.canInstall {
+                                Button("下载并安装") { updater.install() }
+                                    .disabled(updater.isBusy)
+                            }
+                        }
+                    } label: {
+                        Text("SysInfo \(offer.version.description) 可以更新")
+                        if !updater.canInstall {
+                            Text("当前副本不在「应用程序」文件夹或没有写权限，请从 Release 页面下载后手动替换。")
+                        }
+                    }
+                }
+                if case .failed(let message) = updater.state {
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                }
+            } else {
+                Text(BuildInfo.isDebug ? "Debug 版不检查更新。" : "这个构建不检查更新。")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("更新")
+        } footer: {
+            Text("只连接本项目的 GitHub Releases 查询版本，不上传任何本机信息。安装前会校验发布包的校验值、开发者签名与公证。")
+        }
+    }
+
+    private static func statusTitle(_ updater: Updater) -> String {
+        switch updater.state {
+        case .idle: String(localized: "当前版本 \(BuildInfo.version)")
+        case .checking: String(localized: "正在检查…")
+        case .upToDate: String(localized: "已是最新版本（\(BuildInfo.version)）")
+        case .available: String(localized: "当前版本 \(BuildInfo.version)")
+        case .downloading: String(localized: "正在下载并校验…")
+        case .installing: String(localized: "正在安装，完成后自动重新打开…")
+        case .failed: String(localized: "当前版本 \(BuildInfo.version)")
+        }
+    }
+
+    private static func lastCheckText(_ date: Date?) -> String {
+        guard let date else { return String(localized: "还没有检查过") }
+        return String(localized: "上次检查：\(date.formatted(date: .abbreviated, time: .shortened))")
     }
 }
 
@@ -459,8 +536,14 @@ private struct PrivacySettingsView: View {
                 LabeledContent("公网 IP 查询") {
                     Text(settings.publicIPService.isEmpty ? String(localized: "未设置（只在点击「查询」时连接）") : settings.publicIPService)
                 }
+                LabeledContent("检查更新") {
+                    Text(
+                        settings.updateFrequency == .off
+                            ? String(localized: "关闭（只在点击「立即检查」时连接）")
+                            : String(localized: "api.github.com 与 Release 下载地址"))
+                }
                 HStack(spacing: 4) {
-                    Text("除此之外 SysInfo 不连接任何网络服务。延迟只在网络面板可见或延迟 widget 打开时发包；公网 IP 只在你点击时查询一次。")
+                    Text("除此之外 SysInfo 不连接任何网络服务。延迟只在网络面板可见或延迟 widget 打开时发包；公网 IP 只在你点击时查询一次；检查更新按「通用」页设置的频率查询本项目的 GitHub Releases。")
                     Button("在「网络」页设置") { openPage(.network) }
                         .buttonStyle(.link)
                 }
