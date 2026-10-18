@@ -173,13 +173,13 @@ measure() {
     m1="$(cpu_seconds "${mba_pid}")"
     w1="$(cpu_seconds "${ws_pid}")"
 
-    local elapsed app_pct="—" footprint="—" equiv="—" cyc="—" p0share="—" mw="—"
+    local elapsed app_pct="—" footprint="—" equiv="—" cyc="—" p0share="—" mw="—" mips="—" p0gips="—"
     elapsed="$(perl -e 'printf "%.3f", $ARGV[1] - $ARGV[0]' "${t0}" "${t1}")"
     if [ -n "${app_pid}" ]; then
         app_pct="$(percent "${a0}" "${a1}" "${elapsed}")"
         if [ -n "${r0}" ] && [ -n "${r1}" ]; then
-            # 输出：等效最快档 %、按周期折算 %、最快档时间占比 %、能耗 mW（D40）
-            read -r equiv cyc p0share mw < <(perl -e '
+            # 输出：等效最快档 %、按周期折算 %、最快档时间占比 %、能耗 mW（D40）、总指令（百万/秒）、最快档每秒指令（十亿/秒）
+            read -r equiv cyc p0share mw mips p0gips < <(perl -e '
                 my ($a, $b, $sec) = @ARGV;
                 my %x; my %y;
                 %x = $a =~ /"(\w+)":(\d+)/g; %y = $b =~ /"(\w+)":(\d+)/g;
@@ -192,7 +192,8 @@ measure() {
                 elsif ($top > 0) { $eq = sprintf "%.3f*", ($p0 + ($c - $cp) / $top * 1e9) / $el * 100 }
                 if ($cp > 0 && $p0 > 0) { $cy = sprintf "%.3f", ($p0 + ($c - $cp) * $p0 / $cp) / $el * 100 }
                 my $share = $cpu > 0 ? sprintf("%.0f", $p0 / $cpu * 100) : "—";
-                printf "%s %s %s %.1f\n", $eq, $cy, $share, $d{energy_nj} / $sec / 1e6;
+                my $gips = ($p0 > 0 && $ip > 0) ? sprintf("%.2f", $ip / $p0) : "—";
+                printf "%s %s %s %.1f %.1f %s\n", $eq, $cy, $share, $d{energy_nj} / $sec / 1e6, $i / $sec / 1e6, $gips;
             ' "${r0}" "${r1}" "${elapsed}")
         fi
         footprint="$(/usr/bin/footprint -p "${app_pid}" 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1)"
@@ -210,8 +211,8 @@ measure() {
     local mba_pct ws_pct
     mba_pct="$(percent "${m0}" "${m1}" "${elapsed}")"
     ws_pct="$(percent "${w0}" "${w1}" "${elapsed}")"
-    echo "    app ${app_pct}%（等效最快档 ${equiv}%，按周期 ${cyc}%，最快档占比 ${p0share}%，${mw} mW）  MenuBarAgent ${mba_pct}%  WindowServer ${ws_pct}%  footprint ${footprint} ${note}" >&2
-    results+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "${label}" "${app_pct}" "${equiv}" "${cyc}" "${p0share}" "${mw}" "${mba_pct}" "${ws_pct}" "${footprint}" "${note}")")
+    echo "    app ${app_pct}%（等效最快档 ${equiv}%，按周期 ${cyc}%，最快档占比 ${p0share}%，${mw} mW，${mips} M 指令/s，最快档 ${p0gips} G 指令/s）  MenuBarAgent ${mba_pct}%  WindowServer ${ws_pct}%  footprint ${footprint} ${note}" >&2
+    results+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "${label}" "${app_pct}" "${equiv}" "${cyc}" "${p0share}" "${mw}" "${mba_pct}" "${ws_pct}" "${footprint}" "${mips}" "${p0gips}" "${note}")")
 }
 
 echo "测量期间尽量不要操作鼠标和键盘（会抬高 WindowServer 等软指标）。面板档固定为浮窗，点别处不会关闭。" >&2
@@ -265,10 +266,10 @@ fi
     echo "- 机器：${model}，${chip}，${ncpu} 个逻辑核，macOS ${os}"
     echo "- 预热 ${WARMUP} s，每档测量 ${DURATION} s"
     echo ""
-    echo "| 档位 | app 等效最快档（单核 %，D40 考核值） | app 原始 CPU（单核 %） | 按周期折算（%） | 最快档时间占比 | app 能耗（mW） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
-    echo "|---|---|---|---|---|---|---|---|---|---|"
+    echo "| 档位 | app 等效最快档（单核 %，D40 考核值） | app 原始 CPU（单核 %） | 按周期折算（%） | 最快档时间占比 | app 能耗（mW） | 总指令（M/s） | 最快档每秒指令（G） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
     for row in "${results[@]}"; do
-        IFS=$'\t' read -r label app_pct equiv cyc p0share mw mba_pct ws_pct footprint note <<<"${row}"
+        IFS=$'\t' read -r label app_pct equiv cyc p0share mw mba_pct ws_pct footprint mips p0gips note <<<"${row}"
         case "${label}" in
             baseline) name="基线（不运行 SysInfo）" ;;
             default) name="出厂默认（CPU 占用、整机功率、内存占用、盘温、网速五个 item，面板关闭，历史与能耗开启）" ;;
@@ -285,7 +286,7 @@ fi
             appactivity) name="应用活动窗口打开在「现在」（全表 2 s，D67）" ;;
             *) name="${label}" ;;
         esac
-        echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
+        echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mips:-—} | ${p0gips:-—} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
     done
     echo ""
     echo "考核值按 D40 折算成最快档等效时间；带 * 的是最快档时间太少（< 20 ms），按「周期数 ÷ 最快档顶档频率」估算：能效核 IPC 较低会让它偏高，假设最快档跑在顶档频率又会让它偏低，只作估算。"
