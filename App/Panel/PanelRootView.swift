@@ -49,6 +49,9 @@ struct PanelRootView: View {
         .onChange(of: state.path) { onTabChange() }
         .onChange(of: state.isMerged) { onTabChange() }
         .padding(14)
+        // D81：按住面板的空白处（含顶栏、卡片之间与边距）可以拖动；锚定时一拖就转为浮窗（PanelController 监听窗口移动）。
+        .contentShape(.rect)
+        .gesture(WindowDragGesture())
         // D66：面板高度上限（含上下边距）；超出时只有内容区滚动。
         .frame(width: PanelController.width)
         .frame(maxHeight: state.maxPanelHeight, alignment: .top)
@@ -160,12 +163,6 @@ struct PanelRootView: View {
                 .tint(.accentColor)
                 .help("SysInfo \(offer.version.description) 可以更新，点开设置查看")
             }
-            if !state.isPinned {
-                Button(action: actions.pin) {
-                    Label("固定", systemImage: "pin")
-                }
-                .help("固定为浮窗")
-            }
             Button(action: actions.openSettings) {
                 Label("设置", systemImage: "gearshape")
             }
@@ -178,9 +175,6 @@ struct PanelRootView: View {
         .labelStyle(.iconOnly)
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
-        // 固定为浮窗后，按住顶栏的空白处可以拖动窗口；锚定时不响应拖动。
-        .contentShape(.rect)
-        .gesture(WindowDragGesture(), isEnabled: state.isPinned)
     }
 }
 
