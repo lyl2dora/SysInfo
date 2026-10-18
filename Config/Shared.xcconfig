@@ -39,6 +39,9 @@ CURRENT_PROJECT_VERSION = 1
 // git 短哈希，由 Makefile 用 `git rev-parse --short HEAD`（有未提交改动时加 -dirty）覆盖；从 Xcode 直接构建时为 unknown。
 SYSINFO_GIT_COMMIT = unknown
 
+// App 图标（D82）：App/AppIcon.icon，Icon Composer 文档（背景自动渐变 + 芯片、屏幕两组玻璃图层）。Debug 与 Release 共用。
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+
 // 本地化：开发语言 zh-Hans（工程的 developmentRegion），文案统一放进 String Catalog（D23）。
 LOCALIZATION_PREFERS_STRING_CATALOGS = YES
 SWIFT_EMIT_LOC_STRINGS = YES

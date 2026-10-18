@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  层 2 / 3 · 芯片外框 + 引脚 + 屏幕底板
+  1024 x 1024 · 背景透明 · 单色平涂（无金属质感、无渐变、无阴影）
+  引脚先画、外框后画，同色叠加，接缝自然消失。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="chip frame and pins">
+  <defs>
+    <linearGradient id="screenV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262D38"/>
+      <stop offset="1" stop-color="#14181F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== 引脚：4 个方向各 4 根，间距 102，宽 56，伸出外框 74 ===== -->
+  <g fill="#C2CAD9">
+    <!-- 上 -->
+    <rect x="331" y="132" width="56" height="94" rx="14"/>
+    <rect x="433" y="132" width="56" height="94" rx="14"/>
+    <rect x="535" y="132" width="56" height="94" rx="14"/>
+    <rect x="637" y="132" width="56" height="94" rx="14"/>
+    <!-- 下 -->
+    <rect x="331" y="798" width="56" height="94" rx="14"/>
+    <rect x="433" y="798" width="56" height="94" rx="14"/>
+    <rect x="535" y="798" width="56" height="94" rx="14"/>
+    <rect x="637" y="798" width="56" height="94" rx="14"/>
+    <!-- 左 -->
+    <rect x="132" y="331" width="94" height="56" rx="14"/>
+    <rect x="132" y="433" width="94" height="56" rx="14"/>
+    <rect x="132" y="535" width="94" height="56" rx="14"/>
+    <rect x="132" y="637" width="94" height="56" rx="14"/>
+    <!-- 右 -->
+    <rect x="798" y="331" width="94" height="56" rx="14"/>
+    <rect x="798" y="433" width="94" height="56" rx="14"/>
+    <rect x="798" y="535" width="94" height="56" rx="14"/>
+    <rect x="798" y="637" width="94" height="56" rx="14"/>
+  </g>
+
+  <!-- ===== 外框（芯片本体）：612 x 612，圆角 120 ===== -->
+  <rect x="206" y="206" width="612" height="612" rx="120" ry="120" fill="#C2CAD9"/>
+
+  <!-- ===== 屏幕底板：540 x 540，圆角 84，边框留 36 ===== -->
+  <rect x="242" y="242" width="540" height="540" rx="84" ry="84" fill="url(#screenV)"/>
+</svg>
