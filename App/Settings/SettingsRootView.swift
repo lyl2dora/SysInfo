@@ -28,6 +28,31 @@ private struct SettingsSplitView: View {
 
     private static let sidebarInset: CGFloat = 8
     private static let compactSidebarWidth: CGFloat = 52
+    private static let expandedSidebarWidth: CGFloat = 180
+    /// 分组卡片的最大宽度：内容栏更宽时卡片居中。显式给出（而不是依赖 Form 自己的上限，实测约 703），
+    /// 页头才能按同一个数算出内容缩进（D83）。
+    static let cardMaxWidth: CGFloat = 680
+    /// grouped Form 自带的左右内边距、分组标题相对卡片的内缩（2026-10-18 实测）。
+    static let formInset: CGFloat = 20
+    static let sectionTitleInset: CGFloat = 10
+
+    /// 红绿灯右侧归工具栏（导航项）的宽度：这里的点击不会交给内容视图（2026-10-18 实测约 55 pt）。
+    static let toolbarZoneWidth: CGFloat = 58
+
+    /// 内容栏左边缘在窗口里的 x。
+    static func detailX(compact: Bool) -> CGFloat {
+        sidebarInset * 2 + (compact ? compactSidebarWidth : expandedSidebarWidth)
+    }
+
+    /// 叠加在 Form 自带内边距之外的左右留白：内容栏比「卡片最大宽度 + 内边距」宽时，把多出的部分平分到两边。
+    static func contentMargin(detailWidth: CGFloat) -> CGFloat {
+        max(0, (detailWidth - formInset * 2 - cardMaxWidth) / 2)
+    }
+
+    /// 内容缩进线（分组标题文字的左边缘），相对内容栏左边缘。页头的第一个元素对齐它。
+    static func contentIndent(detailWidth: CGFloat) -> CGFloat {
+        contentMargin(detailWidth: detailWidth) + formInset + sectionTitleInset
+    }
 
     var body: some View {
         @Bindable var state = context.state
@@ -36,7 +61,8 @@ private struct SettingsSplitView: View {
         // 宽度改不下来。自己排（D81，Finder 样式）：
         // - 侧栏是内缩的浮动玻璃面板。展开时从窗口顶部开始，红绿灯落在面板顶上；收起成图标栏时放不下红绿灯，
         //   从标题栏下方开始；
-        // - 侧栏开关和页名是内容栏顶部的页头，与红绿灯同一行，不进工具栏，不与红绿灯抢位置；
+        // - 侧栏开关和页名是内容栏顶部的页头，与红绿灯同一行，第一个元素对齐内容缩进（D83）。收起时开关改放进
+        //   工具栏：红绿灯右侧约 55 pt 的区域点击归工具栏，内容栏里的按钮在那里点不到；
         // - 内容延伸到标题栏下，滚上去时由渐隐带保证页头可读。
         GeometryReader { proxy in
             let titlebar = proxy.safeAreaInsets.top
@@ -53,19 +79,21 @@ private struct SettingsSplitView: View {
                 .zIndex(1)  // 浮出的页名要盖在内容上
                 detail(for: state.selection ?? .general)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentMargins(.horizontal, Self.contentMargin(detailWidth: proxy.size.width - Self.detailX(compact: compact)), for: .scrollContent)
                     // Form 自带的背景比窗口背景浅：隐藏它，渐隐带才能与底色一致、静止时不显出一条。
                     .scrollContentBackground(.hidden)
                     .overlay(alignment: .top) { TitlebarFade(height: row + 10) }
                     .overlay(alignment: .topLeading) {
+                        let detailX = Self.detailX(compact: compact)
+                        let indent = Self.contentIndent(detailWidth: proxy.size.width - detailX)
+                        // D83：页头的第一个元素对齐内容缩进线（分组标题文字的左边缘）。展开时是开关；收起时开关在
+                        // 工具栏里，页名对齐缩进线，但至少让开红绿灯右侧的工具栏区域（窄窗口时）。
+                        let leading = compact ? max(indent, lights.maxX + Self.toolbarZoneWidth - detailX) : indent
                         SettingsPageHeader(
-                            title: (state.selection ?? .general).title, compact: compact,
+                            title: (state.selection ?? .general).title, showsToggle: !compact,
                             toggle: { state.sidebarCompact.toggle() }
                         )
-                        // 收起时图标栏比红绿灯窄：页头从红绿灯右边 14 pt 开始。
-                        .padding(
-                            .leading,
-                            compact ? max(4, lights.maxX + 14 - (Self.sidebarInset * 2 + Self.compactSidebarWidth)) : 4
-                        )
+                        .padding(.leading, leading)
                         .frame(height: row)
                         .offset(y: -titlebar)
                     }
@@ -75,10 +103,17 @@ private struct SettingsSplitView: View {
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         // 窗口标题（「SysInfo 设置」）只留给「窗口」菜单，不在标题栏显示：页名在内容栏的页头里。
         .toolbar(removing: .title)
-        // 页头不进工具栏，但要留一个不可见的工具栏项目：没有任何项目时，内容区顶边会多出一条分隔线，
-        // 红绿灯也会缩到窄标题栏里（2026-10-18 实测）。
+        // 留一个不可见的工具栏项目：没有任何项目时，内容区顶边会多出一条分隔线，红绿灯也会缩到窄标题栏里
+        // （2026-10-18 实测）。放在最右边，不占红绿灯旁的位置。
         .toolbar {
-            ToolbarItem(placement: .navigation) { Color.clear.frame(width: 1, height: 1) }
+            // 收起时开关放进工具栏（D83）：红绿灯右侧这块区域的点击归工具栏，放在内容栏页头里会点不到。
+            if compact {
+                ToolbarItem(placement: .navigation) {
+                    SidebarToggleButton(compact: true) { state.sidebarCompact.toggle() }
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+            ToolbarItem(placement: .primaryAction) { Color.clear.frame(width: 1, height: 1) }
                 .sharedBackgroundVisibility(.hidden)
         }
     }
@@ -156,23 +191,35 @@ private struct TitlebarFade: View {
 /// 内容栏顶部的页头（D81）：侧栏开关与页名，Finder 样式，不加玻璃胶囊。
 private struct SettingsPageHeader: View {
     let title: String
-    let compact: Bool
+    let showsToggle: Bool
     let toggle: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Button(action: toggle) {
-                Image(systemName: "sidebar.left")
+            if showsToggle {
+                SidebarToggleButton(compact: false, action: toggle)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .controlSize(.large)
-            .help(compact ? "展开边栏" : "收起边栏")
-            .accessibilityLabel(compact ? "展开边栏" : "收起边栏")
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
                 .lineLimit(1)
         }
+    }
+}
+
+/// 侧栏开关：展开时在页头里，收起时在工具栏里（D83），样式一致。
+private struct SidebarToggleButton: View {
+    let compact: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .help(compact ? "展开边栏" : "收起边栏")
+        .accessibilityLabel(compact ? "展开边栏" : "收起边栏")
     }
 }
 

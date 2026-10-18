@@ -167,12 +167,30 @@ nonisolated enum UpdateClient {
         return request
     }
 
+    /// 「查最新版本」的地址。只有带 `-D UPDATE_TEST_FEED` 编译的测试构建才读 defaults 里的 `update.testFeedURL`
+    /// （端到端测试用：本机 file:// 上的 GitHub Release 格式 JSON），正式构建永远只查本仓库的 GitHub Releases。
+    /// 校验（SHA-256、Team ID、公证、版本号）不因测试地址而放松。
+    static func latestURL(repository: String) -> URL {
+        #if UPDATE_TEST_FEED
+            if let text = UserDefaults.standard.string(forKey: "update.testFeedURL"), let url = URL(string: text) {
+                return url
+            }
+        #endif
+        return URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+    }
+
+    /// HTTP 200，或者本机文件（测试 feed 与它引用的 file:// 产物）。
+    static func isOK(_ response: URLResponse) -> Bool {
+        if let http = response as? HTTPURLResponse { return http.statusCode == 200 }
+        return response.url?.isFileURL == true
+    }
+
     @concurrent static func latestOffer(repository: String, current: AppVersion) async throws -> UpdateOffer? {
-        let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+        let url = latestURL(repository: repository)
         let (data, response) = try await session.data(for: request(url, accept: "application/vnd.github+json"))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 404 { return nil }  // 还没有任何正式 Release
-        guard status == 200 else { throw HTTPError(status: status) }
+        guard isOK(response) else { throw HTTPError(status: status) }
         let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
         return UpdateOffer.make(from: release, current: current)
     }
@@ -203,12 +221,12 @@ nonisolated enum UpdateInstaller {
         // 1. SHA-256
         let (checksumData, checksumResponse) = try await UpdateClient.session.data(
             for: UpdateClient.request(offer.checksumURL, accept: "application/octet-stream"))
-        guard (checksumResponse as? HTTPURLResponse)?.statusCode == 200,
+        guard UpdateClient.isOK(checksumResponse),
             let expected = UpdateOffer.parseChecksum(String(decoding: checksumData, as: UTF8.self))
         else { throw Failure(message: String(localized: "读不到校验文件")) }
         let (downloaded, archiveResponse) = try await UpdateClient.session.download(
             for: UpdateClient.request(offer.archiveURL, accept: "application/octet-stream"))
-        guard (archiveResponse as? HTTPURLResponse)?.statusCode == 200 else {
+        guard UpdateClient.isOK(archiveResponse) else {
             throw Failure(message: String(localized: "下载失败"))
         }
         let archive = dir.appending(path: "SysInfo-\(offer.version).zip")
