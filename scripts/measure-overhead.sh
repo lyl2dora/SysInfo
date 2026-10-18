@@ -122,6 +122,10 @@ stop_app() {
 }
 cleanup() {
     if [ -n "${app_pid}" ] && kill -0 "${app_pid}" 2>/dev/null; then stop_app; fi
+    # 测量用的副本与 Debug 版同一个 Bundle ID（.dev）：不取消登记的话，之后 `open` Debug 版时 LaunchServices
+    # 可能改开这份副本（2026-10-18 实测）。
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -u "${app}" 2>/dev/null || true
 }
 
 # 启动 app，设置 app_pid。本机直接 exec；对照机经 `open` 启动（进 GUI 会话），再按可执行文件路径找 pid。

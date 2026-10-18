@@ -1,10 +1,13 @@
 // 应用活动窗口的内容（D67，合并模式设计 §6）。
 //
-// - 工具栏：时间段（现在 / 1 小时 / 今天 / 7 天 / 30 天）与搜索；侧栏：分类；
+// - 工具栏：时间段（现在 / 1 小时 / 今天 / 7 天 / 30 天）、搜索与详情开关；侧栏：分类；
+//   搜索平时是放大镜按钮，点击或 ⌘F 展开，失焦且没有内容时缩回（Finder 样式，D81）；
 // - 表格（AppActivityTable，AppKit）：多列可排序，列可隐藏、可拖动顺序。同一组列在「现在」档显示速率，在历史时段显示总量；
 // - 底部：「现在」档为应用合计功率与 SoC 功率（不给百分比，D67 AA2），历史时段为应用合计能耗；
-// - 右侧 inspector：选中应用的详情（「现在」档复用面板的应用详情组件，另加最近 1 小时曲线；历史时段为总量、曲线与断言区间）。
+// - 右侧详情栏：选中应用的详情（「现在」档复用面板的应用详情组件，另加最近 1 小时曲线；历史时段为总量、曲线与断言区间）。
+//   打开时窗口向右加宽一个详情栏的宽度，表格与各列宽度不变；全屏或平铺时退回挤占表格（D81，开关由窗口控制器处理）。
 
+import AppKit
 import Charts
 import SwiftUI
 import SysCollectors
@@ -16,26 +19,30 @@ struct AppActivityView: View {
     let store: MetricStore
     let services: AppServices
     let settings: AppSettings
+    /// 开关详情栏（窗口控制器决定向外加宽还是挤占表格）。
+    var toggleInspector: () -> Void = {}
 
-    @State private var showsInspector = true
+    static let inspectorWidth: CGFloat = 320
 
     var body: some View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 220)
         } detail: {
-            VStack(spacing: 0) {
-                notice
-                table
-                Divider()
-                footer
-            }
-            .inspector(isPresented: $showsInspector) {
-                AppActivityInspector(model: model, services: services)
-                    .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    notice
+                    table
+                    Divider()
+                    footer
+                }
+                if model.showsInspector {
+                    Divider()
+                    AppActivityInspector(model: model, services: services)
+                        .frame(width: Self.inspectorWidth)
+                }
             }
         }
-        .searchable(text: $model.search, placement: .toolbar, prompt: Text("搜索应用"))
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("时间段", selection: $model.range) {
@@ -44,10 +51,10 @@ struct AppActivityView: View {
                 .pickerStyle(.segmented)
                 .help("「现在」为实时扫描；其余时段读历史库")
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showsInspector.toggle()
-                } label: {
+            // 搜索在左、详情开关在右（D81）。
+            ToolbarItemGroup(placement: .primaryAction) {
+                ExpandingSearchField(text: $model.search, prompt: String(localized: "搜索应用"))
+                Button(action: toggleInspector) {
                     Label("详情", systemImage: "sidebar.right")
                 }
                 .help("显示或隐藏应用详情")
@@ -114,6 +121,124 @@ struct AppActivityView: View {
         let s = Int(seconds)
         return s >= 3600
             ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+// MARK: - 搜索
+
+/// Finder 样式的搜索（D81）：平时是放大镜按钮；点击或 ⌘F 展开为输入框并获得焦点；失焦且没有内容时缩回，
+/// 有内容时保持展开（否则看不出列表正被过滤）。Esc 清空并缩回。SwiftUI 的 `.searchToolbarBehavior(.minimize)`
+/// 在 macOS 上不可用；工具栏里的 TextField 也拿不到 @FocusState 的焦点，所以输入框用 AppKit 的 NSSearchField。
+private struct ExpandingSearchField: View {
+    @Binding var text: String
+    let prompt: String
+
+    @State private var expanded = false
+
+    var body: some View {
+        Group {
+            if expanded || !text.isEmpty {
+                ToolbarSearchField(
+                    text: $text, prompt: prompt, focusOnAppear: expanded,
+                    onEndEditing: { if text.isEmpty { expanded = false } },
+                    onCancel: {
+                        text = ""
+                        expanded = false
+                    }
+                )
+                .frame(width: 200)
+            } else {
+                Button { expanded = true } label: {
+                    Label(prompt, systemImage: "magnifyingglass")
+                }
+                .help("搜索应用（⌘F）")
+            }
+        }
+        // ⌘F 在两种状态下都能用：展开并把焦点放进输入框。
+        .background {
+            Button("") {
+                if expanded {
+                    NotificationCenter.default.post(name: ToolbarSearchField.focusRequest, object: nil)
+                } else {
+                    expanded = true
+                }
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// 工具栏里的 NSSearchField：出现时拿焦点；结束编辑、按 Esc 时回调。
+private struct ToolbarSearchField: NSViewRepresentable {
+    static let focusRequest = Notification.Name("AppActivitySearchFocusRequest")
+
+    @Binding var text: String
+    let prompt: String
+    let focusOnAppear: Bool
+    let onEndEditing: () -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = prompt
+        field.sendsSearchStringImmediately = true
+        field.delegate = context.coordinator
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.changed(_:))
+        context.coordinator.observer = NotificationCenter.default.addObserver(
+            forName: Self.focusRequest, object: nil, queue: .main
+        ) { [weak field] _ in
+            MainActor.assumeIsolated {
+                if let field { field.window?.makeFirstResponder(field) }
+            }
+        }
+        if focusOnAppear {
+            // 先进视图树、进窗口，下一轮再拿焦点。
+            DispatchQueue.main.async { [weak field] in
+                if let field { field.window?.makeFirstResponder(field) }
+            }
+        }
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    static func dismantleNSView(_ field: NSSearchField, coordinator: Coordinator) {
+        if let observer = coordinator.observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: ToolbarSearchField
+        var observer: NSObjectProtocol?
+
+        init(_ parent: ToolbarSearchField) { self.parent = parent }
+
+        @objc func changed(_ sender: NSSearchField) {
+            parent.text = sender.stringValue
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            if let field = notification.object as? NSSearchField { parent.text = field.stringValue }
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            parent.onEndEditing()
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            control.window?.makeFirstResponder(nil)
+            parent.onCancel()
+            return true
+        }
     }
 }
 

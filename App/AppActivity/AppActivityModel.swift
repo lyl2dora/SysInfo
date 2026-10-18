@@ -20,6 +20,8 @@ final class AppActivityModel {
     }
     var category: AppActivityCategory = .all { didSet { if category != oldValue { refreshRows() } } }
     var search = "" { didSet { if search != oldValue { refreshRows() } } }
+    /// 右侧详情栏是否显示（D81：由窗口控制器开关，打开时窗口向外加宽）。
+    var showsInspector = true
     var sortOrder: [KeyPathComparator<AppActivityRow>] = [KeyPathComparator(\.sortCPU, order: .reverse)] {
         didSet { if sortOrder != oldValue { refreshRows() } }
     }
