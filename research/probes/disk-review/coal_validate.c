@@ -18,7 +18,7 @@ int main(void) {
     uint64_t a[256], b[256];
     usage(ci.coalition_id[0], a);
     printf("own pid %d resource coalition %llu: tasks_started=%llu tasks_exited=%llu read=%llu written=%llu\n", getpid(), ci.coalition_id[0], a[0], a[1], a[6], a[7]);
-    const char *f = "/tmp/sysinfo-probes/disk-review/coal.bin";
+    char f[1024]; snprintf(f, sizeof f, "%s/sysinfo-probe-coal.bin", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");  // 当前用户的临时目录
     size_t n = 64 << 20; char *buf = malloc(n); arc4random_buf(buf, n);
     int fd = open(f, O_CREAT | O_TRUNC | O_RDWR, 0644); fcntl(fd, F_NOCACHE, 1); write(fd, buf, n); fcntl(fd, F_FULLFSYNC); close(fd); unlink(f);
     usage(ci.coalition_id[0], b);

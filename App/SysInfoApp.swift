@@ -103,6 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             history: history, engine: engine)
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
+        // 自动更新（D76）：只有日用版启用；到期才联网。
+        let updater = Updater(settings: settings)
+        services.updater = updater
+        updater.start()
         // 应用活动窗口（D67）：模型挂在 services 上，引擎的 coalition 结果经 services.handle 转给它。
         let appActivityModel = AppActivityModel(services: services, settings: settings, engine: engine)
         services.appActivity = appActivityModel
@@ -137,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings, store: store, throttle: throttle, engine: engine, services: services)
         settingsWindow.install()
         panel.onOpenSettings = { [weak self] in self?.openSettings() }
+        services.openUpdateSettings = { [weak self] in self?.openSettings(page: .general) }
         self.settingsWindow = settingsWindow
 
         instance.onReopenRequest = { [weak self] in self?.openSettings() }

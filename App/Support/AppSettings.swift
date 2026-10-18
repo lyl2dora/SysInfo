@@ -44,6 +44,8 @@
 // - history.cpu.enabled / history.apps.enabled / history.cpu.highPrecision   是否记录历史与后台高精度（D30、D19）；
 //   history.apps.enabled 同时管每应用数据（D68）与电源断言（D69），在「应用活动」页编辑
 // - appActivity.interval   应用活动窗口「现在」档的采样间隔，秒：1 / 2 / 5（D67：默认 2）
+// - update.frequency / update.autoInstall   检查更新的频率（off / daily / weekly，D76：默认 weekly）、发现新版本时是否自动安装（默认否）
+//   （上次检查的时间 update.lastCheck 由 Updater 自己读写）
 
 import Foundation
 import Observation
@@ -64,6 +66,8 @@ final class AppSettings {
     enum Key {
         static let globalInterval = "general.interval"
         static let autoThrottle = "general.autoThrottle"
+        static let updateFrequency = "update.frequency"
+        static let updateAutoInstall = "update.autoInstall"
         static let cpuInterval = "cpu.interval"
         static let cpuItemVisible = "menubar.cpu.visible"
         static let cpuFrequencyItemVisible = "menubar.cpu.freq.visible"
@@ -216,6 +220,16 @@ final class AppSettings {
     /// 是否自动降频（K20、D25：默认开，可以关闭）。
     var autoThrottle: Bool {
         didSet { persist(autoThrottle, Key.autoThrottle) }
+    }
+
+    /// 检查更新的频率（D76：出厂每周）。
+    var updateFrequency: UpdateCheckFrequency {
+        didSet { persist(updateFrequency.rawValue, Key.updateFrequency) }
+    }
+
+    /// 发现新版本时自动下载并安装（D76：出厂只提示）。
+    var updateAutoInstall: Bool {
+        didSet { persist(updateAutoInstall, Key.updateAutoInstall) }
     }
 
     /// 是否记录 CPU 历史（D30：默认开）。
@@ -629,6 +643,8 @@ final class AppSettings {
         cpuTemperatureItemVisible = defaults?.object(forKey: Key.cpuTemperatureItemVisible) as? Bool ?? false
         cpuPowerItemVisible = defaults?.object(forKey: Key.cpuPowerItemVisible) as? Bool ?? false
         autoThrottle = defaults?.object(forKey: Key.autoThrottle) as? Bool ?? true
+        updateFrequency = defaults?.string(forKey: Key.updateFrequency).flatMap(UpdateCheckFrequency.init(rawValue:)) ?? .weekly
+        updateAutoInstall = defaults?.object(forKey: Key.updateAutoInstall) as? Bool ?? false
         historyCPUEnabled = defaults?.object(forKey: Key.historyCPU) as? Bool ?? true
         historyAppsEnabled = defaults?.object(forKey: Key.historyApps) as? Bool ?? true
         historyHighPrecision = defaults?.object(forKey: Key.historyHighPrecision) as? Bool ?? false

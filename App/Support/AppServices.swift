@@ -558,6 +558,10 @@ final class AppServices {
     var appActivity: AppActivityModel?
     /// 打开应用活动窗口：按哪一列排序、哪个时间段（nil 为保持）。
     var openAppActivity: (AppActivityColumn?, AppActivityRange?) -> Void = { _, _ in }
+    /// 自动更新（D76）；由 AppDelegate 创建。
+    var updater: Updater?
+    /// 打开设置的「通用」页（面板顶栏的「有新版本」按钮用）。
+    var openUpdateSettings: () -> Void = {}
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。
     private let interruptDemand: DemandSlot
 

@@ -1,0 +1,73 @@
+{
+  "fill": {
+    "automatic-gradient": "srgb:0.20392,0.24314,0.30588,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "fill": "automatic",
+          "glass": true,
+          "hidden": false,
+          "image-name": "gauge-green.svg",
+          "name": "gauge-green"
+        },
+        {
+          "fill": "automatic",
+          "glass": true,
+          "hidden": false,
+          "image-name": "gauge-track.svg",
+          "name": "gauge-track"
+        }
+      ],
+      "name": "screen",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
+      },
+      "position": {
+        "scale": 1.15,
+        "translation-in-points": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "layers": [
+        {
+          "fill": "automatic",
+          "glass": true,
+          "hidden": false,
+          "image-name": "chip.svg",
+          "name": "chip"
+        }
+      ],
+      "name": "chip",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      },
+      "position": {
+        "scale": 1.15,
+        "translation-in-points": [
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

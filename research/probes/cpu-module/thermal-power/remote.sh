@@ -2,7 +2,7 @@
 # remote.sh — 把本目录源码同步到 Mac Studio 的 /tmp/sysinfo-cpu-research/thermal-power/src，并在受限环境里执行命令。
 # 用法：./remote.sh sync | ./remote.sh run '<远端命令>'   （远端命令在 src 目录执行，HOME/TMPDIR/模块缓存都在 /tmp 下）
 set -e
-HOST=${REMOTE_HOST:-user@remote-host}
+HOST=${REMOTE_HOST:?set REMOTE_HOST=user@host}
 R=/tmp/sysinfo-cpu-research/thermal-power
 here=${0:A:h}
 case "$1" in

@@ -5,7 +5,8 @@
 //   再次点击 item（点击交给系统处理，本进程只能从全局监视器看到）都由这里调用 `session.cancel()`；
 // - 单个可复用的 `NSPanel` + `NSGlassEffectView`，内部放 `NSHostingView`；锚在 item 所在窗口下方，限制在屏幕 visibleFrame 内；
 // - session 期间 item 的高亮由系统绘制（27 实测），这里不再自绘；
-// - 「固定」：结束 session，把同一个面板改成可拖动的浮窗（level = .floating），显示关闭按钮；
+// - 浮窗（D81）：锚定时用户拖动面板即转为浮窗——结束 session，同一个面板改为 level = .floating，显示关闭按钮；
+//   不再有「固定」按钮。浮窗时再点菜单栏 item，面板换成该模块并重新锚到它下方（D47）；
 // - 面板可见且在 CPU tab 时登记「面板」需求（D29，CPU 模块设计 §5.8）：占用与杂项 1 s，频率、温度与功耗、Top N
 //   按设置的间隔；在「功耗与散热」tab 时（功耗与散热模块设计 §4.7）：整机功率与杂项（热状态）1 s，
 //   SoC/GPU/DRAM 功率、最热点与风扇按设置的间隔，CPU 功耗按 CPU 面板的温度与功耗间隔，PMGR 批次 60 s；
@@ -102,7 +103,6 @@ struct PanelActions {
     var openActivityMonitor: () -> Void
     /// 打开应用活动窗口（D67）。
     var openAppActivity: () -> Void
-    var pin: () -> Void
     var close: () -> Void
     var openSettings: () -> Void
     var quit: () -> Void
@@ -351,7 +351,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         hide()
     }
 
-    /// 「固定」：结束 session，把同一个面板改为可拖动的浮窗。
+    /// 转为浮窗：结束 session，把同一个面板改为浮窗（D81：用户拖动时触发；`--pin-panel` 启动参数也走这里）。
     func pin() {
         guard presentation == .anchored, let panel else { return }
         presentation = .pinned
@@ -630,6 +630,16 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
 
         self.panel = panel
         self.glass = glass
+        // D81：用户拖动（WindowDragGesture）时系统发 willMove；程序里改 frame 不发。锚定时一拖就转为浮窗。
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willMoveNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.presentation == .anchored else { return }
+                Log.panel.info("用户拖动了锚定面板：转为浮窗")
+                self.pin()
+            }
+        }
         return panel
     }
 
@@ -638,7 +648,6 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         let actions = PanelActions(
             openActivityMonitor: { [weak self] in self?.openActivityMonitor() },
             openAppActivity: { [services] in services.openAppActivity(nil, nil) },
-            pin: { [weak self] in self?.pin() },
             close: { [weak self] in self?.close() },
             // 关不关面板由打开设置的公共入口统一决定（锚定面板关闭，浮窗保留），见 AppDelegate.openSettings。
             openSettings: { [weak self] in self?.onOpenSettings?() },

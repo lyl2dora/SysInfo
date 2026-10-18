@@ -2,7 +2,7 @@
 # 在 Mac Studio 上编译并运行本目录的 C 探针（D18：远端只写 /tmp/sysinfo-cpu-research/skeptic-topo-freq）。
 # 用法：./remote.sh <probe.c> [运行参数...]
 set -e
-HOST=${REMOTE_HOST:-user@remote-host}
+HOST=${REMOTE_HOST:?set REMOTE_HOST=user@host}
 R=/tmp/sysinfo-cpu-research/skeptic-topo-freq
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=10 $HOST)
 src=$1; shift

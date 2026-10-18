@@ -15,8 +15,11 @@ DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
 RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
 DEV_BUNDLE_ID  := zone.lyl.sysinfo.dev
 
-# 远端对照机（M4 Pro Mac mini，D28）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
-REMOTE_HOST    ?= user@remote-host
+# 远端对照机（M4 Pro Mac mini，D28）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。
+# 地址不进库（D77）：写在 Config/remote.local.mk（已被 .gitignore 忽略，格式见 Config/remote.local.mk.example），
+# 也可以临时覆盖：make remote-cli REMOTE_HOST=user@host
+-include Config/remote.local.mk
+REMOTE_HOST    ?=
 REMOTE_DIR     := /tmp/sysinfo-remote
 # SwiftPM 默认往家目录写 manifest 缓存、配置和安全目录（~/Library/Caches/org.swift.swiftpm、
 # ~/Library/org.swift.swiftpm、~/.swiftpm 下的链接）。显式指定 --cache-path 等之后它仍会重建
@@ -40,7 +43,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release dist measure strings install clean check-private-imports check-leaks test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -56,9 +59,11 @@ help:
 	@echo "  remote-app-build / remote-app-run / remote-app-shot / remote-app-clean"
 	@echo "              在对照机上构建、启动、截图、清场 Debug 版 app（D39；run 的 ARGS 传给 app，shot 用 OUT= 与 POS=）"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
+	@echo "  dist        打可分发的 Release 包到 build/dist（签名；有公证凭据时公证并 staple，D74）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
 	@echo "  check-private-imports  检查 app、sysinfo-cli 与 SysStore 没有引用 CSysPrivate（test、cli 会先跑它）"
+	@echo "  check-leaks 检查已跟踪文件里没有内网地址、家目录、设备标识、卷名等（D77，test、test-hw 会先跑它）"
 	@echo "  test-scripts  运行 check-private-imports 的回归样例（test、test-hw 会先跑它）"
 	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
 
@@ -75,6 +80,10 @@ stop:
 run: build stop
 	open "$(DEBUG_APP)" $(if $(ARGS),--args $(ARGS))
 
+# D77：公开仓库防泄漏（私网地址、家目录、UUID/MAC、卷名、签名真名、本地黑名单）。
+check-leaks:
+	@scripts/check-leaks.sh
+
 check-private-imports:
 	@scripts/check-private-imports.sh $(PRIVATE_IMPORT_GUARDED)
 
@@ -82,17 +91,21 @@ check-private-imports:
 test-scripts:
 	@scripts/test-check-private-imports.sh
 
-test: test-scripts check-private-imports
+test: test-scripts check-private-imports check-leaks
 	swift test --package-path $(PACKAGE_PATH)
 
-test-hw: test-scripts check-private-imports
+test-hw: test-scripts check-private-imports check-leaks
 	SYSINFO_HW_TESTS=1 swift test --package-path $(PACKAGE_PATH)
 
 cli: check-private-imports
 	swift run --package-path $(PACKAGE_PATH) sysinfo-cli $(ARGS)
 
+require-remote-host:
+	@if [ -z "$(REMOTE_HOST)" ]; then \
+		echo "没有设置 REMOTE_HOST：在 Config/remote.local.mk 里写 REMOTE_HOST := user@host（见 .example），或在命令行传入。" >&2; exit 1; fi
+
 # 把 Packages/SysKit 同步到远端 /tmp/sysinfo-remote/SysKit（保留远端 .build 以便增量构建）。
-remote-sync: check-private-imports
+remote-sync: check-private-imports require-remote-host
 	$(SSH) $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)/tmp $(REMOTE_DIR)/home'
 	rsync -a --delete --exclude .build --exclude .swiftpm -e "$(SSH)" $(PACKAGE_PATH)/ $(REMOTE_HOST):$(REMOTE_DIR)/SysKit/
 
@@ -105,20 +118,20 @@ remote-test: test-scripts remote-sync
 	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && $(REMOTE_ENV) SYSINFO_HW_TESTS=1 swift test $(REMOTE_SWIFTPM)'
 
 # D39：对照机上的截图自查。启动总是带 --factory-defaults；用完 remote-app-clean 清场。
-remote-app-build: check-private-imports
+remote-app-build: check-private-imports require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh build
 
-remote-app-run:
+remote-app-run: require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh run $(ARGS)
 
-remote-app-shot:
+remote-app-shot: require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh shot "$(OUT)" $(POS)
 
-remote-app-clean:
+remote-app-clean: require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh clean
 
 # CPU 模块设计 §10：在对照机上做同样的四档测量（远端检测到 Stats 时同样拒绝执行），结果追加到 docs/perf/cpu.md，之后清场（D39）。
-remote-measure: check-private-imports
+remote-measure: check-private-imports require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh measure
 
 measure:
@@ -136,8 +149,14 @@ strings: build
 	xcrun xcstringstool sync App/Localizable.xcstrings $$args
 	@echo "已同步 App/Localizable.xcstrings"
 
-install notarize:
-	@echo "make $@ 在 M0 不实现（install 待 K50 定；notarize 按 D20 为可选）。" >&2
+# D74：可分发的 Release 包（签名；设了 NOTARY_PROFILE 或 API key 环境变量时再公证并 staple），产物在 build/dist。
+# CI 推 v* tag 时走同一个脚本并发布到 GitHub Releases。
+dist:
+	scripts/build-release.sh
+
+# 发布改由 CI 出包、各机自行下载（D74），本机不再提供 install。
+install:
+	@echo "不提供 make install：推 v* tag 后由 CI 发布，从 GitHub Releases 下载安装（D74）。本机打包用 make dist。" >&2
 	@exit 1
 
 clean:

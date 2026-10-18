@@ -2,7 +2,7 @@
 # m2_plan.sh — skeptic-thermal-power 在 Mac Studio (M2 Max) 上的复测计划（ssh 恢复后执行）。只读 SMC/IOReport；负载 ≤60 s。
 # 1) 同步 + 编译；2) 拉取 thermal-power 留在远端的窗口 2 被动记录（只读复制）；3) E 簇翻转测试 ui8↔ui12（40 s）；4) 开销（3 次）；5) EM 结构。
 set -e
-here=${0:A:h}; R=/tmp/sysinfo-cpu-research/skeptic-thermal-power; HOST=${REMOTE_HOST:-user@remote-host}
+here=${0:A:h}; R=/tmp/sysinfo-cpu-research/skeptic-thermal-power; HOST=${REMOTE_HOST:?set REMOTE_HOST=user@host}
 $here/remote.sh sync && $here/remote.sh build
 scp -o BatchMode=yes "$HOST:/tmp/sysinfo-cpu-research/thermal-power/out/passive2_m2.csv" "$here/tp_passive2_m2.csv" || echo "passive2 不可取"
 $here/remote.sh run "sysctl -n hw.model kern.osversion; ps -axo pcpu | awk '{s+=\$1} END {print \"pcpu\",s}'; $R/bin/sk_rec $R/out/etoggle_m2.csv 2 'Te0,Tp0,Tp1,PPSR,PSVR,PMVR,PZC0,VC0' 'idle:6,ui8:8,ui12:8,ui8:8,ui12:8,ui8:8,idle:6'"

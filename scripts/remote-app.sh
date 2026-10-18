@@ -14,7 +14,7 @@
 # 远端只结束自己启动的 SysInfo Dev（按可执行文件路径匹配，D18）。清场只删「启动前不存在」的路径（启动时记一份清单）。
 set -euo pipefail
 
-host="${REMOTE_HOST:-user@remote-host}"
+host="${REMOTE_HOST:?没有设置 REMOTE_HOST（见 Config/remote.local.mk.example）}"
 dir="/tmp/sysinfo-remote"
 ssh_cmd=(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host")
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"

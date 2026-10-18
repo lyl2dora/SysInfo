@@ -2,7 +2,7 @@
 # remote.sh - 把本目录探针同步到 Mac Studio 并在远端编译/运行（D18：只写 /tmp/sysinfo-cpu-research/processes/）。
 # 用法：./remote.sh sync | ./remote.sh build <name.c|name.swift> [额外编译参数] | ./remote.sh run '<命令>'
 set -e
-HOST=user@remote-host
+HOST=${REMOTE_HOST:?set REMOTE_HOST=user@host}
 R=/tmp/sysinfo-cpu-research/processes
 ENV="HOME=$R/home CFFIXED_USER_HOME=$R/home TMPDIR=$R/tmp"
 case "$1" in

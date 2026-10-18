@@ -1,5 +1,6 @@
 // Probe: local IPv4/IPv6 for the primary interface.
 // (a) exact replica of Stats getLocalIP (readers.swift:487-501): copies ifa_addr.pointee (a 16-byte sockaddr) then getnameinfo with sa_len
+// 复刻代码适用 Stats 的 MIT 许可，见仓库根目录 THIRD_PARTY_NOTICES.md。
 // (b) correct: pass ifa_addr pointer directly; plus IPv6 address flags via SIOCGIFAFLAG_IN6 to classify temporary/deprecated/secured
 import Foundation
 import SystemConfiguration

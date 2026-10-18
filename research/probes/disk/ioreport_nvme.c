@@ -1,5 +1,6 @@
 // IOReport "NVMe" group: power-state residency + BW-limit/throttle channels on the ANS controller (private libIOReport)
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <CoreFoundation/CoreFoundation.h>
 typedef struct IOReportSubscriptionRef *IOReportSubscriptionRef;
@@ -26,9 +27,10 @@ int main(void) {
     if (!sub) { printf("subscription failed\n"); return 1; }
     CFDictionaryRef a = IOReportCreateSamples(sub, sub_ch, NULL);
     // generate a little I/O so power states move
-    FILE *f = fopen("/tmp/sysinfo-probes/disk/ior.bin", "w");
+    char path[1024]; snprintf(path, sizeof path, "%s/sysinfo-probe-ior.bin", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");  // 当前用户的临时目录
+    FILE *f = fopen(path, "w");
     static char buf[1 << 20]; for (int i = 0; i < 64; i++) fwrite(buf, 1, sizeof buf, f); fflush(f); fsync(fileno(f)); fclose(f);
-    unlink("/tmp/sysinfo-probes/disk/ior.bin");
+    unlink(path);
     sleep(2);
     CFDictionaryRef b = IOReportCreateSamples(sub, sub_ch, NULL);
     CFDictionaryRef d = IOReportCreateSamplesDelta(a, b, NULL);

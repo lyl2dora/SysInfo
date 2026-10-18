@@ -1,0 +1,116 @@
+# 发布流程（D74）：推 v* tag 时构建 Release、Developer ID 签名、公证并 staple，发布到 GitHub Releases。
+# 推到 release/** 分支或手动触发（workflow_dispatch）时只构建、签名、公证并上传为 workflow artifact，不发布，
+# 用来在打 tag 前试跑（手动触发要求 workflow 已在默认分支上）。
+#
+# 需要的 Secrets（由用户在仓库 Settings → Secrets and variables → Actions 里填写，D74）：
+#   CSC_LINK            Developer ID Application 证书与私钥导出的 .p12，base64 编码
+#   CSC_KEY_PASSWORD    导出 .p12 时设的密码
+#   APPLE_API_KEY       App Store Connect API key（.p8）：原文或 base64 编码都可以
+#   APPLE_API_KEY_ID    API key 的 Key ID
+#   APPLE_API_ISSUER    API key 的 Issuer ID
+#
+# 只由本仓库的推送和手动触发运行，不响应 pull_request，外部 PR 拿不到 Secrets。第三方 action 按 commit SHA 固定版本。
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["release/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1（node24）
+        with:
+          fetch-depth: 0 # build 号用 git rev-list --count HEAD（K30）
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Tag matches MARKETING_VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(sed -n 's/^MARKETING_VERSION *= *//p' Config/Shared.xcconfig)"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} 与 MARKETING_VERSION ${version} 不一致" >&2
+            exit 1
+          fi
+
+      - name: Checks and unit tests
+        # 硬件测试在托管 runner 上没有意义，只在本机和对照机跑（D25、D74）。
+        run: make test
+
+      - name: Import signing certificate
+        env:
+          P12_BASE64: ${{ secrets.CSC_LINK }}
+          P12_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          keychain="${RUNNER_TEMP}/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "${P12_BASE64}" | base64 --decode > "${RUNNER_TEMP}/cert.p12"
+          security create-keychain -p "${keychain_password}" "${keychain}"
+          security set-keychain-settings -lut 3600 "${keychain}"
+          security unlock-keychain -p "${keychain_password}" "${keychain}"
+          security import "${RUNNER_TEMP}/cert.p12" -k "${keychain}" -P "${P12_PASSWORD}" -f pkcs12 -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "${keychain_password}" "${keychain}" >/dev/null
+          security list-keychains -d user -s "${keychain}" $(security list-keychains -d user | tr -d '"')
+          rm -f "${RUNNER_TEMP}/cert.p12"
+          security find-identity -v -p codesigning "${keychain}" | grep -q "Developer ID Application" \
+            || { echo "钥匙串里没有 Developer ID Application 身份" >&2; exit 1; }
+          echo "SIGN_KEYCHAIN=${keychain}" >> "${GITHUB_ENV}"
+
+      - name: Prepare notary key
+        env:
+          P8: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if printf '%s' "${P8}" | grep -q 'BEGIN PRIVATE KEY'; then
+            printf '%s\n' "${P8}" > "${RUNNER_TEMP}/notary.p8"
+          else
+            printf '%s' "${P8}" | base64 --decode > "${RUNNER_TEMP}/notary.p8"
+          fi
+          grep -q 'BEGIN PRIVATE KEY' "${RUNNER_TEMP}/notary.p8" || { echo "APPLE_API_KEY 不是 .p8 私钥" >&2; exit 1; }
+          echo "NOTARY_KEY_PATH=${RUNNER_TEMP}/notary.p8" >> "${GITHUB_ENV}"
+
+      - name: Build, sign, notarize
+        env:
+          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+          REQUIRE_NOTARIZATION: "1"
+        run: scripts/build-release.sh
+
+      - name: Upload artifact (trial run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1（node24）
+        with:
+          name: SysInfo-dist
+          path: build/dist/
+          retention-days: 7
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" build/dist/SysInfo-*.zip build/dist/SysInfo-*.zip.sha256 \
+            --verify-tag --title "SysInfo ${GITHUB_REF_NAME#v}" --notes-from-tag
+
+      - name: Clean up
+        if: always()
+        run: |
+          [ -n "${SIGN_KEYCHAIN:-}" ] && security delete-keychain "${SIGN_KEYCHAIN}" || true
+          rm -f "${RUNNER_TEMP}/notary.p8"
