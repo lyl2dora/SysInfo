@@ -127,7 +127,8 @@ struct PMGRBatchCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("等待首个批次：开机后约每 30 分钟发布一次，app 运行期间才能收到。")
+                // 启动后第一次发布只建基线（不是完整的 30 分钟），第二次发布才有完整一批；历史库里存有上一批时不会走到这里。
+                Text("等待首个批次：系统约每 30 分钟发布一次，app 启动后要收到第二次发布才有完整的一批，最长约 1 小时。")
                     .font(.panelNote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

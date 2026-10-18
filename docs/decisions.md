@@ -720,7 +720,7 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 > 依据：P0 验收通过后讨论 K50 与 1.0.0（D71）。用户改定了 K50 的推荐方案：「目前的私有仓库 CI 直接出 release，有需要的 mac mini/macbook 等设备自行下载安装」。
 
 ### D74 发布方式：公开仓库的 CI 出签名并公证的 Release · 已定（2026-10-18 用户改定 K50；取代 D20 中「待确认（首次分发到其他 Mac 时）：安装方式，以及是否公证」与「仍然不做自动更新器」，取代 K50 推荐的 `make install` 方案）
-- 推送 `v*` tag 时，GitHub Actions（托管 runner，label `xcode-27`，macOS 27）构建 Release，用 Developer ID 签名、公证并 staple，打包后发布到仓库的 Releases。各台 Mac 自行下载，装进 `/Applications`。
+- 推送 `v*` tag 时，GitHub Actions（托管 runner，label `xcode-27`，macOS 27）构建 Release，用 Developer ID 签名、公证并 staple，打包后发布到仓库的 Releases。各台 Mac 自行下载，装进 `/Applications`。另有手动触发（workflow_dispatch）的试跑：同样构建、签名、公证，产物只作为 workflow artifact，不发布；推送分支不自动触发（2026-10-18 用户改定）。
 - 经浏览器下载的包带 quarantine 属性，Gatekeeper 会检查，所以签名和公证都必须做。私有 API 不影响公证，Hardened Runtime 已经开启（D23）。
 - 签名证书（.p12）和公证用的 App Store Connect API key 放在仓库 Secrets 里，由用户导出并填写；Claude 不经手这些凭据。workflow 只由 tag 触发，不用 `pull_request_target`，外部 PR 拿不到 Secrets。
 - CI 只负责构建、签名、公证、发布；硬件测试仍在本机和对照机上跑（D25）。
@@ -782,3 +782,4 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 - 结构：背景用自动渐变（基色为深石板色 `#343E4E`；浅色底 `#F4F6FA` 在 Dock 里读成白边，2026-10-18 用户改定）；前景两组整体放大 1.15 倍；前景两组玻璃图层，下层为芯片外框、引脚与屏幕底板（关闭半透明，屏幕保持深色），上层为屏幕内容（仪表弧的轨道与 65% 进度两层）。深色、清透、着色外观交给系统生成。
 - 仪表弧由用户的描边稿转成填充轮廓（HIG 要求矢量图稿转轮廓），逐像素与原稿一致。
 - 源素材（用户的分层 SVG、预览与备选方案）不进库，库里只有 `.icon` 文档。预览用 Icon Composer 自带的 `ictool` 渲染。
+- Debug 版与 Release 版用同一个图标，不另做区分（2026-10-18 用户决定）。

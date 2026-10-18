@@ -1,6 +1,6 @@
 # 发布流程（D74）：推 v* tag 时构建 Release、Developer ID 签名、公证并 staple，发布到 GitHub Releases。
-# 推到 release/** 分支或手动触发（workflow_dispatch）时只构建、签名、公证并上传为 workflow artifact，不发布，
-# 用来在打 tag 前试跑（手动触发要求 workflow 已在默认分支上）。
+# 手动触发（workflow_dispatch）时只构建、签名、公证并上传为 workflow artifact，不发布，用来在打 tag 前试跑。
+# 推送分支不自动触发（2026-10-18 用户决定，免得每次推送都去公证）。
 #
 # 需要的 Secrets（由用户在仓库 Settings → Secrets and variables → Actions 里填写，D74）：
 #   CSC_LINK            Developer ID Application 证书与私钥导出的 .p12，base64 编码
@@ -16,7 +16,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    branches: ["release/**"]
   workflow_dispatch:
 
 permissions:
