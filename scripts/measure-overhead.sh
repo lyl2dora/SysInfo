@@ -15,8 +15,8 @@
 #   merged：出厂默认的 widget 合并为单个 item（--merged，D65），面板关闭；
 #   overview：合并模式下面板打开且在「总览」（--merged --panel-tab=overview，D65 MG5）；
 #   appactivity：应用活动窗口打开在「现在」（--open-app-activity，全表每 2 s，D67；不属于出厂默认，只记录）。
-# 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D40：用 sysinfo-cli rusage 读 app 的按档计数，把其他档的指令
-# 折算成最快档的等效时间（按单核的比例）；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
+# 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D80：app 的总指令（sysinfo-cli rusage）÷ 本机满频最快核的
+# 每秒指令数（sysinfo-cli ipsref，启动 app 前测一次），按单核的比例；原 D40 的折算值仍作对照；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
 #
 # 操作边界（D18、D16）：
@@ -103,6 +103,14 @@ swift build -c release --package-path Packages/SysKit --product sysinfo-cli >/de
 cli="Packages/SysKit/.build/release/sysinfo-cli"
 [ -x "${cli}" ] || { echo "sysinfo-cli 构建失败" >&2; exit 1; }
 
+# D80：考核值 = app 的总指令 ÷ 本机满频最快核的每秒指令数（参照值），按单核的比例。参照值在启动 app 之前测，
+# 单核连续负载约 10 s（D18 的短时负载）。
+echo "==> 测本机满频最快核的每秒指令数（sysinfo-cli ipsref，单核约 10 s）"
+ref_json="$("${cli}" ipsref --seconds 10)" || { echo "参照值测量失败：${ref_json}" >&2; exit 1; }
+ref_gips="$(printf '%s' "${ref_json}" | sed -n 's/.*"p0_gips":\([0-9.]*\).*/\1/p')"
+[ -n "${ref_gips}" ] || { echo "参照值解析失败：${ref_json}" >&2; exit 1; }
+echo "    参照值 ${ref_gips} G 指令/s" >&2
+
 # ---------------------------------------------------------------- 测量
 
 app_pid=""
@@ -173,14 +181,14 @@ measure() {
     m1="$(cpu_seconds "${mba_pid}")"
     w1="$(cpu_seconds "${ws_pid}")"
 
-    local elapsed app_pct="—" footprint="—" equiv="—" cyc="—" p0share="—" mw="—" mips="—" p0gips="—"
+    local elapsed app_pct="—" footprint="—" equiv="—" cyc="—" p0share="—" mw="—" mips="—" p0gips="—" score="—"
     elapsed="$(perl -e 'printf "%.3f", $ARGV[1] - $ARGV[0]' "${t0}" "${t1}")"
     if [ -n "${app_pid}" ]; then
         app_pct="$(percent "${a0}" "${a1}" "${elapsed}")"
         if [ -n "${r0}" ] && [ -n "${r1}" ]; then
-            # 输出：等效最快档 %、按周期折算 %、最快档时间占比 %、能耗 mW（D40）、总指令（百万/秒）、最快档每秒指令（十亿/秒）
-            read -r equiv cyc p0share mw mips p0gips < <(perl -e '
-                my ($a, $b, $sec) = @ARGV;
+            # 输出：D80 考核值 %、原 D40 等效最快档 %、按周期折算 %、最快档时间占比 %、能耗 mW（D40）、总指令（百万/秒）、最快档每秒指令（十亿/秒）
+            read -r score equiv cyc p0share mw mips p0gips < <(perl -e '
+                my ($a, $b, $sec, $ref) = @ARGV;
                 my %x; my %y;
                 %x = $a =~ /"(\w+)":(\d+)/g; %y = $b =~ /"(\w+)":(\d+)/g;
                 my %d = map { $_ => $y{$_} - $x{$_} } grep { $_ ne "p0_top_hz" } keys %y;
@@ -193,8 +201,9 @@ measure() {
                 if ($cp > 0 && $p0 > 0) { $cy = sprintf "%.3f", ($p0 + ($c - $cp) * $p0 / $cp) / $el * 100 }
                 my $share = $cpu > 0 ? sprintf("%.0f", $p0 / $cpu * 100) : "—";
                 my $gips = ($p0 > 0 && $ip > 0) ? sprintf("%.2f", $ip / $p0) : "—";
-                printf "%s %s %s %.1f %.1f %s\n", $eq, $cy, $share, $d{energy_nj} / $sec / 1e6, $i / $sec / 1e6, $gips;
-            ' "${r0}" "${r1}" "${elapsed}")
+                my $score = $ref > 0 ? sprintf("%.3f", $i / ($ref * 1e9) / $sec * 100) : "—";
+                printf "%s %s %s %s %.1f %.1f %s\n", $score, $eq, $cy, $share, $d{energy_nj} / $sec / 1e6, $i / $sec / 1e6, $gips;
+            ' "${r0}" "${r1}" "${elapsed}" "${ref_gips}")
         fi
         footprint="$(/usr/bin/footprint -p "${app_pid}" 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1)"
         [ -n "${footprint}" ] || footprint="?"
@@ -211,8 +220,8 @@ measure() {
     local mba_pct ws_pct
     mba_pct="$(percent "${m0}" "${m1}" "${elapsed}")"
     ws_pct="$(percent "${w0}" "${w1}" "${elapsed}")"
-    echo "    app ${app_pct}%（等效最快档 ${equiv}%，按周期 ${cyc}%，最快档占比 ${p0share}%，${mw} mW，${mips} M 指令/s，最快档 ${p0gips} G 指令/s）  MenuBarAgent ${mba_pct}%  WindowServer ${ws_pct}%  footprint ${footprint} ${note}" >&2
-    results+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "${label}" "${app_pct}" "${equiv}" "${cyc}" "${p0share}" "${mw}" "${mba_pct}" "${ws_pct}" "${footprint}" "${mips}" "${p0gips}" "${note}")")
+    echo "    app ${app_pct}%（考核值 ${score}%，原 D40 ${equiv}%，按周期 ${cyc}%，最快档占比 ${p0share}%，${mw} mW，${mips} M 指令/s，最快档 ${p0gips} G 指令/s）  MenuBarAgent ${mba_pct}%  WindowServer ${ws_pct}%  footprint ${footprint} ${note}" >&2
+    results+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "${label}" "${app_pct}" "${score}" "${equiv}" "${cyc}" "${p0share}" "${mw}" "${mba_pct}" "${ws_pct}" "${footprint}" "${mips}" "${p0gips}" "${note}")")
 }
 
 echo "测量期间尽量不要操作鼠标和键盘（会抬高 WindowServer 等软指标）。面板档固定为浮窗，点别处不会关闭。" >&2
@@ -255,7 +264,7 @@ if [ ! -f "${OUTPUT}" ]; then
 > - 「app」是 SysInfo 进程的 CPU 占用，按单核的比例（100% = 占满一个核），由 `ps -o time=` 的差值算出；
 > - MenuBarAgent、WindowServer 是同一时段的 CPU 增量，是软指标：它们也在为其他 app 工作，要和「基线」（不运行 SysInfo）对照看；
 > - 构建为 Release 配置，Bundle ID 改为 `.dev` 并带 `--factory-defaults` 启动，不碰日用版的偏好（D16、D18）；
-> - 目标（D19 出厂默认配置）：默认 < 0.5%，面板打开 < 2%。
+> - 目标（D80 出厂默认配置）：常驻 < 0.2%，面板打开 < 0.7%，按满频最快核折算（总指令 ÷ ipsref 参照值）。
 EOF
 fi
 
@@ -264,12 +273,12 @@ fi
     echo "## ${date_str} · ${git_commit}（build ${build_number}）"
     echo ""
     echo "- 机器：${model}，${chip}，${ncpu} 个逻辑核，macOS ${os}"
-    echo "- 预热 ${WARMUP} s，每档测量 ${DURATION} s"
+    echo "- 预热 ${WARMUP} s，每档测量 ${DURATION} s；满频最快核参照值 ${ref_gips} G 指令/s（D80）"
     echo ""
-    echo "| 档位 | app 等效最快档（单核 %，D40 考核值） | app 原始 CPU（单核 %） | 按周期折算（%） | 最快档时间占比 | app 能耗（mW） | 总指令（M/s） | 最快档每秒指令（G） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
-    echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    echo "| 档位 | 考核值（满频最快核等效，单核 %，D80） | 原 D40 等效最快档（%） | app 原始 CPU（单核 %） | 按周期折算（%） | 最快档时间占比 | app 能耗（mW） | 总指令（M/s） | 最快档每秒指令（G） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     for row in "${results[@]}"; do
-        IFS=$'\t' read -r label app_pct equiv cyc p0share mw mba_pct ws_pct footprint mips p0gips note <<<"${row}"
+        IFS=$'\t' read -r label app_pct score equiv cyc p0share mw mba_pct ws_pct footprint mips p0gips note <<<"${row}"
         case "${label}" in
             baseline) name="基线（不运行 SysInfo）" ;;
             default) name="出厂默认（CPU 占用、整机功率、内存占用、盘温、网速五个 item，面板关闭，历史与能耗开启）" ;;
@@ -286,10 +295,10 @@ fi
             appactivity) name="应用活动窗口打开在「现在」（全表 2 s，D67）" ;;
             *) name="${label}" ;;
         esac
-        echo "| ${name} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mips:-—} | ${p0gips:-—} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
+        echo "| ${name} | ${score} | ${equiv} | ${app_pct} | ${cyc} | ${p0share}% | ${mw} | ${mips:-—} | ${p0gips:-—} | ${mba_pct} | ${ws_pct} | ${footprint} | ${note:-} |"
     done
     echo ""
-    echo "考核值按 D40 折算成最快档等效时间；带 * 的是最快档时间太少（< 20 ms），按「周期数 ÷ 最快档顶档频率」估算：能效核 IPC 较低会让它偏高，假设最快档跑在顶档频率又会让它偏低，只作估算。"
+    echo "考核值按 D80：总指令 ÷ 满频最快核参照值。「原 D40」一列仅作对照，带 * 的是最快档时间太少（< 20 ms），按「周期数 ÷ 最快档顶档频率」估算：能效核 IPC 较低会让它偏高，假设最快档跑在顶档频率又会让它偏低，只作估算。"
 } >>"${OUTPUT}"
 
 echo "==> 结果已追加到 ${OUTPUT}"
