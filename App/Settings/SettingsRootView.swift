@@ -359,7 +359,10 @@ private struct UpdateSection: View {
                     } label: {
                         Text("SysInfo \(offer.version.description) 可以更新")
                         if !updater.canInstall {
-                            Text("当前副本不在「应用程序」文件夹或没有写权限，请从 Release 页面下载后手动替换。")
+                            Text(
+                                updater.isTranslocated
+                                    ? "SysInfo 正从系统的隔离位置运行：请在访达里把它拖进「应用程序」文件夹后重新打开，或从 Release 页面下载后手动替换。"
+                                    : "当前副本不在「应用程序」文件夹或没有写权限，请从 Release 页面下载后手动替换。")
                         }
                     }
                 }
@@ -424,6 +427,9 @@ private struct LoginItemSection: View {
                     .foregroundStyle(.secondary)
             case .notInApplications:
                 Text("把 SysInfo 移到「应用程序」文件夹后，才能设置登录时启动。")
+                    .foregroundStyle(.secondary)
+            case .translocated:
+                Text("SysInfo 正从系统的隔离位置运行：请在访达里把它拖进「应用程序」文件夹，再重新打开，才能设置登录时启动。")
                     .foregroundStyle(.secondary)
             }
         } header: {

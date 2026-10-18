@@ -15,6 +15,9 @@ final class LoginItemModel {
         case debugBuild
         /// 不在 /Applications 下运行。
         case notInApplications
+        /// 系统从隔离位置运行（App Translocation）：带 quarantine 的 app 没用访达移动过（例如直接在「下载」里打开，
+        /// 或用命令行移进「应用程序」），实际路径在 /private/var/folders/…/AppTranslocation/ 下。
+        case translocated
     }
 
     private(set) var status: SMAppService.Status = .notRegistered
@@ -30,7 +33,12 @@ final class LoginItemModel {
 
     nonisolated static func availability(isDebug: Bool, bundlePath: String) -> Availability {
         if isDebug { return .debugBuild }
+        if isTranslocated(bundlePath) { return .translocated }
         return bundlePath.hasPrefix("/Applications/") ? .available : .notInApplications
+    }
+
+    nonisolated static func isTranslocated(_ bundlePath: String) -> Bool {
+        bundlePath.contains("/AppTranslocation/")
     }
 
     /// 开关显示为「开」：已启用，或已注册但还在等用户批准。

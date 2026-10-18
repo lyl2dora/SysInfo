@@ -39,6 +39,8 @@ final class Updater {
     let isEnabled: Bool
     /// 能否就地替换：从 /Applications 运行，且有写权限。不能时只提示，附 Release 页面链接。
     let canInstall: Bool
+    /// 正从隔离位置运行（App Translocation）：提示用访达移入「应用程序」。
+    let isTranslocated: Bool
 
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let defaults: UserDefaults
@@ -50,6 +52,7 @@ final class Updater {
         self.defaults = defaults
         bundleURL = bundle.bundleURL.resolvingSymlinksInPath()
         isEnabled = !BuildInfo.isDebug && bundle.bundleIdentifier == Self.releaseBundleIdentifier
+        isTranslocated = LoginItemModel.isTranslocated(bundleURL.path)
         let parent = bundleURL.deletingLastPathComponent().path
         canInstall =
             isEnabled && bundleURL.path.hasPrefix("/Applications/")
