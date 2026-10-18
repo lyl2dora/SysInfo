@@ -244,9 +244,11 @@ private struct HoverAnchorKey: PreferenceKey {
 
 private struct GeneralSettingsView: View {
     @Bindable var settings: AppSettings
+    @State private var loginItem = LoginItemModel()
 
     var body: some View {
         Form {
+            LoginItemSection(model: loginItem)
             Section {
                 Picker("默认采集间隔", selection: $settings.globalInterval) {
                     ForEach(SamplingInterval.allCases) { interval in
@@ -265,6 +267,47 @@ private struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { loginItem.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginItem.refresh()
+        }
+    }
+}
+
+/// 开机自启（D75）：出厂不注册，用户手动打开；只有从 /Applications 运行的 Release 版显示开关。
+private struct LoginItemSection: View {
+    let model: LoginItemModel
+
+    var body: some View {
+        Section {
+            switch model.availability {
+            case .available:
+                Toggle("登录时启动", isOn: Binding(get: { model.isOn }, set: { model.setEnabled($0) }))
+                if model.requiresApproval {
+                    LabeledContent {
+                        Button("打开系统设置") { model.openSystemSettings() }
+                    } label: {
+                        Text("需要在系统设置里批准")
+                        Text("「通用 → 登录项与扩展」里允许 SysInfo 后才会生效。")
+                    }
+                }
+                if let error = model.lastError {
+                    Text("没能更改登录项：\(error)")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                }
+            case .debugBuild:
+                Text("Debug 版不注册登录项。")
+                    .foregroundStyle(.secondary)
+            case .notInApplications:
+                Text("把 SysInfo 移到「应用程序」文件夹后，才能设置登录时启动。")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("启动")
+        } footer: {
+            Text("默认不随登录启动。")
+        }
     }
 }
 
