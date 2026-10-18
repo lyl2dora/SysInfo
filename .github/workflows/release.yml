@@ -9,7 +9,7 @@
 #   APPLE_API_KEY_ID    API key 的 Key ID
 #   APPLE_API_ISSUER    API key 的 Issuer ID
 #
-# 只由本仓库的推送和手动触发运行，不响应 pull_request，外部 PR 拿不到 Secrets。
+# 只由本仓库的推送和手动触发运行，不响应 pull_request，外部 PR 拿不到 Secrets。第三方 action 按 commit SHA 固定版本。
 
 name: Release
 
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1（node24）
         with:
           fetch-depth: 0 # build 号用 git rev-list --count HEAD（K30）
 
@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload artifact (trial run)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1（node24）
         with:
           name: SysInfo-dist
           path: build/dist/
