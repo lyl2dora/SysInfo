@@ -20,11 +20,9 @@ extension SysInfoCLI {
         }
         let builder = TopNBuilder()
         let pid = getpid()
-        var tb = mach_timebase_info_data_t()
-        mach_timebase_info(&tb)
-        func ns(_ ticks: UInt64) -> Double { Double(ticks) * Double(tb.numer) / Double(max(tb.denom, 1)) }
 
-        nonisolated(unsafe) var outcome: (p0Instructions: UInt64, p0Ns: Double, cpuNs: Double)?
+        // 工作线程里只记原始计数（时间为 mach tick），换算放到线程外做。
+        nonisolated(unsafe) var outcome: (p0Instructions: UInt64, p0Ticks: UInt64, cpuTicks: UInt64)?
         let done = DispatchSemaphore(value: 0)
         let worker = Thread {
             _ = sampler.sample(at: .now())
@@ -44,8 +42,8 @@ extension SysInfoCLI {
             if let r1 = ProcessInfoReader.rusage(of: pid) {
                 outcome = (
                     r1.ri_pinstructions - r0.ri_pinstructions,
-                    ns((r1.ri_user_ptime + r1.ri_system_ptime) - (r0.ri_user_ptime + r0.ri_system_ptime)),
-                    ns((r1.ri_user_time + r1.ri_system_time) - (r0.ri_user_time + r0.ri_system_time)))
+                    (r1.ri_user_ptime + r1.ri_system_ptime) - (r0.ri_user_ptime + r0.ri_system_ptime),
+                    (r1.ri_user_time + r1.ri_system_time) - (r0.ri_user_time + r0.ri_system_time))
             }
             done.signal()
         }
@@ -53,15 +51,20 @@ extension SysInfoCLI {
         worker.start()
         done.wait()
 
-        guard let outcome, outcome.cpuNs > 0 else {
+        guard let outcome, outcome.cpuTicks > 0 else {
             printError("读不到本进程的 rusage")
             return 1
         }
-        let share = outcome.p0Ns / outcome.cpuNs
-        let gips = outcome.p0Ns > 0 ? Double(outcome.p0Instructions) / outcome.p0Ns : 0
-        print(String(format: "{\"p0_gips\":%.3f,\"p0_share\":%.3f,\"p0_seconds\":%.2f,\"gap_ms\":%.0f}", gips, share, outcome.p0Ns / 1e9, gapMs))
-        guard outcome.p0Ns >= 0.5e9 else {
-            printError(String(format: "最快档时间只有 %.2f s，参照值不可信", outcome.p0Ns / 1e9))
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        func ns(_ ticks: UInt64) -> Double { Double(ticks) * Double(tb.numer) / Double(max(tb.denom, 1)) }
+        let p0Ns = ns(outcome.p0Ticks)
+        let cpuNs = ns(outcome.cpuTicks)
+        let share = p0Ns / cpuNs
+        let gips = p0Ns > 0 ? Double(outcome.p0Instructions) / p0Ns : 0
+        print(String(format: "{\"p0_gips\":%.3f,\"p0_share\":%.3f,\"p0_seconds\":%.2f,\"gap_ms\":%.0f}", gips, share, p0Ns / 1e9, gapMs))
+        guard p0Ns >= 0.5e9 else {
+            printError(String(format: "最快档时间只有 %.2f s，参照值不可信", p0Ns / 1e9))
             return 1
         }
         return 0
