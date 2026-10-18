@@ -16,6 +16,7 @@ xcuserdata/
 
 # Machine-local settings that must not go public (D77): remote host address, private notes
 Config/remote.local.mk
+Config/*.local
 CLAUDE.local.md
 
 # Probe outputs contain machine identifiers (serials, MACs, IPs); keep sources only

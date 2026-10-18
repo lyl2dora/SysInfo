@@ -714,3 +714,45 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 - 统一为一套常量（`App/Panel/PanelType.swift`），SwiftUI 与自绘共用：行文字 12 pt、注释 11 pt、摘要区标题与右列数值 14 pt、顶栏标题与应用详情名称 13 pt（原 `.callout` 12）。顶部大数字（34 pt）和网络网速大数字（24 pt）不变。
 - 自绘卡片的行高与偏移按新字号的行高（12 pt 约 15、11 pt 约 14、14 pt 约 17）重排，每行约 +1 pt；摘要卡片从 86 pt 增到 94 pt。高度仍按 D47 固定，超出 D66 的高度上限时滚动。
 - 菜单栏 widget、设置窗口、应用活动窗口的字号不变。以后仍嫌小，再考虑 +2 号并加宽到约 400 pt（需另立条目修订 D64）。
+
+## 2026-10-18（1.0.0 与发布方式）
+
+> 依据：P0 验收通过后讨论 K50 与 1.0.0（D71）。用户改定了 K50 的推荐方案：「目前的私有仓库 CI 直接出 release，有需要的 mac mini/macbook 等设备自行下载安装」。
+
+### D74 发布方式：公开仓库的 CI 出签名并公证的 Release · 已定（2026-10-18 用户改定 K50；取代 D20 中「待确认（首次分发到其他 Mac 时）：安装方式，以及是否公证」与「仍然不做自动更新器」，取代 K50 推荐的 `make install` 方案）
+- 推送 `v*` tag 时，GitHub Actions（托管 runner，label `xcode-27`，macOS 27）构建 Release，用 Developer ID 签名、公证并 staple，打包后发布到仓库的 Releases。各台 Mac 自行下载，装进 `/Applications`。
+- 经浏览器下载的包带 quarantine 属性，Gatekeeper 会检查，所以签名和公证都必须做。私有 API 不影响公证，Hardened Runtime 已经开启（D23）。
+- 签名证书（.p12）和公证用的 App Store Connect API key 放在仓库 Secrets 里，由用户导出并填写；Claude 不经手这些凭据。workflow 只由 tag 触发，不用 `pull_request_target`，外部 PR 拿不到 Secrets。
+- CI 只负责构建、签名、公证、发布；硬件测试仍在本机和对照机上跑（D25）。
+- 版本：`MARKETING_VERSION` 定为 1.0.0（落实 K30、D71）；build 号沿用 `git rev-list --count HEAD`，CI 检出完整历史。之后 1.0.x 修问题，1.x 加 P1 功能。
+- `make install` 不再需要；`notarize` 由 CI 承担，本地可选。
+
+### D75 登录项：默认不自启 · 已定（2026-10-18 用户改定 K50「自动注册自启不干净，改为默认不自启」；关闭 K50）
+- 用 `SMAppService.mainApp` 注册登录项。出厂不注册；设置「通用」页提供开关，由用户手动打开。
+- 开关只在从 `/Applications` 运行的 Release 版里显示。状态为「需要批准」时，提供跳转系统设置的按钮。
+- 不做崩溃后自动拉起（KeepAlive）。Debug 版照旧不注册登录项（D16）。
+
+### D76 自动更新 · 已定（2026-10-18 用户决定；取代 D13 中「不做：自动更新器」，修订 D22 中「默认没有任何出站连接」）
+- 设置里提供检查更新：频率可配置（关闭 / 每天 / 每周），出厂为**每周**；另有「立即检查」按钮。
+- 发现新版本后的行为可配置：出厂为**只提示**，用户点了才下载安装；可选「自动下载并安装」。
+- 自己实现，不引入 Sparkle（D23）。只访问本仓库的 GitHub Releases API 和它给出的下载地址，设置的「隐私」页列出这两个出站目标（D22）。不上传任何本机信息。
+- 替换前必须校验：新包的代码签名 Team ID 为 `D8MFB2YNN3`、Bundle ID 一致、Gatekeeper 评估通过；任何一项不通过就放弃并提示。
+- Debug 版不检查更新。
+
+### D77 仓库公开与脱敏 · 已定（2026-10-18 用户确认审计范围与 push 形式；MIT 许可；是「不改写旧条目」的一次性例外）
+- 新建公开仓库，推送脱敏改写后的完整历史；原私有仓库可以删除。许可证用 MIT，Stats 复刻代码的声明见 `THIRD_PARTY_NOTICES.md`。
+- 脱敏范围（用户确认）：
+  - 清除：内网机器地址（对照机 ssh 地址、局域网网关）；本机免密 sudo、对照机授权给 sshd 的系统权限这类安全配置；从真实电源断言取来的 UUID；Apple Release Notes 全文副本；卷名；个人软件环境（代理、虚拟机、容器、密码管理器、远程桌面等软件名）；用户名与签名身份里的真名（probe 改为读当前用户的 `TMPDIR`、签名身份改为变量）。
+  - 保留：设备清单（芯片、机型、内存、盘型号）、Team ID、xnu 结构体布局、Stats 复刻代码（附 MIT 声明）。
+- 为此改写了历史中的 D28、D39、D52 等旧条目的个别措辞。这是一次性例外，以后仍按「追加新条目」的规则。
+- 防止复发：
+  - 对照机地址写在不进库的 `Config/remote.local.mk`（格式见 `.example`），本机私有说明写在 `CLAUDE.local.md`；
+  - `scripts/check-leaks.sh` 检查已跟踪文件中的私网 IPv4、家目录路径、UUID/MAC、卷名、签名真名，以及可选的本地黑名单 `Config/leak-denylist.local`（不进库）。`make test`、`make test-hw` 先跑它，CI 也跑。编造的测试值登记在 `scripts/leak-allowlist.txt`。
+
+### D78 对照机兼作 Release 包测试机 · 已定（2026-10-18 用户允许；补充 D18、D28、D39 中「远端只写 /tmp/sysinfo-remote」）
+- 可以在 Mac mini 上安装、运行 CI 产出的 Release 版（`zone.lyl.sysinfo`），用来验证下载、Gatekeeper、首次启动、登录项开关和自动更新。
+- 安装要走带 quarantine 属性的真实路径（浏览器下载，或下载后显式加 quarantine 属性），否则测不到 Gatekeeper。
+- Release 版在对照机上的偏好、历史库和登录项属于日用数据，测试后不按 D39 清场；Debug 版仍按 D39 清场。结束进程仍只限自己启动的实例（D18）。
+
+### D79 M4 上 CPU 面板开销在 1.0.0 内查清 · 已定（2026-10-18 用户决定；取代 D71 中「优化放到 P1 之前单独处理」）
+- 在 1.0.0 的分支上先查清 M4 上 CPU 面板档超出 2% 的原因（D19、D40）。能修就在 1.0.0 内修好；修不了时，写明原因和处理方式，另立条目。

@@ -9,6 +9,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
   - 对照机 Mac mini：M4 Pro，10 Performance + 4 Efficiency，可以 ssh 访问（地址见不进库的 `CLAUDE.local.md` 与 `Config/remote.local.mk`，D77），已装 Xcode 27。原来的 Mac Studio（M2 Max）已被替换，不再是目标设备，它的实测只作旁证。
   - 在对照机上构建或运行 CLI 与探针时，同样遵守 D18 的操作边界。每个模块验收时都要附上两台机器的对照结果。
   - 对照机上可以构建并启动 Debug 版 app 做截图自查，用完按 D39 清场。
+  - 对照机也是 CI Release 包的测试机，可以安装并运行 Release 版，不清场（D78）。
 
 ## 文档（按需分级读取）
 - **每次必读**：`docs/decisions.md`，即决策档（D01 起）。要改变一条决策时，追加新条目并标注「取代 Dxx」，不改写旧条目。
@@ -41,7 +42,8 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - root 只用于风扇控制；v1 只读取风扇状态，不为其他功能做 root helper（D04）。
 - 菜单栏每个 mini widget 只显示一项指标，一个 widget 一个 item，并提供合并选项（D38 取代 D06 第一条）。面板用统一的 `NSPanel`（D21）。禁用 `MenuBarExtra(isInserted:)`。
 - 小组件是预留功能：现在只在数据模型里定义 Codable 快照类型，不加 App Group entitlement（D07、K31）。
-- 不做 Remote/SaaS、自动更新器、蓝牙扫描、世界时钟（D13）。
+- 不做 Remote/SaaS、蓝牙扫描、世界时钟（D13）。自动更新按 D76 做：自研，出厂每周检查、只提示。
+- 发布：公开仓库，推 `v*` tag 由 CI 构建、签名、公证并发布 Release（D74）；登录项出厂不注册（D75）。
 - 默认不引入第三方依赖，例外只有 Apple 官方的 swift-* 包。文案统一放进 String Catalog（D23）。
 
 ## 硬性规则
@@ -76,7 +78,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
     - nettop 只在面板打开、且对应卡片可见时调用（D09、K18）；CoreWLAN 只在面板打开时读，不轮询（D10）。
     - 不定时 spawn `top` 或 `ps`；`top` 只作为 D05 的回退路径，具体形式待 K38 定。
 - 隐私（D10、D22）：
-  - 默认不弹授权框，默认不联网。
+  - 默认不弹授权框；除 D76 的每周检查更新（只访问本仓库的 GitHub Releases）外，默认不联网。
   - 不申请定位和蓝牙权限，不读 SSID/BSSID，不链接蓝牙框架。
   - 不调用 `system_profiler`。
   - 电源设备的 HID 设备匹配限定在 usage page 0x84，不做宽泛匹配。
@@ -98,6 +100,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
   - 地址写在 `Config/remote.local.mk`（不进库，格式见 `.example`），也可以用 `REMOTE_HOST=user@host` 临时覆盖。
 - `make measure`：测量自身开销，结果追加到 `docs/perf/`。Stats 或其他 SysInfo 实例在运行时，脚本会拒绝执行。
 - `make strings`：把代码里的文案同步进 `App/Localizable.xcstrings`。
-- `install`、`notarize` 目前只是占位：K50 待定，notarize 按 D20 为可选。
+- `install`、`notarize` 目前只是占位：发布改由 CI 出包（D74）。
+- 防泄漏：仓库是公开的。`scripts/check-leaks.sh`（`make check-leaks`，`make test` 也会跑）拦截私网地址、家目录、UUID/MAC、卷名、签名真名和本地黑名单（D77）。内网机器地址、个人软件环境、安全配置不写进任何进库文件；机器相关的私有信息放 `CLAUDE.local.md` 和 `Config/*.local*`。不要绕过或弱化这个检查。
 - 私有层隔离：编译器拦不住 app 或 CLI 去 import `CSysPrivate`。现在靠 `scripts/check-private-imports.sh` 在构建期检查，app 的构建阶段和 `make test`、`make cli` 都会执行（D26）。
 - 用合成事件（CGEvent）测 UI 时，修饰键必须成对发送按下和抬起，测完用 `CGEventSource.flagsState(.hidSystemState)` 确认没有残留。不要用 osascript 控制其他 app。

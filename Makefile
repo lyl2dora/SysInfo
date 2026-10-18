@@ -43,7 +43,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports check-leaks test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -62,6 +62,7 @@ help:
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
 	@echo "  check-private-imports  检查 app、sysinfo-cli 与 SysStore 没有引用 CSysPrivate（test、cli 会先跑它）"
+	@echo "  check-leaks 检查已跟踪文件里没有内网地址、家目录、设备标识、卷名等（D77，test、test-hw 会先跑它）"
 	@echo "  test-scripts  运行 check-private-imports 的回归样例（test、test-hw 会先跑它）"
 	@echo "  clean       删除 build/ 与 SwiftPM 构建目录"
 
@@ -78,6 +79,10 @@ stop:
 run: build stop
 	open "$(DEBUG_APP)" $(if $(ARGS),--args $(ARGS))
 
+# D77：公开仓库防泄漏（私网地址、家目录、UUID/MAC、卷名、签名真名、本地黑名单）。
+check-leaks:
+	@scripts/check-leaks.sh
+
 check-private-imports:
 	@scripts/check-private-imports.sh $(PRIVATE_IMPORT_GUARDED)
 
@@ -85,10 +90,10 @@ check-private-imports:
 test-scripts:
 	@scripts/test-check-private-imports.sh
 
-test: test-scripts check-private-imports
+test: test-scripts check-private-imports check-leaks
 	swift test --package-path $(PACKAGE_PATH)
 
-test-hw: test-scripts check-private-imports
+test-hw: test-scripts check-private-imports check-leaks
 	SYSINFO_HW_TESTS=1 swift test --package-path $(PACKAGE_PATH)
 
 cli: check-private-imports

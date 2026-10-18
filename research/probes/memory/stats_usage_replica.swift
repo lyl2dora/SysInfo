@@ -1,4 +1,5 @@
 // stats_usage_replica.swift - verbatim replica of Stats UsageReader.setup()/read() (Modules/RAM/readers.swift:18-99) built with the macOS 27 SDK
+// 复刻代码适用 Stats 的 MIT 许可，见仓库根目录 THIRD_PARTY_NOTICES.md。
 import Foundation
 import Darwin
 var basic = host_basic_info()
