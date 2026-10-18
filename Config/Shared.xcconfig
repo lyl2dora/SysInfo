@@ -34,7 +34,7 @@ INFOPLIST_FILE = Config/Info.plist
 
 // 标识与版本（K30）：CURRENT_PROJECT_VERSION 由 Makefile 用 `git rev-list --count HEAD` 覆盖。
 PRODUCT_NAME = SysInfo
-MARKETING_VERSION = 0.1.0
+MARKETING_VERSION = 1.0.0
 CURRENT_PROJECT_VERSION = 1
 // git 短哈希，由 Makefile 用 `git rev-parse --short HEAD`（有未提交改动时加 -dirty）覆盖；从 Xcode 直接构建时为 unknown。
 SYSINFO_GIT_COMMIT = unknown

@@ -43,7 +43,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports check-leaks test-scripts
+.PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release dist measure strings install clean check-private-imports check-leaks test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -59,6 +59,7 @@ help:
 	@echo "  remote-app-build / remote-app-run / remote-app-shot / remote-app-clean"
 	@echo "              在对照机上构建、启动、截图、清场 Debug 版 app（D39；run 的 ARGS 传给 app，shot 用 OUT= 与 POS=）"
 	@echo "  release     构建 Release 版 SysInfo（zone.lyl.sysinfo）"
+	@echo "  dist        打可分发的 Release 包到 build/dist（签名；有公证凭据时公证并 staple，D74）"
 	@echo "  measure     运行 scripts/measure-overhead.sh 测量自身开销（Stats 在运行时拒绝执行）"
 	@echo "  strings     构建后把代码里的文案同步进 App/Localizable.xcstrings"
 	@echo "  check-private-imports  检查 app、sysinfo-cli 与 SysStore 没有引用 CSysPrivate（test、cli 会先跑它）"
@@ -148,8 +149,14 @@ strings: build
 	xcrun xcstringstool sync App/Localizable.xcstrings $$args
 	@echo "已同步 App/Localizable.xcstrings"
 
-install notarize:
-	@echo "make $@ 在 M0 不实现（install 待 K50 定；notarize 按 D20 为可选）。" >&2
+# D74：可分发的 Release 包（签名；设了 NOTARY_PROFILE 或 API key 环境变量时再公证并 staple），产物在 build/dist。
+# CI 推 v* tag 时走同一个脚本并发布到 GitHub Releases。
+dist:
+	scripts/build-release.sh
+
+# 发布改由 CI 出包、各机自行下载（D74），本机不再提供 install。
+install:
+	@echo "不提供 make install：推 v* tag 后由 CI 发布，从 GitHub Releases 下载安装（D74）。本机打包用 make dist。" >&2
 	@exit 1
 
 clean:

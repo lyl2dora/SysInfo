@@ -100,7 +100,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
   - 地址写在 `Config/remote.local.mk`（不进库，格式见 `.example`），也可以用 `REMOTE_HOST=user@host` 临时覆盖。
 - `make measure`：测量自身开销，结果追加到 `docs/perf/`。Stats 或其他 SysInfo 实例在运行时，脚本会拒绝执行。
 - `make strings`：把代码里的文案同步进 `App/Localizable.xcstrings`。
-- `install`、`notarize` 目前只是占位：发布改由 CI 出包（D74）。
+- `make dist`：打可分发的 Release 包到 `build/dist`（签名；设了 `NOTARY_PROFILE` 时再公证并 staple）。正式发布：推 `v*` tag，由 `.github/workflows/release.yml` 构建、签名、公证并发布到 GitHub Releases（D74）。没有 `make install`。
 - 防泄漏：仓库是公开的。`scripts/check-leaks.sh`（`make check-leaks`，`make test` 也会跑）拦截私网地址、家目录、UUID/MAC、卷名、签名真名和本地黑名单（D77）。内网机器地址、个人软件环境、安全配置不写进任何进库文件；机器相关的私有信息放 `CLAUDE.local.md` 和 `Config/*.local*`。不要绕过或弱化这个检查。
 - 私有层隔离：编译器拦不住 app 或 CLI 去 import `CSysPrivate`。现在靠 `scripts/check-private-imports.sh` 在构建期检查，app 的构建阶段和 `make test`、`make cli` 都会执行（D26）。
 - 用合成事件（CGEvent）测 UI 时，修饰键必须成对发送按下和抬起，测完用 `CGEventSource.flagsState(.hidSystemState)` 确认没有残留。不要用 osascript 控制其他 app。
