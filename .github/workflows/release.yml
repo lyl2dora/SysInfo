@@ -1,5 +1,6 @@
 # 发布流程（D74）：推 v* tag 时构建 Release、Developer ID 签名、公证并 staple，发布到 GitHub Releases。
-# 手动触发（workflow_dispatch）只构建并上传为 workflow artifact，不发布，用来在打 tag 前试跑。
+# 推到 release/** 分支或手动触发（workflow_dispatch）时只构建、签名、公证并上传为 workflow artifact，不发布，
+# 用来在打 tag 前试跑（手动触发要求 workflow 已在默认分支上）。
 #
 # 需要的 Secrets（由用户在仓库 Settings → Secrets and variables → Actions 里填写，D74）：
 #   DEVELOPER_ID_P12_BASE64     Developer ID Application 证书与私钥导出的 .p12，base64 编码
@@ -8,13 +9,14 @@
 #   NOTARY_KEY_ID               API key 的 Key ID
 #   NOTARY_ISSUER_ID            API key 的 Issuer ID
 #
-# 只由 tag 推送和手动触发运行，不响应 pull_request，外部 PR 拿不到 Secrets。
+# 只由本仓库的推送和手动触发运行，不响应 pull_request，外部 PR 拿不到 Secrets。
 
 name: Release
 
 on:
   push:
     tags: ["v*"]
+    branches: ["release/**"]
   workflow_dispatch:
 
 permissions:
@@ -86,8 +88,8 @@ jobs:
           REQUIRE_NOTARIZATION: "1"
         run: scripts/build-release.sh
 
-      - name: Upload artifact (manual run)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload artifact (trial run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: SysInfo-dist
