@@ -75,6 +75,8 @@ final class SettingsState {
     var isWindowOpen = false
     /// 侧栏收起为只显示图标的窄栏（不写偏好，重开 app 恢复展开）。
     var sidebarCompact = false
+    /// 红绿灯在窗口里的位置（从窗口顶边、左边量起）：页头与它竖直居中对齐，收起时页头从它右边开始（D81）。
+    var trafficLights = CGRect(x: 7, y: 9, width: 70, height: 16)
 }
 
 final class SettingsController {
@@ -169,11 +171,21 @@ final class SettingsController {
             NotificationCenter.default.removeObserver(observer)
         }
         self.window = window
-        // Settings 场景默认是偏好设置式的高工具栏，侧栏按钮会落在标题下方一整行里。改成统一样式的透明标题栏：
-        // 标题栏横贯整个窗口，只放红绿灯、侧栏开关和居中的页名；内容延伸到标题栏下，滚动时从工具栏下方经过。
+        // Settings 场景默认是偏好设置式的高工具栏，侧栏按钮会落在标题下方一整行里。改成统一样式的透明标题栏（D81）：
+        // 标题栏横贯整个窗口，只有红绿灯；侧栏开关和靠左的页名是内容栏顶部的页头，与红绿灯同一行。
+        // 内容延伸到标题栏下，滚上去时由页面自绘的渐隐带保证页头可读：自排的侧栏布局拿不到系统的边缘效果
+        // （不透明标题栏会出现色带和分隔线，隐藏工具栏背景则效果也没了，2026-10-18 实测）。
         window.toolbarStyle = .unified
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        updateTrafficLights(in: window)
+        // SwiftUI 会在挂接之后再改一次工具栏，红绿灯随之移动：布局完成后再量一次。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak window] in
+            MainActor.assumeIsolated {
+                if let self, let window { self.updateTrafficLights(in: window) }
+            }
+        }
         windowObservers = [
             NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
@@ -185,6 +197,22 @@ final class SettingsController {
         if state.isWindowOpen {
             bringWindowToFront()
         }
+    }
+
+    /// 读红绿灯三个按钮的并集（窗口坐标，换成从左上角量起）。
+    private func updateTrafficLights(in window: NSWindow) {
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        let frames = buttons.compactMap { type -> CGRect? in
+            guard let button = window.standardWindowButton(type), let superview = button.superview else { return nil }
+            return superview.convert(button.frame, to: nil)
+        }
+        guard let union = frames.dropFirst().reduce(frames.first, { $0?.union($1) }) else {
+            Log.settings.info("红绿灯：读不到按钮（\(frames.count)）")
+            return
+        }
+        let height = window.frame.height
+        state.trafficLights = CGRect(x: union.minX, y: height - union.maxY, width: union.width, height: union.height)
+        Log.settings.info("红绿灯：\(NSStringFromRect(self.state.trafficLights), privacy: .public)")
     }
 
     /// 协作式激活（macOS 14 起）下，别的 app 在前台、又不是由用户在本 app 里的操作触发时（例如经命令行

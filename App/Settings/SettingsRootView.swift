@@ -26,42 +26,61 @@ struct SettingsRootView: View {
 private struct SettingsSplitView: View {
     let context: SettingsContext
 
+    private static let sidebarInset: CGFloat = 8
+    private static let compactSidebarWidth: CGFloat = 52
+
     var body: some View {
         @Bindable var state = context.state
+        let compact = state.sidebarCompact
         // 不用 NavigationSplitView：它在统一样式的标题栏下给侧栏留了最小宽度（红绿灯在侧栏里），收起成图标栏时
-        // 宽度改不下来。自己排：标题栏横贯，侧栏是标题栏下方的浮动玻璃面板，内容延伸到标题栏下。
-        HStack(alignment: .top, spacing: 8) {
-            SettingsSidebar(selection: $state.selection, compact: state.sidebarCompact)
-                .padding([.leading, .bottom], 8)
+        // 宽度改不下来。自己排（D81，Finder 样式）：
+        // - 侧栏是内缩的浮动玻璃面板。展开时从窗口顶部开始，红绿灯落在面板顶上；收起成图标栏时放不下红绿灯，
+        //   从标题栏下方开始；
+        // - 侧栏开关和页名是内容栏顶部的页头，与红绿灯同一行，不进工具栏，不与红绿灯抢位置；
+        // - 内容延伸到标题栏下，滚上去时由渐隐带保证页头可读。
+        GeometryReader { proxy in
+            let titlebar = proxy.safeAreaInsets.top
+            let lights = state.trafficLights
+            // 页头一行：以红绿灯的竖直中心为中心；展开时侧栏列表也从这一行下面开始。
+            let row = lights.midY * 2
+            HStack(alignment: .top, spacing: Self.sidebarInset) {
+                SettingsSidebar(
+                    selection: $state.selection, compact: compact,
+                    topInset: compact ? 0 : row - Self.sidebarInset
+                )
+                .padding([.leading, .bottom], Self.sidebarInset)
+                .padding(.top, compact ? 0 : Self.sidebarInset - titlebar)
                 .zIndex(1)  // 浮出的页名要盖在内容上
-            detail(for: state.selection ?? .general)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Form 自带的背景比窗口背景浅：隐藏它，渐隐带才能与底色一致、静止时不显出一条。
-                .scrollContentBackground(.hidden)
-                .overlay(alignment: .top) { TitlebarFade() }
+                detail(for: state.selection ?? .general)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Form 自带的背景比窗口背景浅：隐藏它，渐隐带才能与底色一致、静止时不显出一条。
+                    .scrollContentBackground(.hidden)
+                    .overlay(alignment: .top) { TitlebarFade(height: row + 10) }
+                    .overlay(alignment: .topLeading) {
+                        SettingsPageHeader(
+                            title: (state.selection ?? .general).title, compact: compact,
+                            toggle: { state.sidebarCompact.toggle() }
+                        )
+                        // 收起时图标栏比红绿灯窄：页头从红绿灯右边 14 pt 开始。
+                        .padding(
+                            .leading,
+                            compact ? max(4, lights.maxX + 14 - (Self.sidebarInset * 2 + Self.compactSidebarWidth)) : 4
+                        )
+                        .frame(height: row)
+                        .offset(y: -titlebar)
+                    }
+            }
         }
         // 整个窗口（含标题栏下）统一用窗口背景色，侧栏玻璃面板浮在上面，左右两栏之间不出现色差。
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
-        .toolbar {
-            // 侧栏开关紧挨红绿灯，展开与收起时位置不变。
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    state.sidebarCompact.toggle()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .help(state.sidebarCompact ? "展开边栏" : "收起边栏")
-                .accessibilityLabel(state.sidebarCompact ? "展开边栏" : "收起边栏")
-            }
-            // 页名居中：标题栏不属于任何一栏，页名不会看成侧栏的标题。
-            ToolbarItem(placement: .principal) {
-                Text((state.selection ?? .general).title)
-                    .font(.headline)
-            }
-        }
-        // 窗口标题（「SysInfo 设置」）不显示：页名已经在中间。只在 NSWindow 上设 titleVisibility，
-        // SwiftUI 重建工具栏时会把它放回来。
+        // 窗口标题（「SysInfo 设置」）只留给「窗口」菜单，不在标题栏显示：页名在内容栏的页头里。
         .toolbar(removing: .title)
+        // 页头不进工具栏，但要留一个不可见的工具栏项目：没有任何项目时，内容区顶边会多出一条分隔线，
+        // 红绿灯也会缩到窄标题栏里（2026-10-18 实测）。
+        .toolbar {
+            ToolbarItem(placement: .navigation) { Color.clear.frame(width: 1, height: 1) }
+                .sharedBackgroundVisibility(.hidden)
+        }
     }
 
     private func openPage(_ page: SettingsPage) {
@@ -111,12 +130,13 @@ private struct SettingsSplitView: View {
     }
 }
 
-/// 内容滚到标题栏下面时的渐隐带：标题栏高度内先实后虚。Form 底层的滚动视图不吃 scrollEdgeEffectStyle，
-/// 不加这条的话滚上去的文字会和红绿灯、页名叠在一起。
+/// 内容滚到标题栏下面时的渐隐带：页头那一行先实后虚。Form 底层的滚动视图不吃 scrollEdgeEffectStyle，
+/// 自排的侧栏布局也拿不到 AppKit 标题栏的边缘效果（D81），不加这条的话滚上去的文字会和页头叠在一起。
 private struct TitlebarFade: View {
+    let height: CGFloat
+
     var body: some View {
         GeometryReader { proxy in
-            let height = proxy.safeAreaInsets.top + 10
             LinearGradient(
                 stops: [
                     .init(color: Color(nsColor: .windowBackgroundColor), location: 0),
@@ -126,10 +146,33 @@ private struct TitlebarFade: View {
                 startPoint: .top, endPoint: .bottom
             )
             .frame(height: height)
-            .ignoresSafeArea(edges: .top)
+            .offset(y: -proxy.safeAreaInsets.top)
         }
         .frame(height: 0)
         .allowsHitTesting(false)
+    }
+}
+
+/// 内容栏顶部的页头（D81）：侧栏开关与页名，Finder 样式，不加玻璃胶囊。
+private struct SettingsPageHeader: View {
+    let title: String
+    let compact: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: toggle) {
+                Image(systemName: "sidebar.left")
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
+            .help(compact ? "展开边栏" : "收起边栏")
+            .accessibilityLabel(compact ? "展开边栏" : "收起边栏")
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+        }
     }
 }
 
@@ -139,6 +182,8 @@ private struct TitlebarFade: View {
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsPage?
     let compact: Bool
+    /// 展开时面板从窗口顶部开始，列表要让出红绿灯那一行。
+    var topInset: CGFloat = 0
 
     @State private var hovered: SettingsPage?
     @State private var shown: SettingsPage?
@@ -180,6 +225,7 @@ private struct SettingsSidebar: View {
                 }
             }
             .padding(6)
+            .padding(.top, topInset)
         }
         .scrollIndicators(.never)
         .frame(width: compact ? 52 : 180)
