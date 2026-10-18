@@ -16,7 +16,7 @@ static void snap(long long *tt, long long *ops) {
 }
 int main(void) {
     mach_timebase_info_data_t tb; mach_timebase_info(&tb);
-    const char *f = "/tmp/sysinfo-probes/disk-review/busy.bin";
+    char f[1024]; snprintf(f, sizeof f, "%s/sysinfo-probe-busy.bin", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");  // 当前用户的临时目录
     size_t ch = 8 << 20; char *buf = malloc(ch); arc4random_buf(buf, ch);
     long long t0, o0, t1, o1; snap(&t0, &o0); uint64_t w0 = mach_absolute_time();
     int fd = open(f, O_CREAT | O_TRUNC | O_RDWR, 0644); fcntl(fd, F_NOCACHE, 1);

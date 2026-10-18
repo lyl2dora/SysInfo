@@ -12,6 +12,11 @@ xcuserdata/
 # Credentials (notarization keys etc.)
 .env
 *.p8
+*.p12
+
+# Machine-local settings that must not go public (D77): remote host address, private notes
+Config/remote.local.mk
+CLAUDE.local.md
 
 # Probe outputs contain machine identifiers (serials, MACs, IPs); keep sources only
 research/probes/**/*.txt

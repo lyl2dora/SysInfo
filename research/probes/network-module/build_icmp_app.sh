@@ -20,5 +20,5 @@ cat > $APP/Contents/Info.plist <<PL
 <key>LSMinimumSystemVersion</key><string>27.0</string>
 </dict></plist>
 PL
-codesign --force --options runtime --timestamp=none -s "Developer ID Application" $APP
+codesign --force --options runtime --timestamp=none -s "${SIGN_IDENTITY:-Developer ID Application}" $APP
 codesign -dv $APP 2>&1 | grep -E "Identifier|Authority=Developer|flags"

@@ -1,0 +1,2 @@
+# 复制为 Config/remote.local.mk（不进库，D77），填入对照机的 ssh 地址。
+REMOTE_HOST := user@host

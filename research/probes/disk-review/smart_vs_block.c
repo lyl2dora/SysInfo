@@ -33,7 +33,7 @@ static int take(snap_t *s) {
 int main(int argc, char **argv) {
     snap_t a, b; take(&a);
     printf("before: SMART units r=%llu w=%llu temp=%dK poh=%u | block bytes r=%llu w=%llu\n", a.ur, a.uw, a.tempK, a.poh, a.br, a.bw);
-    const char *f = "/tmp/sysinfo-probes/disk-review/wl.bin";
+    char f[1024]; snprintf(f, sizeof f, "%s/sysinfo-probe-wl.bin", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");  // 当前用户的临时目录
     size_t ch = 8 << 20; char *buf = malloc(ch); arc4random_buf(buf, ch);
     int fd = open(f, O_CREAT | O_TRUNC | O_RDWR, 0644); fcntl(fd, F_NOCACHE, 1);
     for (int i = 0; i < 32; i++) write(fd, buf, ch);

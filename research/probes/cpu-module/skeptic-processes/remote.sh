@@ -2,7 +2,7 @@
 # remote.sh - skeptic-processes 复核探针：同步到 Mac Studio，在远端编译/运行。只写 /tmp/sysinfo-cpu-research/skeptic-processes/（D18）。
 # 用法：./remote.sh sync | ./remote.sh build <x.c> | ./remote.sh run '<命令>'
 set -e
-HOST=user@remote-host
+HOST=${REMOTE_HOST:?set REMOTE_HOST=user@host}
 R=/tmp/sysinfo-cpu-research/skeptic-processes
 ENV="HOME=$R/home CFFIXED_USER_HOME=$R/home TMPDIR=$R/tmp"
 cd "${0:A:h}"

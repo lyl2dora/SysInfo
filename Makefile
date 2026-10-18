@@ -15,8 +15,11 @@ DEBUG_APP      := $(DERIVED_DATA)/Build/Products/Debug/SysInfo.app
 RELEASE_APP    := $(DERIVED_DATA)/Build/Products/Release/SysInfo.app
 DEV_BUNDLE_ID  := zone.lyl.sysinfo.dev
 
-# 远端对照机（M4 Pro Mac mini，D28）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。地址变化时可以覆盖：make remote-cli REMOTE_HOST=…
-REMOTE_HOST    ?= user@remote-host
+# 远端对照机（M4 Pro Mac mini，D28）；远端只在 /tmp 下写文件（M0 设计 §7、D18）。
+# 地址不进库（D77）：写在 Config/remote.local.mk（已被 .gitignore 忽略，格式见 Config/remote.local.mk.example），
+# 也可以临时覆盖：make remote-cli REMOTE_HOST=user@host
+-include Config/remote.local.mk
+REMOTE_HOST    ?=
 REMOTE_DIR     := /tmp/sysinfo-remote
 # SwiftPM 默认往家目录写 manifest 缓存、配置和安全目录（~/Library/Caches/org.swift.swiftpm、
 # ~/Library/org.swift.swiftpm、~/.swiftpm 下的链接）。显式指定 --cache-path 等之后它仍会重建
@@ -40,7 +43,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
 PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
-.PHONY: help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports test-scripts
+.PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release measure strings install notarize clean check-private-imports test-scripts
 
 help:
 	@echo "SysInfo Makefile 目标："
@@ -91,8 +94,12 @@ test-hw: test-scripts check-private-imports
 cli: check-private-imports
 	swift run --package-path $(PACKAGE_PATH) sysinfo-cli $(ARGS)
 
+require-remote-host:
+	@if [ -z "$(REMOTE_HOST)" ]; then \
+		echo "没有设置 REMOTE_HOST：在 Config/remote.local.mk 里写 REMOTE_HOST := user@host（见 .example），或在命令行传入。" >&2; exit 1; fi
+
 # 把 Packages/SysKit 同步到远端 /tmp/sysinfo-remote/SysKit（保留远端 .build 以便增量构建）。
-remote-sync: check-private-imports
+remote-sync: check-private-imports require-remote-host
 	$(SSH) $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)/tmp $(REMOTE_DIR)/home'
 	rsync -a --delete --exclude .build --exclude .swiftpm -e "$(SSH)" $(PACKAGE_PATH)/ $(REMOTE_HOST):$(REMOTE_DIR)/SysKit/
 
@@ -105,20 +112,20 @@ remote-test: test-scripts remote-sync
 	$(SSH) $(REMOTE_HOST) 'cd $(REMOTE_DIR)/SysKit && $(REMOTE_ENV) SYSINFO_HW_TESTS=1 swift test $(REMOTE_SWIFTPM)'
 
 # D39：对照机上的截图自查。启动总是带 --factory-defaults；用完 remote-app-clean 清场。
-remote-app-build: check-private-imports
+remote-app-build: check-private-imports require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh build
 
-remote-app-run:
+remote-app-run: require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh run $(ARGS)
 
-remote-app-shot:
+remote-app-shot: require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh shot "$(OUT)" $(POS)
 
-remote-app-clean:
+remote-app-clean: require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh clean
 
 # CPU 模块设计 §10：在对照机上做同样的四档测量（远端检测到 Stats 时同样拒绝执行），结果追加到 docs/perf/cpu.md，之后清场（D39）。
-remote-measure: check-private-imports
+remote-measure: check-private-imports require-remote-host
 	REMOTE_HOST=$(REMOTE_HOST) scripts/remote-app.sh measure
 
 measure:

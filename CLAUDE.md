@@ -6,7 +6,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - Debug 版是 `zone.lyl.sysinfo.dev`，显示名「SysInfo Dev」，不注册登录项。开发和测试时只读写 `.dev` 的 defaults 域和数据目录，不动用户日用版（D16）。
 - 目标设备是用户的多台 Apple 芯片 Mac，不只是开发机 M5 Pro（D20）。当前清单见 D28（取代 D25 的清单）：
   - 本机：M5 Pro，6 Super + 12 Performance。
-  - 对照机 Mac mini：M4 Pro，10 Performance + 4 Efficiency，可通过 `ssh user@remote-host` 访问，已装 Xcode 27。原来的 Mac Studio（M2 Max）已被替换，不再是目标设备，它的实测只作旁证。
+  - 对照机 Mac mini：M4 Pro，10 Performance + 4 Efficiency，可以 ssh 访问（地址见不进库的 `CLAUDE.local.md` 与 `Config/remote.local.mk`，D77），已装 Xcode 27。原来的 Mac Studio（M2 Max）已被替换，不再是目标设备，它的实测只作旁证。
   - 在对照机上构建或运行 CLI 与探针时，同样遵守 D18 的操作边界。每个模块验收时都要附上两台机器的对照结果。
   - 对照机上可以构建并启动 Debug 版 app 做截图自查，用完按 D39 清场。
 
@@ -95,7 +95,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 - 命令行：`make cli ARGS="selftest"`、`make cli ARGS="cpu --count 5"`。
 - 对照机（M4 Pro）跨机对照：
   - `make remote-cli ARGS=…`、`make remote-test`。远端只写 `/tmp/sysinfo-remote`。
-  - 地址可以用 `REMOTE_HOST=user@host` 覆盖。
+  - 地址写在 `Config/remote.local.mk`（不进库，格式见 `.example`），也可以用 `REMOTE_HOST=user@host` 临时覆盖。
 - `make measure`：测量自身开销，结果追加到 `docs/perf/`。Stats 或其他 SysInfo 实例在运行时，脚本会拒绝执行。
 - `make strings`：把代码里的文案同步进 `App/Localizable.xcstrings`。
 - `install`、`notarize` 目前只是占位：K50 待定，notarize 按 D20 为可选。
