@@ -11,6 +11,7 @@ import AppKit
 import Observation
 import SwiftUI
 import SysCollectors
+import SysModel
 import OSLog
 
 /// 设置侧栏的页面，顺序按 D25、D27；各页职责按 D41（模块页放本模块的一切，菜单栏与历史页只放容器级设置与只读总览）。
@@ -23,6 +24,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case storage
     case gpu
     case network
+    case devices
     case appActivity
     case history
     case privacy
@@ -41,6 +43,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
         case .network: String(localized: "网络")
+        case .devices: String(localized: "电源设备")
         case .appActivity: String(localized: "应用活动")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
@@ -59,6 +62,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .storage: "internaldrive"
         case .gpu: "cpu.fill"
         case .network: "network"
+        case .devices: "minus.plus.batteryblock"
         case .appActivity: "list.bullet.rectangle"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
@@ -88,6 +92,8 @@ final class SettingsController {
     private let engine: SamplingEngine
     private let services: AppServices
     private let diagnosticsDemand: DemandSlot
+    /// 电源设备诊断读数（D84）：有 UPS 时 HID 每 2 s，同面板。
+    private let devicesDemand: DemandSlot
     /// 诊断页的逐核频率（cpu.freq.cores，2 s，CPU 模块设计 §7.4）。
     private let coreFrequencyDemand: DemandSlot
     /// 诊断页的功耗数据（power.*，2 s）与展开的传感器目录（sensors.catalog，5 s）。
@@ -117,6 +123,7 @@ final class SettingsController {
         self.engine = engine
         self.services = services
         self.diagnosticsDemand = DemandSlot(engine: engine)
+        self.devicesDemand = DemandSlot(engine: engine)
         self.coreFrequencyDemand = DemandSlot(engine: engine)
         self.powerDemand = DemandSlot(engine: engine)
         self.catalogDemand = DemandSlot(engine: engine)
@@ -264,6 +271,12 @@ final class SettingsController {
         services.storageModel.diagnosticsVisible = storageVisible
         networkDemand.set(
             storageVisible ? Demand(collectors: [NetworkIOCollector.collectorID], interval: 2, source: .diagnostics) : nil)
+        let hasUPS = services.devicesModel.snapshot.primaryUPS != nil
+        devicesDemand.set(
+            storageVisible
+                ? Demand(
+                    collectors: hasUPS ? [PowerSourceCollector.collectorID, UPSTelemetryCollector.collectorID] : [PowerSourceCollector.collectorID],
+                    interval: 2, source: .diagnostics) : nil)
         gpuDemand.set(
             storageVisible
                 ? Demand(

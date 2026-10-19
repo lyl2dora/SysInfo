@@ -86,6 +86,8 @@ struct PanelRootView: View {
             GPUPanelView(store: store, services: services, settings: settings)
         case .network:
             NetworkPanelView(store: store, services: services, settings: settings)
+        case .devices:
+            DevicesPanelView(store: store, services: services, settings: settings)
         }
     }
 
@@ -233,7 +235,9 @@ struct SegmentedButtons<Value: Hashable>: View {
                 } label: {
                     Text(title)
                         .font(size == .small ? .panelRow : .panelTitle)
-                        .padding(.horizontal, size == .small ? 8 : 14)
+                        .lineLimit(1)
+                        // 切换器超过 7 项（D84 加了「电源」）时收窄左右留白，两字标签仍在一行里（360 pt 宽）。
+                        .padding(.horizontal, size == .small ? (options.count > 7 ? 3 : 8) : 14)
                         .padding(.vertical, size == .small ? 3 : 4)
                         .frame(maxWidth: size == .small ? .infinity : nil)
                         .foregroundStyle(selected ? Color.white : Color.primary)
