@@ -49,6 +49,13 @@ struct WidgetSettingsRow: View {
                         Text("自定义地址（\(settings.latencyHost)）").tag(MetricID.LatencyTarget.custom)
                     }
                 }
+                if widget == .deviceBattery {
+                    Picker("设备", selection: $settings.deviceBatteryTarget) {
+                        ForEach(DeviceTarget.allCases) { target in
+                            Text(DevicesSettingsView.targetName(target)).tag(target)
+                        }
+                    }
+                }
                 if widget == .memoryUsage {
                     Picker("显示", selection: $settings.memoryUsagePresentation) {
                         Text("占用率（%）").tag(MemoryUsagePresentation.percent)
@@ -107,6 +114,7 @@ enum WidgetInfo {
         case .diskFree: String(localized: "可用空间")
         case .netThroughput: String(localized: "网速")
         case .netLatency: String(localized: "网络延迟")
+        case .deviceBattery: String(localized: "电源设备电量")
         }
     }
 
@@ -119,6 +127,7 @@ enum WidgetInfo {
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
         case .network: String(localized: "网络")
+        case .devices: String(localized: "电源设备")
         }
     }
 
@@ -164,6 +173,8 @@ enum WidgetInfo {
             return String(localized: "上下两行：↑ 上传、↓ 下载，接口字节（含协议头）。默认跟随主接口，开 VPN 时取它下面的物理接口。\(CostLabel.text(collector: NetworkIOCollector.collectorID, interval: interval, store: store))")
         case .netLatency:
             return String(localized: "到所选目标的 ICMP 往返时间。只有在下方开启「延迟」后才可用，按延迟的发包间隔更新。")
+        case .deviceBattery:
+            return String(localized: "所选设备的电量；UPS 由电池供电时改为剩余时间。数值随系统电源通知更新，几乎没有开销。")
         }
     }
 }

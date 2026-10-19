@@ -12,6 +12,7 @@
 #   storage-detail：存储 tab 的第一块盘详情页（--storage-detail=0）；
 #   gpu：面板打开且在「GPU 与加速器」tab（--panel-tab=gpu，温度 / ANE / 媒体 2 s，coalition 2 s，Top N 5 行，GPU 模块设计 §8）；
 #   network：面板打开且在「网络」tab（--panel-tab=network，速率 1 s，Wi-Fi 卡片 5 s，延迟出厂关，网络模块设计 §7）；
+#   devices：面板打开且在「电源设备」tab（--panel-tab=devices，IOPS 快照 1 s，有 UPS 时 HID 2 s，电源设备设计 §9）；
 #   merged：出厂默认的 widget 合并为单个 item（--merged，D65），面板关闭；
 #   overview：合并模式下面板打开且在「总览」（--merged --panel-tab=overview，D65 MG5）；
 #   appactivity：应用活动窗口打开在「现在」（--open-app-activity，全表每 2 s，D67；不属于出厂默认，只记录）。
@@ -244,6 +245,7 @@ for tier in ${TIERS}; do
         storage-detail) measure storage-detail --factory-defaults --open-panel --pin-panel --panel-tab=storage --storage-detail=0 ;;
         gpu) measure gpu --factory-defaults --open-panel --pin-panel --panel-tab=gpu ;;
         network) measure network --factory-defaults --open-panel --pin-panel --panel-tab=network ;;
+        devices) measure devices --factory-defaults --open-panel --pin-panel --panel-tab=devices ;;
         merged) measure merged --factory-defaults --merged ;;
         overview) measure overview --factory-defaults --merged --open-panel --pin-panel --panel-tab=overview ;;
         appactivity) measure appactivity --factory-defaults --open-app-activity ;;
@@ -294,6 +296,7 @@ fi
             storage-detail) name="面板打开（存储 tab，第一块盘详情页）" ;;
             gpu) name="面板打开（GPU 与加速器 tab，温度 / ANE / 媒体 2 s，Top N 5 行）" ;;
             network) name="面板打开（网络 tab，速率 1 s，Wi-Fi 5 s，延迟关）" ;;
+            devices) name="面板打开（电源设备 tab，IOPS 1 s，UPS HID 2 s）" ;;
             merged) name="出厂默认，合并为单个 item（D65）" ;;
             overview) name="合并模式，面板打开在总览（D65）" ;;
             appactivity) name="应用活动窗口打开在「现在」（全表 2 s，D67）" ;;

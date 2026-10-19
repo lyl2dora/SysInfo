@@ -199,6 +199,12 @@ struct SysInfoCLI {
                     runAssertions(
                         watchSeconds: try options.value("--watch").map { _ in try options.double("--watch", default: 30, range: 1...3600) },
                         json: options.flag("--json")))
+            case "devices":
+                let options = try Options(arguments, flags: ["--json"], values: ["--watch"])
+                exit(
+                    runDevices(
+                        watchSeconds: try options.value("--watch").map { _ in try options.double("--watch", default: 60, range: 1...3600) },
+                        json: options.flag("--json")))
             case "history":
                 exit(try await runHistory(arguments))
             case "engine":
@@ -279,6 +285,8 @@ struct SysInfoCLI {
               verify storage [--seconds 5]            每盘读写与 iostat -d 同一时间窗对照，容量组可用空间与 df -k 对照
               pmgr [--watch] [--timeout 1900]         PMGR 订阅的部件；--watch 等到下一个 30 分钟批次，打印分部件明细与交叉核对
               catalog [--samples 4] [--all] [--json]  传感器目录：全部 T/V/I/P/F 数值键的质量（有效 / 占位 / 恒定 / 非温度）与已验证分组
+              devices [--watch 秒] [--json]          电源设备（D84）：UPS（IOPS + HID 扩展遥测与对照）、内置电池、蓝牙配件；
+                                                      --watch 事件驱动地打印变化与通知时刻（放电实测用）
               history stats [--db PATH]               历史库概况（默认读 Debug 版数据目录 zone.lyl.sysinfo.dev）
               history export --out PATH [--format csv|jsonl] [--granularity minute|hour] [--hours 24]
                              [--metrics cpu.usage.,cpu.temp.] [--no-apps] [--db PATH]

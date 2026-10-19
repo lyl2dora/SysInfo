@@ -95,12 +95,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let history = Self.makeHistory(
             engine: engine, appSampler: collectors.compactMap { $0 as? AppSampler }.first,
             assertions: collectors.compactMap { $0 as? PowerAssertionCollector }.first, power: power, storage: storage,
+            powerSources: collectors.contains { $0 is PowerSourceCollector } ? PowerSourceMonitor.shared : nil,
             temporaryDirectory: temporaryHistoryDirectory, settings: settings)
         self.history = history
         let services = AppServices(
             collectors: CPUCollectors(collectors), power: power, memory: MemoryCollectors(collectors), storage: storage,
-            gpu: GPUCollectors(collectors), network: NetworkCollectors(collectors),
+            gpu: GPUCollectors(collectors), network: NetworkCollectors(collectors), devices: DevicesCollectors(collectors),
             history: history, engine: engine)
+        // 电源设备（D84）：事件驱动的快照，app 启动即跟随（面板切换器、widget 要知道有没有设备）。
+        services.devicesModel.start()
         self.services = services
         services.diagnostics.requestSelfTests = { Task { await engine.runSelfTests() } }
         // 自动更新（D76）：只有日用版启用；到期才联网。
@@ -153,6 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         services.storageModel.onStructureChange = { [weak self] in self?.applySettings() }
         // 接口增减、主接口切换：网速 widget 绑定的接口是物理还是虚拟，要重新解析。
         services.networkModel.onStructureChange = { [weak self] in self?.applySettings() }
+        // 电源设备出现或全部消失：面板切换器里的「电源」tab 随之出现或隐藏（D84 PD5）。
+        services.devicesModel.onPresenceChange = { [weak self] in self?.applySettings() }
         applySettings()
         throttle.start()
 
@@ -322,14 +327,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             highPrecision: settings.historyHighPrecision, recordPower: settings.historyPowerEnabled,
             recordEnergy: settings.historyEnergyEnabled, recordMemory: settings.historyMemoryEnabled,
             recordStorage: settings.historyStorageEnabled, recordGPU: settings.historyGPUEnabled,
-            recordNetwork: settings.historyNetworkEnabled)
+            recordNetwork: settings.historyNetworkEnabled, recordDevices: settings.historyDevicesEnabled)
     }
 
     /// 打开历史库并开始记录（D30）。`--factory-defaults` 时用临时目录，测量不污染日用数据（CPU 模块设计 §6）；
     /// Debug 版的从实例同样用临时目录（`SysInfo-secondary-<pid>`），不与主实例同写一个库（D48）。退出时删除临时目录。
     private static func makeHistory(
         engine: SamplingEngine, appSampler: AppSampler?, assertions: PowerAssertionCollector?, power: PowerCollectors,
-        storage: StorageCollectors, temporaryDirectory: URL?, settings: AppSettings
+        storage: StorageCollectors, powerSources: PowerSourceMonitor?, temporaryDirectory: URL?, settings: AppSettings
     ) -> HistoryRecorder? {
         let url: URL?
         if let temporaryDirectory {
@@ -341,7 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let store = try HistoryStore(url: url)
             let recorder = HistoryRecorder(
-                store: store, engine: engine, appSampler: appSampler, assertions: assertions,
+                store: store, engine: engine, appSampler: appSampler, assertions: assertions, powerSources: powerSources,
                 power: .init(ledger: power.ledger, pmgr: power.pmgr), storageCapacity: storage.capacity,
                 configuration: historyConfiguration(settings))
             Task { await recorder.start() }

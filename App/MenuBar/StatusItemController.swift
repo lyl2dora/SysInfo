@@ -12,6 +12,7 @@
 //   内存的三个 widget → memory.vm（D49）；
 //   存储：盘温 → storage.smart（只读绑定的盘，D55），读写 → storage.io，可用空间 → storage.capacity（60 s）；
 //   网络：网速 → network.io，延迟 → network.latency（按延迟设置的间隔，D61）；
+//   电源设备：devices.sources（D84；数值来自事件驱动的快照，采样只是取出主 UPS 的样本）；
 //   间隔取所属模块的常驻间隔（D25 的逐模块覆盖）；
 // - 点击由 `expandedInterfaceDelegate`（PanelController）驱动；面板锚在被点击的 widget 下方（`activeItem`）；
 // - 合并模式（D65）：所有开着的 widget 并排放进一个 item（autosaveName "<bundle id>.merged"，MergedStatusItemView），
@@ -119,6 +120,7 @@ final class StatusItemController {
         case .diskFree: StorageCapacityCollector.collectorID
         case .netThroughput: NetworkIOCollector.collectorID
         case .netLatency: LatencyCollector.collectorID
+        case .deviceBattery: PowerSourceCollector.collectorID
         }
     }
 
@@ -328,7 +330,8 @@ extension StatusItemConfiguration {
             networkIn: widget == .netThroughput ? Self.networkMetric(.in, settings: settings) : nil,
             networkOut: widget == .netThroughput ? Self.networkMetric(.out, settings: settings) : nil,
             networkBits: settings.networkThroughputBits,
-            latencyMetric: widget == .netLatency ? .networkLatencyRTT(settings.networkLatencyWidgetTarget) : nil)
+            latencyMetric: widget == .netLatency ? .networkLatencyRTT(settings.networkLatencyWidgetTarget) : nil,
+            deviceTarget: settings.deviceBatteryTarget)
     }
 
     /// 网速 widget 绑定的指标：指定接口时按当前清单判断它是物理还是虚拟接口（D60）。

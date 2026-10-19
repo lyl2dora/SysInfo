@@ -35,6 +35,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case storage
     case gpu
     case network
+    case devices
 
     var id: String { rawValue }
 
@@ -47,6 +48,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .storage: String(localized: "存储")
         case .gpu: String(localized: "GPU 与加速器")
         case .network: String(localized: "网络")
+        case .devices: String(localized: "电源设备")
         }
     }
 
@@ -60,13 +62,15 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .storage: String(localized: "存储", comment: "面板切换器标签，两个字")
         case .gpu: String(localized: "GPU")
         case .network: String(localized: "网络", comment: "面板切换器标签，两个字")
+        case .devices: String(localized: "电源", comment: "面板切换器标签，两个字：电源设备")
         }
     }
 
     /// 切换器的顺序（D65 MG3）：总览；合并 item 里出现的模块按出现顺序；其余按 D53 的模块顺序。
-    static func switcherOrder(mergedModules: [MenuModule]) -> [PanelTab] {
+    /// 电源设备没有任何设备时不出现（D84 PD5）。
+    static func switcherOrder(mergedModules: [MenuModule], hasPowerDevices: Bool = true) -> [PanelTab] {
         let modules = mergedModules + MenuModule.allCases.filter { !mergedModules.contains($0) }
-        return [.overview] + modules.map(PanelTab.init)
+        return [.overview] + modules.filter { $0 != .devices || hasPowerDevices }.map(PanelTab.init)
     }
 
     init(_ module: MenuModule) {
@@ -77,6 +81,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .storage: self = .storage
         case .gpu: self = .gpu
         case .network: self = .network
+        case .devices: self = .devices
         }
     }
 }
@@ -169,6 +174,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     private let appDetailDemand: DemandSlot
     private let overviewDemand: DemandSlot
     private let overviewSlowDemand: DemandSlot
+    private let devicesDemand: DemandSlot
+    private let upsDemand: DemandSlot
+    /// 电源设备 tab 上一次是否可见：变为可见时让 UPS 采集器重读静态项。
+    private var devicesWasVisible = false
     private var panel: PanelWindow?
     private var glass: NSGlassEffectView?
     /// 当前 session 所属的 item（锚定且有 session 时）。
@@ -213,6 +222,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         self.appDetailDemand = DemandSlot(engine: engine)
         self.overviewDemand = DemandSlot(engine: engine)
         self.overviewSlowDemand = DemandSlot(engine: engine)
+        self.devicesDemand = DemandSlot(engine: engine)
+        self.upsDemand = DemandSlot(engine: engine)
     }
 
     // MARK: - NSStatusItemExpandedInterfaceDelegate
@@ -310,7 +321,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
     /// 合并模式的结构变了（开关合并、合并顺序）：同步切换器。单 widget 模式下不可能停在总览。
     func syncMergedState() {
         let merged = settings.menuBarMerged
-        let tabs = PanelTab.switcherOrder(mergedModules: statusItems?.mergedModules ?? [])
+        let tabs = PanelTab.switcherOrder(
+            mergedModules: statusItems?.mergedModules ?? [], hasPowerDevices: services.devicesModel.hasDevices)
         if state.isMerged != merged { state.isMerged = merged }
         if state.switcherTabs != tabs { state.switcherTabs = tabs }
         if !merged, state.selectedTab == .overview { state.selectedTab = .cpu }
@@ -392,6 +404,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         updateStorageDemands(visible: visible && state.selectedTab == .storage)
         updateGPUDemands(visible: visible && state.selectedTab == .gpu)
         updateNetworkDemands(visible: visible && state.selectedTab == .network)
+        updateDevicesDemands(visible: visible && state.selectedTab == .devices)
         let cpuVisible = visible && state.selectedTab == .cpu
         guard cpuVisible else {
             [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
@@ -528,6 +541,19 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             settings.latencyTargets != nil
                 ? Demand(collectors: [LatencyCollector.collectorID], interval: max(settings.latencyInterval, 2), source: .panel)
                 : nil)
+    }
+
+    /// 电源设备 tab（D84 PD3）：IOPS 快照 1 s 取一次；有 UPS 时 HID 每 2 s 读一次，刚变为可见时重读静态项。
+    private func updateDevicesDemands(visible: Bool) {
+        defer { devicesWasVisible = visible }
+        guard visible else {
+            [devicesDemand, upsDemand].forEach { $0.set(nil) }
+            return
+        }
+        devicesDemand.set(Demand(collectors: [PowerSourceCollector.collectorID], interval: 1, source: .panel))
+        let hasUPS = services.devicesModel.snapshot.primaryUPS != nil
+        upsDemand.set(hasUPS ? Demand(collectors: [UPSTelemetryCollector.collectorID], interval: 2, source: .panel) : nil)
+        if !devicesWasVisible { services.devices.ups?.refreshStatic() }
     }
 
     /// 存储 tab（存储模块设计 §4.6）：读写 1 s、SMART 按设置（默认 2 s，读全部盘）、容量 10 s、
@@ -700,13 +726,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         frame.size.height = height
         if presentation == .anchored {
             frame = anchoredFrame(for: frame.size)
-        } else if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
-            // 浮窗向下长到屏幕可见区域以外（被程序坞挡住）时，整体往上挪，但顶边不超出可见区域。
-            let margin = Self.screenMargin
-            if frame.minY < visible.minY + margin {
-                frame.origin.y = min(visible.minY + margin, visible.maxY - margin - frame.height)
-            }
         }
+        // 浮窗（D85）：顶边始终不动，换页只改底边；高度上限已按「当前顶边到可用区域底边」截住，超出时内容区滚动。
         panel.setFrame(frame, display: true)
     }
 
@@ -759,8 +780,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             let anchorFrame = validAnchor ?? NSRect(x: visible.maxX, y: visible.maxY, width: 0, height: 0)
             cap = Self.anchoredTop(anchorFrame: anchorFrame, visible: visible) - (visible.minY + Self.screenMargin)
         } else {
+            // D85：浮窗原地不动，上限是从当前顶边到可用区域底边（原 D66 为整个可用区域的高度，超出时整块上挪）。
             let visible = (panel?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-            cap = visible.height - 2 * Self.screenMargin
+            let top = min(panel?.frame.maxY ?? visible.maxY - Self.screenMargin, visible.maxY - Self.screenMargin)
+            cap = top - (visible.minY + Self.screenMargin)
         }
         let rounded = floor(max(cap, 300))
         if state.maxPanelHeight != rounded { state.maxPanelHeight = rounded }

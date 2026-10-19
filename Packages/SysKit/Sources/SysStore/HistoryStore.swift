@@ -113,8 +113,8 @@ public struct HistoryStats: Hashable, Sendable {
 public final class HistoryStore {
     /// 当前表结构版本。
     /// 1：CPU 模块（D30）；2：能耗与 kv 表（功耗与散热模块设计 §6，D46）；
-    /// 3：每应用扩列与电源断言（应用活动设计 §3.2，D68、D69）。
-    public static let schemaVersion: Int64 = 3
+    /// 3：每应用扩列与电源断言（应用活动设计 §3.2，D68、D69）；4：UPS 供电区间（电源设备设计 §5，D84）。
+    public static let schemaVersion: Int64 = 4
     /// 分钟级与每应用数据的保留期（D30）。
     public static let minuteRetention: TimeInterval = 30 * 86_400
 
@@ -208,6 +208,14 @@ public final class HistoryStore {
                         id INTEGER PRIMARY KEY, app INTEGER NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL,
                         holder TEXT NOT NULL, start_s REAL NOT NULL, end_s REAL, end_estimated INTEGER NOT NULL DEFAULT 0);
                     CREATE INDEX power_assertion_start ON power_assertion(start_s);
+                    """)
+            }
+            if version < 4 {
+                try db.execute(
+                    """
+                    CREATE TABLE ups_power_span(
+                        id INTEGER PRIMARY KEY, start_s REAL NOT NULL, end_s REAL, end_estimated INTEGER NOT NULL DEFAULT 0);
+                    CREATE INDEX ups_power_span_start ON ups_power_span(start_s);
                     """)
             }
             try db.execute("PRAGMA user_version = \(Self.schemaVersion)")
@@ -339,6 +347,7 @@ public final class HistoryStore {
             try db.statement("DELETE FROM energy_minute WHERE t < ?").run([.int(minute)])
             try db.statement("DELETE FROM energy_fill_minute WHERE t < ?").run([.int(minute)])
             try db.statement("DELETE FROM power_assertion WHERE end_s IS NOT NULL AND end_s < ?").run([.double(Double(minute) * 60)])
+            try db.statement("DELETE FROM ups_power_span WHERE end_s IS NOT NULL AND end_s < ?").run([.double(Double(minute) * 60)])
             try db.execute(
                 """
                 DELETE FROM app WHERE id NOT IN (SELECT DISTINCT app FROM app_minute)

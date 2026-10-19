@@ -108,6 +108,17 @@ struct NetworkCollectors {
     }
 }
 
+/// 引擎里的电源设备采集器实例（D84）：面板读 UPS 的 HID 读数，诊断页读状态。
+struct DevicesCollectors {
+    var sources: PowerSourceCollector?
+    var ups: UPSTelemetryCollector?
+
+    init(_ collectors: [any Collector]) {
+        sources = collectors.compactMap { $0 as? PowerSourceCollector }.first
+        ups = collectors.compactMap { $0 as? UPSTelemetryCollector }.first
+    }
+}
+
 /// 网络的结构状态（网络模块设计 §7）：清单（接口、主接口、VPN、地址）变化时才更新，面板据此决定有几行；
 /// 另负责公网 IP 的按需查询（D62）。
 @Observable
@@ -552,6 +563,9 @@ final class AppServices {
     /// 网络（D60）：采集器与结构状态。
     let network: NetworkCollectors
     let networkModel = NetworkModel.shared
+    /// 电源设备（D84）：采集器与快照。
+    let devices: DevicesCollectors
+    let devicesModel = PowerDevicesModel.shared
     let history: HistoryRecorder?
     let diagnostics = CPUDiagnosticsModel()
     /// 应用活动窗口的数据（D67）；由 AppDelegate 在创建窗口控制器时填上。
@@ -567,8 +581,10 @@ final class AppServices {
 
     init(
         collectors: CPUCollectors, power: PowerCollectors, memory: MemoryCollectors, storage: StorageCollectors,
-        gpu: GPUCollectors, network: NetworkCollectors, history: HistoryRecorder?, engine: SamplingEngine
+        gpu: GPUCollectors, network: NetworkCollectors, devices: DevicesCollectors, history: HistoryRecorder?,
+        engine: SamplingEngine
     ) {
+        self.devices = devices
         self.gpu = gpu
         self.network = network
         self.gpuTopN = TopNModel(sampler: collectors.apps, metric: .gpu)
@@ -601,6 +617,9 @@ final class AppServices {
             gpuTopN.coalitionTick()
             appDetail.tick()
             appActivity?.coalitionTick()
+        }
+        if result.collectors.contains(UPSTelemetryCollector.collectorID), let ups = devices.ups {
+            devicesModel.updateUPS(ups.primaryReading)
         }
         if result.collectors.contains(NetworkIOCollector.collectorID), let io = network.io {
             networkModel.refresh(io.lastState)

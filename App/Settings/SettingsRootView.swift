@@ -144,6 +144,9 @@ private struct SettingsSplitView: View {
         case .network:
             NetworkSettingsView(
                 settings: context.settings, store: context.store, model: context.services.networkModel, openPage: openPage)
+        case .devices:
+            DevicesSettingsView(
+                settings: context.settings, store: context.store, model: context.services.devicesModel, openPage: openPage)
         case .appActivity:
             AppActivitySettingsView(
                 settings: context.settings, store: context.store, services: context.services, openPage: openPage)

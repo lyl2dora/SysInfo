@@ -200,6 +200,19 @@ final class OverviewCardDrawView: LiveDrawView {
             if let primary = services.networkModel.state.primary { parts.append(primary) }
             if let todayTraffic { parts.append(String(localized: "今日 \(Formatting.diskBytes(todayTraffic))")) }
             return ("↓ \(down)  ↑ \(up)", parts.joined(separator: " · "), [(.networkPrimaryIn, .bytes), (.networkPrimaryOut, .bytes)])
+        case .devices:
+            // 主设备（UPS → 内置电池 → 电量最低的配件）的电量；UPS 另给负载与供电状态（D84）。
+            let model = services.devicesModel
+            guard let device = model.device(for: .auto) else { return ("—", String(localized: "没有设备"), []) }
+            let first = StatusItemView.deviceValue(device) ?? "—"
+            var parts = [DevicesText.name(device)]
+            if device.kind == .ups {
+                parts = [DevicesText.powerState(device.powerSourceState)]
+                if let telemetry = model.upsReading?.telemetry, let load = telemetry.load {
+                    parts.append(String(localized: "负载 \(DevicesText.percent(load))"))
+                }
+            }
+            return (first, parts.joined(separator: " · "), device.kind == .ups ? [(.upsLoad, .ratio)] : [])
         }
     }
 

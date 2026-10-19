@@ -62,7 +62,7 @@ public enum StandardCollectors: Sendable {
     /// 内存（`memory.vm`、`memory.bandwidth`），存储（`storage.io`、`storage.smart`、`storage.capacity`，共用 `DiskInventory.shared`），
     /// GPU 与加速器（`gpu.temperature`、`gpu.accelerators`、`gpu.media`、`gpu.diagnostics`；活跃与频率由 `power.gpu` 一并输出），
     /// 网络（`network.io`、`network.wifi`、`network.latency`，共用 `NetworkInventory.shared`），
-    /// 以及电源断言（`app.assertions`，D69）。
+    /// 电源断言（`app.assertions`，D69），以及电源设备（`devices.sources`、`devices.ups`，共用 `PowerSourceMonitor.shared`，D84）。
     /// 每次调用返回新实例。`cpu.load` 排在最前：它的自检会刷新拓扑，其余采集器按拓扑建方案。
     public static func make() -> [any Collector] {
         let frequency = CPUFrequencyCollector()
@@ -75,6 +75,7 @@ public enum StandardCollectors: Sendable {
             StorageIOCollector(), SMARTCollector(), StorageCapacityCollector(),
             GPUTemperatureCollector(), GPUAcceleratorCollector(), MediaEngineCollector(), GPUDiagnosticsCollector(),
             NetworkIOCollector(), WiFiCollector(), LatencyCollector(), PowerAssertionCollector(),
+            PowerSourceCollector(), UPSTelemetryCollector(),
         ]
     }
 }

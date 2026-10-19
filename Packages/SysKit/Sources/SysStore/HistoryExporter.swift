@@ -70,6 +70,15 @@ struct HistoryExportMetadata: Encodable {
     var notes: [String]
     /// 存储指标里的加盐键 → 「型号 + 位置」（存储模块设计 §3.1）；没有存储指标时为空。
     var storageDevices: [String: String] = [:]
+
+    /// UPS 由电池供电的区间（电源设备设计 §5，D84）。
+    struct UPSSpan: Codable, Hashable {
+        var start: String
+        var end: String?
+        var endEstimated: Bool
+    }
+
+    var upsPowerSpans: [UPSSpan] = []
 }
 
 /// 导出用的一行每应用分钟数据（D68 之前的行新列为空）。
@@ -107,8 +116,13 @@ public enum HistoryExporter {
         let energy = try store.energyHours(from: HistoryStore.floorDiv(from, 60), to: HistoryStore.floorDiv(to - 1, 60) + 1)
         let units = Dictionary(try store.metrics().map { ($0.metric, $0.unit) }, uniquingKeysWith: { a, _ in a })
         let metricNames = Array(Set(rows.map(\.metric))).sorted()
-        let metadata = makeMetadata(
+        var metadata = makeMetadata(
             store: store, options: options, metrics: metricNames.map { .init(name: $0.rawValue, unit: units[$0] ?? "") })
+        if options.metricPrefixes?.contains(where: { "devices.".hasPrefix($0) || $0.hasPrefix("devices.") }) ?? true {
+            metadata.upsPowerSpans = try store.upsPowerSpans(
+                from: Date(timeIntervalSince1970: TimeInterval(from * 60)), to: Date(timeIntervalSince1970: TimeInterval(to * 60))
+            ).map { .init(start: iso($0.start), end: $0.end.map(iso), endEstimated: $0.endEstimated) }
+        }
 
         switch options.format {
         case .csv:
@@ -177,6 +191,7 @@ public enum HistoryExporter {
                 "assertions: power assertions that prevented system or display sleep, recorded while SysInfo was running; end_estimated = the app quit or crashed before the assertion ended.",
                 "energy: hourly joules; source integrated = 1 Hz PDTR integral, filled = PowerTelemetryData accumulator for periods when SysInfo was not running (may be low under heavy load).",
                 "storage: disk and volume-group keys are locally salted hashes (no serial numbers); storageDevices maps them to model and position.",
+                "devices: devices.ups.* are the primary UPS (charge and input voltage from IOPS, load from HID); upsPowerSpans lists the periods the UPS ran on battery, end_estimated = SysInfo quit before mains returned.",
             ], storageDevices: storageDevices.filter { usedKeys.contains($0.key) })
     }
 

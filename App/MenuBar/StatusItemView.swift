@@ -35,6 +35,8 @@ struct StatusItemConfiguration: Equatable {
     var networkBits = false
     /// 延迟 widget 的 RTT 指标。
     var latencyMetric: MetricID?
+    /// 电源设备 widget 绑定的设备（D84）。
+    var deviceTarget: DeviceTarget = .auto
 }
 
 final class StatusItemView: NSView {
@@ -75,8 +77,26 @@ final class StatusItemView: NSView {
         case .diskFree: String(localized: "FREE", comment: "菜单栏小标签：可用空间，保持英文缩写")
         case .netThroughput: String(localized: "NET", comment: "菜单栏小标签：网速（实际画 ↑ / ↓ 两行），保持英文缩写")
         case .netLatency: String(localized: "PING", comment: "菜单栏小标签：网络延迟，保持英文缩写")
+        case .deviceBattery: String(localized: "UPS", comment: "菜单栏小标签：UPS 电量，保持英文缩写")
         }
     }
+
+    /// 电源设备 widget 的小标签按绑定到的设备种类换（定宽取几种里最宽的）。
+    private static func deviceLabel(_ kind: PowerDeviceKind?) -> String {
+        switch kind {
+        case .ups, nil: String(localized: "UPS", comment: "菜单栏小标签：UPS 电量，保持英文缩写")
+        case .internalBattery: String(localized: "BAT", comment: "菜单栏小标签：内置电池电量，保持英文缩写")
+        case .accessory: String(localized: "ACC", comment: "菜单栏小标签：配件电量，保持英文缩写")
+        }
+    }
+
+    private static var deviceLabels: [String] { [deviceLabel(.ups), deviceLabel(.internalBattery), deviceLabel(.accessory)] }
+
+    /// 电池图形：外框 + 正极头，内部按电量填充；充电时中间镂空一个闪电（D84 PD5）。
+    /// 18 × 9 pt：原先 14 × 7 画不清闪电（2026-10-19 用户验收时提出要看到充电状态）。
+    static let batteryWidth: CGFloat = 18
+    static let batteryHeight: CGFloat = 9
+    static let batteryGap: CGFloat = 2
 
     /// 读写 widget 两行前面的字母（同 Stats 的 R / W）。
     private static let readSymbol = String(localized: "R", comment: "菜单栏读写 widget：读，保持英文字母")
@@ -108,6 +128,7 @@ final class StatusItemView: NSView {
         case .diskFree: "99.9T"
         case .netThroughput: c.networkBits ? "999Mb" : "999M"
         case .netLatency: "999ms"
+        case .deviceBattery: "100%"
         }
     }
 
@@ -175,14 +196,17 @@ final class StatusItemView: NSView {
         }
         let label = label(c.widget)
         let widestValue = widestValue(c)
-        let stackedLabel = c.showsLabel ? textWidth(label, stackedLabelFont) : 0
+        let labels = c.widget == .deviceBattery ? deviceLabels : [label]
+        let stackedLabel = c.showsLabel ? labels.map { textWidth($0, stackedLabelFont) }.max() ?? 0 : 0
+        // 电源设备 widget 的数值前面有电池图形。
+        let glyph = c.widget == .deviceBattery ? batteryWidth + batteryGap : 0
         let content: CGFloat
         switch effectiveStyle(c) {
         case .stacked:
-            content = max(stackedLabel, textWidth(widestValue, stackedValueFont))
+            content = max(stackedLabel, glyph + textWidth(widestValue, stackedValueFont))
         case .inline:
-            let labelPart = c.showsLabel ? textWidth(label, inlineLabelFont) + inlineSpacing : 0
-            content = labelPart + textWidth(widestValue, inlineValueFont)
+            let labelPart = c.showsLabel ? (labels.map { textWidth($0, inlineLabelFont) }.max() ?? 0) + inlineSpacing : 0
+            content = labelPart + glyph + textWidth(widestValue, inlineValueFont)
         case .sparkline:
             content = max(stackedLabel, sparklineWidth)
         case .barsTotal:
@@ -267,7 +291,16 @@ final class StatusItemView: NSView {
         case .diskFree:
             guard let key = configuration.storageKey else { return nil }
             return store.latest[.storageGroup(key, .available)]?.value.map(Self.decimalShort)
+        case .deviceBattery:
+            return Self.deviceValue(PowerDevicesModel.shared.device(for: configuration.deviceTarget))
         }
+    }
+
+    /// 电源设备 widget 的数值：电量；UPS 由电池供电时改为剩余时间（D84 PD5）。
+    static func deviceValue(_ device: PowerDevice?) -> String? {
+        guard let device else { return nil }
+        if device.kind == .ups, device.isOnBattery, let seconds = device.timeToEmpty { return DevicesText.durationShort(seconds) }
+        return device.level.map { PercentFormat.string(fromRatio: $0) }
     }
 
     /// 读写 widget 两行字母与数值的间距。
@@ -319,6 +352,10 @@ final class StatusItemView: NSView {
             setAccessibilityLabel(drawThroughput(color: color))
             return
         }
+        if widget == .deviceBattery {
+            setAccessibilityLabel(drawDeviceBattery(color: color))
+            return
+        }
         let text = valueText(widget)  // 自动跟踪：数值变化时 AppKit 重绘
         let valueText = text ?? PercentFormat.placeholder
         let valueColor = text != nil ? color : NSColor.secondaryLabelColor
@@ -346,6 +383,98 @@ final class StatusItemView: NSView {
         }
 
         setAccessibilityLabel("\(label) \(valueText)")
+    }
+
+    /// 电源设备 widget（D84 PD5）：小标签按设备种类；数值行是电池图形 + 电量（UPS 电池供电时为剩余时间）。
+    /// 图形填充用 widget 颜色；由电池供电时橙色，低于设备自报的低电量阈值时红色。
+    private func drawDeviceBattery(color: NSColor) -> String {
+        let model = PowerDevicesModel.shared
+        let device = model.device(for: configuration.deviceTarget)  // 自动跟踪：快照变化时重绘
+        let label = Self.deviceLabel(device?.kind)
+        let text = Self.deviceValue(device)
+        let valueText = text ?? PercentFormat.placeholder
+        var fillColor = color
+        if let device {
+            if let level = device.level, let low = device.lowWarnLevel, level <= low {
+                fillColor = .systemRed
+            } else if device.isOnBattery, device.kind == .ups {
+                fillColor = .systemOrange
+            }
+        }
+        let valueColor = text != nil ? color : NSColor.secondaryLabelColor
+        let inline = Self.effectiveStyle(configuration) == .inline
+        let font = inline ? Self.inlineValueFont : Self.stackedValueFont
+        let value = NSAttributedString(string: valueText, attributes: [.font: font, .foregroundColor: valueColor])
+        let groupWidth = Self.batteryWidth + Self.batteryGap + value.size().width
+        let baseline: CGFloat
+        let startX: CGFloat
+        if inline {
+            baseline = floor((bounds.height - font.capHeight) / 2)
+            if configuration.showsLabel {
+                let attributed = NSAttributedString(
+                    string: label, attributes: [.font: Self.inlineLabelFont, .foregroundColor: NSColor.labelColor])
+                attributed.draw(at: NSPoint(x: Self.padding, y: baseline + Self.inlineLabelFont.descender))
+            }
+            startX = pixelAligned(bounds.width - Self.padding - groupWidth)
+        } else {
+            let row = drawStackedLabel(label)
+            baseline = row.minY
+            startX = pixelAligned((bounds.width - groupWidth) / 2)
+        }
+        let glyph = NSRect(
+            x: startX, y: baseline + (font.capHeight - Self.batteryHeight) / 2, width: Self.batteryWidth - 1.5,
+            height: Self.batteryHeight)
+        drawBatteryGlyph(in: glyph, level: device?.level, fill: fillColor, charging: device?.isCharging == true)
+        value.draw(at: NSPoint(x: startX + Self.batteryWidth + Self.batteryGap, y: baseline + font.descender))
+        return "\(label) \(valueText)"
+    }
+
+    /// 外框（模板色）+ 右侧正极头；内部按电量填充，没有电量时只画外框。
+    /// 充电时在中间画闪电：先在外框与填充上挖出比闪电略大的空隙，再画闪电，深浅色菜单栏上都能看清（同系统电池图标）。
+    private func drawBatteryGlyph(in rect: NSRect, level: Double?, fill: NSColor, charging: Bool) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let bolt = Self.boltPath(in: rect)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        let outline = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 2, yRadius: 2)
+        outline.lineWidth = 1
+        NSColor.labelColor.withAlphaComponent(0.6).setStroke()
+        outline.stroke()
+        NSColor.labelColor.withAlphaComponent(0.6).setFill()
+        NSRect(x: rect.maxX + 0.5, y: rect.midY - 1.5, width: 1, height: 3).fill()
+        if let level {
+            let inner = rect.insetBy(dx: 1.5, dy: 1.5)
+            fill.setFill()
+            NSRect(x: inner.minX, y: inner.minY, width: max(inner.width * CGFloat(min(max(level, 0), 1)), 1), height: inner.height).fill()
+        }
+        if charging {
+            // 挖空：闪电的描边部分清掉下面的外框与填充。
+            context.setBlendMode(.clear)
+            bolt.lineWidth = 2
+            bolt.stroke()
+            context.setBlendMode(.normal)
+        }
+        context.endTransparencyLayer()
+        if charging {
+            NSColor.labelColor.setFill()
+            bolt.fill()
+        }
+    }
+
+    /// 闪电的轮廓，居中放在电池里，略高于电池（上下各出 1 pt）。
+    private static func boltPath(in rect: NSRect) -> NSBezierPath {
+        let h = rect.height + 2
+        let w = h * 0.62
+        let x = rect.midX - w / 2
+        let y = rect.midY - h / 2
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: x + w * 0.62, y: y + h))
+        path.line(to: NSPoint(x: x, y: y + h * 0.42))
+        path.line(to: NSPoint(x: x + w * 0.46, y: y + h * 0.42))
+        path.line(to: NSPoint(x: x + w * 0.38, y: y))
+        path.line(to: NSPoint(x: x + w, y: y + h * 0.58))
+        path.line(to: NSPoint(x: x + w * 0.54, y: y + h * 0.58))
+        path.close()
+        return path
     }
 
     /// 文字起点的横坐标对齐到设备像素。居中算出的起点带小数（如 5.54 pt），在 1x 屏上字形会被抗锯齿摊到相邻像素，

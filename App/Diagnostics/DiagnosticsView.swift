@@ -5,6 +5,7 @@
 // - 存储（物理盘、SMART 连接、RAID 与容量组、NVMe 节流计数），见 StorageDiagnosticsSection；
 // - GPU 与加速器（档位表、各档驻留、温度键、ANE 与媒体引擎、ANE 估算对账、GPU 细节），见 GPUDiagnosticsSection；
 // - 网络（接口分类依据与原始计数、路由与 VPN 判定、NWPath、CoreWLAN 原值），见 NetworkDiagnosticsSection；
+// - 电源设备（IOPS 通知与快照、HID 与 IOPS 对照、设备解析结果，D84），见 DevicesDiagnosticsSection；
 // - 采集器表：状态、数据路径、自检结果、最近一次和平均耗时（墙钟与线程 CPU）；
 // - 调度器：tick 数、定时器、有效需求、降频因子与原因；手动降频开关（K20，测试用）；
 // - 本进程：CPU 占用（按单核的比例，1 分钟均值）和内存 footprint。
@@ -30,6 +31,7 @@ struct DiagnosticsView: View {
             StorageDiagnosticsSection(store: store, services: services)
             GPUDiagnosticsSection(store: store, services: services, detailsVisibilityChanged: gpuDetailsVisibilityChanged)
             NetworkDiagnosticsSection(store: store, services: services)
+            DevicesDiagnosticsSection(store: store, services: services)
             collectorsSection
             schedulerSection
             selfUsageSection

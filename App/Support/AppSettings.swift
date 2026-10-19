@@ -37,6 +37,9 @@
 // - network.latency.enabled / .gateway / .custom / .host / .interval   延迟（D61：默认关；间隔 2 / 5 / 10 s，默认 5）
 // - network.publicIP.service   公网 IP 查询服务地址（D62：默认空，第一次点击时填写）
 // - history.network.enabled   是否记录网络历史（D60 N7）
+// - menubar.devices.deviceBattery.visible / .color   电源设备 widget（D84：出厂关）
+// - devices.widget.battery.target   电源设备 widget 绑定：auto（UPS → 内置电池 → 电量最低的配件）/ ups / battery / accessoryLowest
+// - history.devices.enabled   是否记录电源设备历史（D84 PD6：主 UPS 的电量、负载、输入电压，供电切换区间）
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
 // - 旧键 menubar.cpu.style / menubar.cpu.label（D41 之前）只在新键缺失时读取，用来换算出上面三项
 // - cpu.panel.freqInterval / .sensorInterval / .topNInterval   面板内各项的采样间隔，秒：1 / 2 / 5
@@ -136,6 +139,8 @@ final class AppSettings {
         static let latencyInterval = "network.latency.interval"
         static let publicIPService = "network.publicIP.service"
         static let historyNetwork = "history.network.enabled"
+        static let deviceBatteryTarget = "devices.widget.battery.target"
+        static let historyDevices = "history.devices.enabled"
         static let appActivityInterval = "appActivity.interval"
         static let panelFreqInterval = "cpu.panel.freqInterval"
         static let panelSensorInterval = "cpu.panel.sensorInterval"
@@ -607,6 +612,18 @@ final class AppSettings {
         didSet { persist(historyNetworkEnabled, Key.historyNetwork) }
     }
 
+    // MARK: 电源设备（D84）
+
+    /// 电源设备 widget 绑定的设备（默认自动）。
+    var deviceBatteryTarget: DeviceTarget {
+        didSet { persist(deviceBatteryTarget.rawValue, Key.deviceBatteryTarget) }
+    }
+
+    /// 是否记录电源设备历史（默认开；没有 UPS 时什么也不写）。
+    var historyDevicesEnabled: Bool {
+        didSet { persist(historyDevicesEnabled, Key.historyDevices) }
+    }
+
     /// 应用活动窗口「现在」档的采样间隔（D67：默认 2 s，可选 1 / 5）。
     var appActivityInterval: Int {
         didSet { persist(appActivityInterval, Key.appActivityInterval) }
@@ -624,6 +641,8 @@ final class AppSettings {
         case .storage: storageInterval
         case .gpu: gpuInterval
         case .network: networkInterval
+        // 电源设备的数值来自事件驱动的快照，采样只是取出：跟随全局，不单独覆盖（D84 PD3）。
+        case .devices: globalInterval
         }
     }
 
@@ -730,6 +749,8 @@ final class AppSettings {
         latencyInterval = Self.int(defaults, Key.latencyInterval, choices: Self.latencyIntervals) ?? 5
         publicIPService = defaults?.string(forKey: Key.publicIPService) ?? ""
         historyNetworkEnabled = defaults?.object(forKey: Key.historyNetwork) as? Bool ?? true
+        deviceBatteryTarget = defaults?.string(forKey: Key.deviceBatteryTarget).flatMap(DeviceTarget.init(rawValue:)) ?? .auto
+        historyDevicesEnabled = defaults?.object(forKey: Key.historyDevices) as? Bool ?? true
         appActivityInterval = Self.int(defaults, Key.appActivityInterval, choices: Self.panelIntervals) ?? 2
     }
 
@@ -946,6 +967,8 @@ enum MenuWidget: String, CaseIterable, Identifiable {
     // 网络（D60）
     case netThroughput
     case netLatency
+    // 电源设备（D84）
+    case deviceBattery
 
     var id: String { rawValue }
 
@@ -957,6 +980,7 @@ enum MenuWidget: String, CaseIterable, Identifiable {
         case .diskTemperature, .diskThroughput, .diskFree: .storage
         case .gpuActive, .gpuPower, .gpuTemperature: .gpu
         case .netThroughput, .netLatency: .network
+        case .deviceBattery: .devices
         }
     }
 
@@ -979,6 +1003,7 @@ enum MenuModule: String, CaseIterable, Identifiable {
     case storage
     case gpu
     case network
+    case devices
 
     var id: String { rawValue }
 }

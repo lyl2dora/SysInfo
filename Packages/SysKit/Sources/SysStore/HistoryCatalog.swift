@@ -2,7 +2,7 @@
 //
 // CPU 每分钟约 12–16 行；功耗与散热每分钟约 6 行（整机、SoC、GPU、DRAM 功率，最热点，风扇转速）；
 // 内存每分钟 13 行（已用、占用率、App、联动、被压缩、已缓存、Swap、压力与等级、页入 / 页出、换入 / 换出）；
-// GPU 与加速器每分钟 3 行（GPU 活跃、GPU 温度、ANE 上电比例）；网络每分钟 2 ×（1 + 活跃物理接口数）行，延迟开启时另加每目标 2 行；随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
+// GPU 与加速器每分钟 3 行（GPU 活跃、GPU 温度、ANE 上电比例）；电源设备有 UPS 时每分钟 3 行（电量、负载、输入电压）；网络每分钟 2 ×（1 + 活跃物理接口数）行，延迟开启时另加每目标 2 行；随拓扑变化：总占用、用户/系统、每档占用、每簇频率、每簇温度与 CPU 最高温、
 // 每簇与总功耗、1 分钟负载均值、热状态与热压力。每核、每簇占用、中断、任务数不入库。
 //
 // 两类聚合：
@@ -29,6 +29,8 @@ public enum HistoryModule: String, Sendable, Hashable, Codable, CaseIterable {
     case storage
     case gpu
     case network
+    /// 电源设备（D84 PD6）：主 UPS 的电量、负载、输入电压。
+    case devices
 }
 
 /// 历史库里一个指标的说明。
@@ -95,6 +97,15 @@ public enum HistoryCatalog {
         case .anePowered:
             // 0 / 1 的瞬时状态；分钟均值即这一分钟里上电的比例。
             return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: GPUAcceleratorCollector.collectorID, module: .gpu)
+        // 电源设备（电源设备设计 §5，D84 PD6）：主 UPS 的电量（IOPS）、输入电压与负载（HID）。负载功率由负载 × 额定功率算出，
+        // 剩余时间、电池电压、是否电池供电不入库（供电切换另记区间）。
+        case .upsCharge:
+            return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: PowerSourceCollector.collectorID, module: .devices)
+        case .upsInputVoltage:
+            // HID：IOPS 的电压由电池供电时是电池电压（2026-10-19 放电实测）。
+            return HistoryMetricSpec(aggregation: .instant, unit: "V", collector: UPSTelemetryCollector.collectorID, module: .devices)
+        case .upsLoad:
+            return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: UPSTelemetryCollector.collectorID, module: .devices)
         default:
             break
         }
