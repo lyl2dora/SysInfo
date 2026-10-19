@@ -5,7 +5,13 @@ import Foundation
 import SysModel
 
 enum WidgetStorage {
-    static var appGroup: String? { Bundle.main.object(forInfoDictionaryKey: "SysInfoAppGroup") as? String }
+    /// ad-hoc 签名的构建没有 Team ID，组名会变成「.zone.lyl…」：不合法，当作没有 App Group。
+    static var appGroup: String? {
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "SysInfoAppGroup") as? String, !group.hasPrefix(".") else {
+            return nil
+        }
+        return group
+    }
 
     /// 组容器；没有 App Group（ad-hoc 签名的构建）时为 nil，小组件功能整体不可用。
     static var containerURL: URL? {

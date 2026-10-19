@@ -43,7 +43,7 @@ case "${1:-}" in
 sync)
     remote "mkdir -p $dir/repo $dir/tmp $dir/home"
     rsync -a --delete --exclude .git --exclude build --exclude .build --exclude .swiftpm -e "ssh -o BatchMode=yes" \
-        "$repo_root/App" "$repo_root/Config" "$repo_root/Packages" "$repo_root/SysInfo.xcodeproj" "$repo_root/scripts" \
+        "$repo_root/App" "$repo_root/Widgets" "$repo_root/WidgetShared" "$repo_root/Config" "$repo_root/Packages" "$repo_root/SysInfo.xcodeproj" "$repo_root/scripts" \
         "$host:$dir/repo/"
     ;;
 measure)
@@ -68,7 +68,7 @@ measure)
 build)
     remote "mkdir -p $dir/repo $dir/tmp $dir/home"
     rsync -a --delete --exclude .git --exclude build --exclude .build --exclude .swiftpm -e "ssh -o BatchMode=yes" \
-        "$repo_root/App" "$repo_root/Config" "$repo_root/Packages" "$repo_root/SysInfo.xcodeproj" "$repo_root/scripts" \
+        "$repo_root/App" "$repo_root/Widgets" "$repo_root/WidgetShared" "$repo_root/Config" "$repo_root/Packages" "$repo_root/SysInfo.xcodeproj" "$repo_root/scripts" \
         "$host:$dir/repo/"
     remote "cd $dir/repo && $env_vars xcodebuild -project SysInfo.xcodeproj -scheme SysInfo -configuration Debug \
         -destination 'platform=macOS,arch=arm64' -derivedDataPath $dir/dd CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build 2>&1 | grep -E ' error: |^\*\* ' | tail -5"
