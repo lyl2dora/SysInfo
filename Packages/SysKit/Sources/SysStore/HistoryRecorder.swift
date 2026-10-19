@@ -2,7 +2,8 @@
 //
 // - 登记 background 层需求（锁屏、显示器睡眠时继续采，不受降频影响）：
 //   CPU tick、频率、杂项每 60 s；温度与功耗每 10 s；coalition 每 10 s（记录每应用时）；内存每 10 s（D49）；
-//   存储（读写、SMART、容量）每 60 s（存储模块设计 §5）；网络每 60 s（网络模块设计 §6）。
+//   存储（读写、SMART、容量）每 60 s（存储模块设计 §5）；网络每 60 s（网络模块设计 §6）；
+//   电源设备（D84 PD6）：IOPS 每 60 s，有 UPS 时 HID 每 60 s；UPS 供电切换由 `PowerSourceMonitor` 的变化通知驱动，记成区间。
 //   电源断言（D69）：事件驱动（`app.assertions` 的通知），通知不可用时每 60 s 轮询；只在记录每应用数据时。
 //   用户开启「后台高精度」时，频率、温度与功耗改为每 5 s（D19 的高开销项）。
 //   菜单栏、面板的前台需求更密时，引擎按较短的间隔采样，记录器直接用这些样本，峰值随之更准；
@@ -41,12 +42,15 @@ public actor HistoryRecorder {
         public var recordGPU: Bool
         /// 记录网络指标（D60 N7）：主接口与每个物理接口的入 / 出，后台每 60 s；延迟采样期间的 RTT 与丢包。
         public var recordNetwork: Bool
+        /// 记录电源设备（D84 PD6）：主 UPS 的电量、负载、输入电压每 60 s，供电切换区间。
+        public var recordDevices: Bool
 
         public init(
             recordSystem: Bool = true, recordApps: Bool = true, highPrecision: Bool = false, recordPower: Bool = true,
             recordEnergy: Bool = true, recordMemory: Bool = true, recordStorage: Bool = true, recordGPU: Bool = true,
-            recordNetwork: Bool = true
+            recordNetwork: Bool = true, recordDevices: Bool = true
         ) {
+            self.recordDevices = recordDevices
             self.recordGPU = recordGPU
             self.recordNetwork = recordNetwork
             self.recordSystem = recordSystem
@@ -93,6 +97,7 @@ public actor HistoryRecorder {
     /// 电源断言轮询的间隔（事件驱动不可用时，D69）。
     public static let assertionPollInterval = 60
     static let assertionsLastSeenKey = "assertions.lastSeen"
+    static let upsLastSeenKey = "ups.lastSeen"
     /// 总览「最耗能的应用」的统计时长，秒（D70）。
     static let recentEnergySeconds: TimeInterval = 60
 
@@ -100,6 +105,13 @@ public actor HistoryRecorder {
     private let engine: SamplingEngine
     private let appSampler: AppSampler?
     private let assertions: PowerAssertionCollector?
+    /// 电源设备清单（D84）：nil 时不记电源设备。
+    private let powerSources: PowerSourceMonitor?
+    private var powerSourceObservation: PowerSourceMonitor.Observation?
+    /// 正在进行的 UPS 电池供电区间的行 id。
+    private var openUPSSpan: Int64?
+    /// 当前是否有 UPS（决定是否登记 HID 的后台需求）。
+    private var hasUPS = false
     /// 正在进行的断言：spanKey → 断言表行 id。
     private var openSpans: [String: Int64] = [:]
     /// 当前是否登记了断言轮询需求。
@@ -138,7 +150,7 @@ public actor HistoryRecorder {
     ///   - epoch: 返回当前机器的 epoch（参数是起始分钟）；默认按 `HistoryRecorder.currentEpoch` 读取。
     public init(
         store: sending HistoryStore, engine: SamplingEngine, appSampler: AppSampler?,
-        assertions: PowerAssertionCollector? = nil,
+        assertions: PowerAssertionCollector? = nil, powerSources: PowerSourceMonitor? = nil,
         power: PowerSources = PowerSources(ledger: nil, pmgr: nil), storageCapacity: StorageCapacityCollector? = nil,
         configuration: Configuration = Configuration(),
         epoch: @escaping @Sendable (Int64) -> HistoryEpoch? = { HistoryRecorder.currentEpoch(startMinute: $0) }
@@ -148,6 +160,7 @@ public actor HistoryRecorder {
         self.engine = engine
         self.appSampler = appSampler
         self.assertions = assertions
+        self.powerSources = powerSources
         self.power = power
         self.configuration = configuration
         self.epoch = epoch
@@ -184,6 +197,7 @@ public actor HistoryRecorder {
         }
         await applyDemands()
         startAssertions()
+        startPowerSources()
         scheduleFlush()
         logger.info("历史记录开始：\(self.store.path, privacy: .private)")
     }
@@ -194,6 +208,7 @@ public actor HistoryRecorder {
         tokens = []
         appSampler?.setRetainsWindows(false)
         stopAssertions(at: Date())
+        stopPowerSources(at: Date())
         pump?.cancel()
         pump = nil
         timer?.cancel()
@@ -205,11 +220,14 @@ public actor HistoryRecorder {
     public func setConfiguration(_ configuration: Configuration) async {
         guard configuration != self.configuration else { return }
         let wasRecordingApps = self.configuration.recordApps
+        let wasRecordingDevices = self.configuration.recordDevices
         self.configuration = configuration
         if !configuration.recordApps { aggregator.clearApps() }
         if pump != nil {
             if wasRecordingApps, !configuration.recordApps { stopAssertions(at: Date()) }
             if !wasRecordingApps, configuration.recordApps { startAssertions() }
+            if wasRecordingDevices, !configuration.recordDevices { stopPowerSources(at: Date()) }
+            if !wasRecordingDevices, configuration.recordDevices { startPowerSources() }
             await applyDemands()
         }
     }
@@ -275,6 +293,12 @@ public actor HistoryRecorder {
                 Demand(
                     collectors: [NetworkIOCollector.collectorID], interval: Self.slowInterval, source: .history, tier: .background))
         }
+        if configuration.recordDevices, powerSources != nil {
+            // IOPS 是事件驱动维护的快照，60 s 一取；HID 只在有 UPS 时读（没有 UPS 就不开 HID manager）。
+            var collectors: Set<CollectorID> = [PowerSourceCollector.collectorID]
+            if hasUPS { collectors.insert(UPSTelemetryCollector.collectorID) }
+            demands.append(Demand(collectors: collectors, interval: Self.slowInterval, source: .history, tier: .background))
+        }
         if configuration.recordEnergy {
             demands.append(
                 Demand(
@@ -320,6 +344,7 @@ public actor HistoryRecorder {
         if configuration.recordStorage { modules.insert(.storage) }
         if configuration.recordGPU { modules.insert(.gpu) }
         if configuration.recordNetwork { modules.insert(.network) }
+        if configuration.recordDevices { modules.insert(.devices) }
         if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
         if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
             energy.ingest(watts: watts, at: sample.time)
@@ -438,6 +463,61 @@ public actor HistoryRecorder {
         }
     }
 
+    // MARK: - 电源设备（D84 PD6）
+
+    private func startPowerSources() {
+        guard configuration.recordDevices, let powerSources, powerSourceObservation == nil else { return }
+        // 上次运行遗留的未结束区间：按上次提交时刻收尾，标「估计」。
+        let lastSeen = (try? store.decoded(Double.self, forKey: Self.upsLastSeenKey)).map(Date.init(timeIntervalSince1970:))
+        do {
+            try store.closeOpenUPSSpans(end: lastSeen ?? Date())
+        } catch {
+            logger.error("收尾遗留 UPS 区间失败：\(String(describing: error), privacy: .public)")
+        }
+        openUPSSpan = nil
+        powerSourceObservation = powerSources.observe { [weak self] snapshot in
+            Task { await self?.ingestPowerSources(snapshot) }
+        }
+        ingestPowerSources(powerSources.latest)
+    }
+
+    private func stopPowerSources(at date: Date) {
+        powerSourceObservation?.cancel()
+        powerSourceObservation = nil
+        guard let id = openUPSSpan else { return }
+        do {
+            try store.closeUPSSpan(id: id, end: date, estimated: true)
+        } catch {
+            logger.error("收尾 UPS 区间失败：\(String(describing: error), privacy: .public)")
+        }
+        openUPSSpan = nil
+    }
+
+    /// 主 UPS 转为电池供电时开一段，转回外接电源（或 UPS 不见了）时收尾；UPS 出现或消失时重登需求。
+    func ingestPowerSources(_ snapshot: PowerDeviceSnapshot) {
+        guard configuration.recordDevices else { return }
+        let ups = snapshot.primaryUPS
+        do {
+            if ups?.isOnBattery == true, openUPSSpan == nil {
+                openUPSSpan = try store.openUPSSpan(start: snapshot.time)
+            } else if ups?.isOnBattery != true, let id = openUPSSpan {
+                try store.closeUPSSpan(id: id, end: snapshot.time)
+                openUPSSpan = nil
+            }
+        } catch {
+            logger.error("记录 UPS 区间失败：\(String(describing: error), privacy: .public)")
+        }
+        if (ups != nil) != hasUPS {
+            hasUPS = ups != nil
+            if pump != nil { Task { await self.applyDemands() } }
+        }
+    }
+
+    /// 时段内的 UPS 电池供电区间（即时写入，不需要先提交）。
+    public func upsPowerSpans(from: Date, to: Date) throws -> [UPSPowerSpan] {
+        try store.upsPowerSpans(from: from, to: to)
+    }
+
     /// 时段内的断言区间（先不需要提交：断言是即时写入的）。
     public func assertionSpans(from: Date, to: Date) throws -> [PowerAssertionSpan] {
         try store.assertionSpans(from: from, to: to)
@@ -488,6 +568,9 @@ public actor HistoryRecorder {
             try store.rollUpEnergyHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try saveAnchorAndPMGR()
             try saveStorageLabels()
+            if configuration.recordDevices, powerSources != nil {
+                try store.setEncoded(now.timeIntervalSince1970, forKey: Self.upsLastSeenKey)
+            }
             if configuration.recordApps, assertions != nil {
                 try store.setEncoded(now.timeIntervalSince1970, forKey: Self.assertionsLastSeenKey)
             }

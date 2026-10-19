@@ -154,6 +154,9 @@ private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReadi
         try store.writeEnergy([EnergyMinuteRow(minute: 1, joules: 1, covered: 1)])
         try store.setValue("x", forKey: "k")
         #expect(try store.value(forKey: "k") == "x")
+        // schema 4（D84）：UPS 供电区间表
+        _ = try store.openUPSSpan(start: Date(timeIntervalSince1970: 60))
+        #expect(try store.upsPowerSpans(from: .distantPast, to: .distantFuture).count == 1)
     }
 
     @Test func exportsEnergyCSV() throws {

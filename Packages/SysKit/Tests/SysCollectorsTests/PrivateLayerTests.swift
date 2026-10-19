@@ -5,7 +5,7 @@ import Testing
 
 @Suite struct PrivateLayerTests {
     /// 2：应用活动模块加入 IOPMAssertionNotify（D69）。
-    @Test func layerVersionIsTwoForAppActivity() {
+    @Test func layerVersionIsThreeForPowerDevices() {
         #expect(PrivateLayer.version == 3)
     }
 
