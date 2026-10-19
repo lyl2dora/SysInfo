@@ -88,10 +88,11 @@ struct SysInfoCLI {
                 guard let raw = options.value("--pid"), let pid = Int32(raw) else { throw UsageError("rusage 需要 --pid") }
                 exit(runRusage(pid: pid))
             case "ipsref":
-                let options = try Options(arguments, flags: [], values: ["--seconds", "--gap-ms"])
+                let options = try Options(arguments, flags: [], values: ["--seconds", "--runs", "--gap-ms"])
                 exit(
                     runIPSReference(
-                        seconds: try options.double("--seconds", default: 10, range: 3...30),
+                        seconds: try options.double("--seconds", default: 5, range: 3...30),
+                        runs: Int(try options.double("--runs", default: 3, range: 1...5)),
                         gapMs: try options.double("--gap-ms", default: 0, range: 0...1000)))
             case "cores":
                 let options = try Options(arguments, flags: [], values: ["--interval", "--count"])
@@ -249,7 +250,7 @@ struct SysInfoCLI {
               verify freq [--yes]                     分段施加约 17 s 的 CPU 负载，按档对照实际频率通道与内核计数；
                                                       不带 --yes 只打印将要做什么
               rusage --pid PID                        打印进程的 rusage_info_v6 按档计数（一行 JSON，开销测量按 D40 折算用）
-              ipsref [--seconds 10]                   在单核上连续跑采集工作，测最快档每秒指令数（开销测量的折算参照，D80）
+              ipsref [--runs 3] [--seconds 5]         在单核上连续跑采集工作，测最快档每秒指令数，连测取最大（开销测量的折算参照，D80、D86）
               cores [--interval 2] [--count 3]       逐核频率（诊断用），以及每核 tick 忙碌与逐核通道活跃的相关系数（要求 ≥0.99）
               irq [--interval 5] [--count 2] [--rows 10]
                                                       中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
