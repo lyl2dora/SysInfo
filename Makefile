@@ -41,7 +41,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'plat
 
 # 私有 C 层隔离检查的范围（D05、D23）：能经依赖闭包看到 CSysPrivate、但不允许 import 它的源码目录。
 # app 的 App/ 另由 Xcode 的「Check private imports」构建阶段检查。
-PRIVATE_IMPORT_GUARDED := App $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
+PRIVATE_IMPORT_GUARDED := App Widgets WidgetShared $(PACKAGE_PATH)/Sources/sysinfo-cli $(PACKAGE_PATH)/Sources/SysStore
 
 .PHONY: require-remote-host help build run stop test test-hw cli remote-sync remote-cli remote-test remote-app-build remote-app-run remote-app-shot remote-app-clean remote-measure release dist measure strings install clean check-private-imports check-leaks test-scripts
 
@@ -143,11 +143,14 @@ measure:
 
 # 把编译器从代码里提取的文案（.stringsdata）同步进 String Catalog（D23）。xcodebuild 不会自动回写 .xcstrings。
 strings: build
-	@files=$$(find $(DERIVED_DATA)/Build/Intermediates.noindex/SysInfo.build/Debug -name '*.stringsdata' 2>/dev/null); \
-	if [ -z "$$files" ]; then echo "没有找到 .stringsdata，请先 make build" >&2; exit 1; fi; \
-	args=""; for f in $$files; do args="$$args --stringsdata $$f"; done; \
-	xcrun xcstringstool sync App/Localizable.xcstrings $$args
-	@echo "已同步 App/Localizable.xcstrings"
+	@for pair in "SysInfo:App" "SysInfoWidgets:Widgets"; do \
+		target=$${pair%%:*}; dir=$${pair##*:}; \
+		files=$$(find $(DERIVED_DATA)/Build/Intermediates.noindex/SysInfo.build/Debug/$$target.build -name '*.stringsdata' 2>/dev/null); \
+		if [ -z "$$files" ]; then echo "没有找到 $$target 的 .stringsdata，请先 make build" >&2; exit 1; fi; \
+		args=""; for f in $$files; do args="$$args --stringsdata $$f"; done; \
+		xcrun xcstringstool sync $$dir/Localizable.xcstrings $$args || exit 1; \
+		echo "已同步 $$dir/Localizable.xcstrings"; \
+	done
 
 # D74：可分发的 Release 包（签名；设了 NOTARY_PROFILE 或 API key 环境变量时再公证并 staple），产物在 build/dist。
 # CI 推 v* tag 时走同一个脚本并发布到 GitHub Releases。

@@ -77,14 +77,4 @@ import SysModel
         #expect(SelfTestResult(checks: [ok, ok], dataPath: "x").passed)
         #expect(!SelfTestResult(checks: [ok, bad], dataPath: "x").passed)
     }
-
-    @Test func widgetSnapshotRoundTrips() throws {
-        let snapshot = WidgetSnapshot(
-            generatedAt: Date(timeIntervalSince1970: 1_790_000_000),
-            samples: [Sample(id: .cpuUsageTotal, value: 0.1, time: time)])
-        #expect(snapshot.version == WidgetSnapshot.currentVersion)
-        let data = try JSONEncoder().encode(snapshot)
-        #expect(try JSONDecoder().decode(WidgetSnapshot.self, from: data) == snapshot)
-        NoopSnapshotSink().write(snapshot)  // 默认实现什么都不做
-    }
 }

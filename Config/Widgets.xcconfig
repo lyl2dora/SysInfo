@@ -1,0 +1,15 @@
+// 桌面小组件扩展（D90）：在 Debug / Release 的 app 配置之上覆盖扩展专有的项。
+// 由 WidgetsDebug.xcconfig / WidgetsRelease.xcconfig 在 include 对应的 app 配置之后引入。
+
+PRODUCT_NAME = SysInfoWidgets
+PRODUCT_BUNDLE_IDENTIFIER = $(SYSINFO_APP_ID).widgets
+// 扩展必须开沙盒，pkd 会拒绝不开沙盒的扩展（probe A）。
+ENABLE_APP_SANDBOX = YES
+CODE_SIGN_ENTITLEMENTS = Config/SysInfoWidgets.entitlements
+INFOPLIST_FILE = Config/Widgets-Info.plist
+INFOPLIST_KEY_LSUIElement =
+INFOPLIST_KEY_NSPrincipalClass =
+INFOPLIST_KEY_LSApplicationCategoryType =
+ASSETCATALOG_COMPILER_APPICON_NAME =
+SKIP_INSTALL = YES
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks

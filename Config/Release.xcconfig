@@ -1,7 +1,8 @@
 // Release：日用版 SysInfo（D16）。
 #include "Shared.xcconfig"
 
-PRODUCT_BUNDLE_IDENTIFIER = zone.lyl.sysinfo
+SYSINFO_APP_ID = zone.lyl.sysinfo
+PRODUCT_BUNDLE_IDENTIFIER = $(SYSINFO_APP_ID)
 INFOPLIST_KEY_CFBundleDisplayName = SysInfo
 
 // 不注入 get-task-allow：xcodebuild build 默认把 Release 也当开发构建注入它，而公证会拒绝带它的产物（D20）。

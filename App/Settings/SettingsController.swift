@@ -26,6 +26,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case network
     case devices
     case appActivity
+    case widgets
     case history
     case privacy
     case diagnostics
@@ -45,6 +46,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .network: String(localized: "网络")
         case .devices: String(localized: "电源设备")
         case .appActivity: String(localized: "应用活动")
+        case .widgets: String(localized: "桌面小组件")
         case .history: String(localized: "历史与导出")
         case .privacy: String(localized: "隐私")
         case .diagnostics: String(localized: "诊断")
@@ -64,6 +66,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .network: "network"
         case .devices: "minus.plus.batteryblock"
         case .appActivity: "list.bullet.rectangle"
+        case .widgets: "widget.small"
         case .history: "clock.arrow.circlepath"
         case .privacy: "hand.raised"
         case .diagnostics: "stethoscope"

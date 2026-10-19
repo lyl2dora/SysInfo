@@ -1,5 +1,6 @@
 // Debug：SysInfo Dev（D16）。偏好、数据目录、TCC 授权与日用版互相隔离；Debug 构建不注册登录项。
 #include "Shared.xcconfig"
 
-PRODUCT_BUNDLE_IDENTIFIER = zone.lyl.sysinfo.dev
+SYSINFO_APP_ID = zone.lyl.sysinfo.dev
+PRODUCT_BUNDLE_IDENTIFIER = $(SYSINFO_APP_ID)
 INFOPLIST_KEY_CFBundleDisplayName = SysInfo Dev

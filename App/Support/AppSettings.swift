@@ -139,6 +139,7 @@ final class AppSettings {
         static let latencyInterval = "network.latency.interval"
         static let publicIPService = "network.publicIP.service"
         static let historyNetwork = "history.network.enabled"
+        static let widgetRefreshInterval = "widgets.refresh.interval"
         static let deviceBatteryTarget = "devices.widget.battery.target"
         static let historyDevices = "history.devices.enabled"
         static let appActivityInterval = "appActivity.interval"
@@ -617,6 +618,13 @@ final class AppSettings {
         didSet { persist(historyNetworkEnabled, Key.historyNetwork) }
     }
 
+    // MARK: 桌面小组件（D90、D91）
+
+    /// 小组件快照的写入与刷新节奏（D90 W2：出厂每 5 分钟，可选 1 分钟并标注开销）。
+    var widgetRefreshInterval: WidgetRefreshInterval {
+        didSet { persist(widgetRefreshInterval.rawValue, Key.widgetRefreshInterval) }
+    }
+
     // MARK: 电源设备（D84）
 
     /// 电源设备 widget 绑定的设备（默认自动）。
@@ -757,6 +765,8 @@ final class AppSettings {
         latencyInterval = Self.int(defaults, Key.latencyInterval, choices: Self.latencyIntervals) ?? 5
         publicIPService = defaults?.string(forKey: Key.publicIPService) ?? ""
         historyNetworkEnabled = defaults?.object(forKey: Key.historyNetwork) as? Bool ?? true
+        widgetRefreshInterval =
+            defaults?.string(forKey: Key.widgetRefreshInterval).flatMap(WidgetRefreshInterval.init(rawValue:)) ?? .fiveMinutes
         deviceBatteryTarget = defaults?.string(forKey: Key.deviceBatteryTarget).flatMap(DeviceTarget.init(rawValue:)) ?? .auto
         historyDevicesEnabled = defaults?.object(forKey: Key.historyDevices) as? Bool ?? true
         appActivityInterval = Self.int(defaults, Key.appActivityInterval, choices: Self.panelIntervals) ?? 2
@@ -779,6 +789,15 @@ final class AppSettings {
 }
 
 /// 存储 widget 绑定的对象（存储模块设计 §6.1）。键是本地加盐哈希（D54），不含序列号。
+/// 小组件的刷新节奏（D90 W2）。
+enum WidgetRefreshInterval: String, CaseIterable, Identifiable {
+    case fiveMinutes = "5m"
+    case oneMinute = "1m"
+
+    var id: String { rawValue }
+    var seconds: TimeInterval { self == .oneMinute ? 60 : 300 }
+}
+
 enum StorageTarget: Hashable {
     /// 内置盘（盘温、读写）或启动卷所在的容量组（可用空间）。
     case primary

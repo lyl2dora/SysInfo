@@ -3,6 +3,9 @@
 <plist version="1.0">
 <dict>
 	<!-- 与 GENERATE_INFOPLIST_FILE 生成的键合并。git 短哈希由 Makefile 经 SYSINFO_GIT_COMMIT 注入（K30），「关于」页在 Debug 版显示。 -->
+	<!-- 桌面小组件的 App Group 名（D90 W6），运行时由 Info.plist 读，不在代码里拼。 -->
+	<key>SysInfoAppGroup</key>
+	<string>$(SYSINFO_APP_GROUP)</string>
 	<key>SysInfoGitCommit</key>
 	<string>$(SYSINFO_GIT_COMMIT)</string>
 </dict>

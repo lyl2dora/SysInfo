@@ -574,6 +574,8 @@ final class AppServices {
     var openAppActivity: (AppActivityColumn?, AppActivityRange?) -> Void = { _, _ in }
     /// 自动更新（D76）；由 AppDelegate 创建。
     var updater: Updater?
+    /// 桌面小组件的快照写入（D90）；启动后由 app 设置。
+    var widgets: WidgetSnapshotWriter?
     /// 打开设置的「通用」页（面板顶栏的「有新版本」按钮用）。
     var openUpdateSettings: () -> Void = {}
     /// 「中断来源」展开时的需求（D29 C8：每 5 s，收起即停）。

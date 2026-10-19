@@ -61,10 +61,18 @@ grep -q "^TeamIdentifier=${TEAM_ID}$" <<<"${details}" || { echo "Team ID 不是 
 grep -q "^Identifier=${BUNDLE_ID}$" <<<"${details}" || { echo "Bundle ID 不是 ${BUNDLE_ID}" >&2; exit 1; }
 grep -q "flags=.*runtime" <<<"${details}" || { echo "没有开启 Hardened Runtime" >&2; exit 1; }
 grep -q "^Timestamp=" <<<"${details}" || { echo "签名没有安全时间戳" >&2; exit 1; }
-if codesign -d --entitlements - --xml "${app}" 2>/dev/null | grep -q "get-task-allow"; then
-    echo "签名带 get-task-allow，公证会拒绝（D20）" >&2
-    exit 1
-fi
+appex="${app}/Contents/PlugIns/SysInfoWidgets.appex"
+[ -d "${appex}" ] || { echo "缺少小组件扩展 ${appex}（D90）" >&2; exit 1; }
+for bundle in "${app}" "${appex}"; do
+    if codesign -d --entitlements - --xml "${bundle}" 2>/dev/null | grep -q "get-task-allow"; then
+        echo "$(basename "${bundle}") 的签名带 get-task-allow，公证会拒绝（D20）" >&2
+        exit 1
+    fi
+done
+# 扩展必须开沙盒、带与 app 相同的 App Group（D90 W6、probe A）
+ext_ent="$(codesign -d --entitlements - --xml "${appex}" 2>/dev/null)"
+grep -q "com.apple.security.app-sandbox" <<<"${ext_ent}" || { echo "小组件扩展没有开沙盒" >&2; exit 1; }
+grep -q "${TEAM_ID}.${BUNDLE_ID}<" <<<"${ext_ent}" || { echo "小组件扩展的 App Group 不是 ${TEAM_ID}.${BUNDLE_ID}" >&2; exit 1; }
 plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${app}/Contents/Info.plist")"
 [ "${plist_version}" = "${version}" ] || { echo "Info.plist 版本 ${plist_version} 与 ${version} 不一致" >&2; exit 1; }
 

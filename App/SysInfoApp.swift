@@ -165,6 +165,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applySettings()
         }
         applySettings()
+        // 桌面小组件（D90）：有组件放置时才采样、写快照。
+        let widgets = WidgetSnapshotWriter(store: store, settings: settings, history: history, engine: engine)
+        services.widgets = widgets
+        widgets.start()
         throttle.start()
 
         Log.app.info(
@@ -198,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        services?.widgets?.appWillTerminate()
         eventPump?.cancel()
         // D30：退出前立即提交。applicationWillTerminate 返回后进程就结束，所以同步等它完成（最多 2 s）。
         if let history {
@@ -294,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 设置变化后同步到各组件（幂等）。
     private func applySettings() {
         let settings: AppSettings = self.settings
+        services?.widgets?.settingsChanged()
         // 没有风扇的机型不出现风扇 widget（风扇在自检时发现；启动自检结束后会再调一次这里）。
         let hasFans = services?.power.hasFans ?? false
         let widgets = settings.visibleWidgets.filter { $0 != .fan || hasFans }
