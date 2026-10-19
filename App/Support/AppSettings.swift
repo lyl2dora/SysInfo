@@ -37,7 +37,7 @@
 // - network.latency.enabled / .gateway / .custom / .host / .interval   延迟（D61：默认关；间隔 2 / 5 / 10 s，默认 5）
 // - network.publicIP.service   公网 IP 查询服务地址（D62：默认空，第一次点击时填写）
 // - history.network.enabled   是否记录网络历史（D60 N7）
-// - menubar.devices.deviceBattery.visible / .color   电源设备 widget（D84：出厂关）
+// - menubar.devices.deviceBattery.visible / .color   电源设备 widget（D89：没存过时跟随本机有没有 UPS / 电池）
 // - devices.widget.battery.target   电源设备 widget 绑定：auto（UPS → 内置电池 → 电量最低的配件）/ ups / battery / accessoryLowest
 // - history.devices.enabled   是否记录电源设备历史（D84 PD6：主 UPS 的电量、负载、输入电压，供电切换区间）
 // - 旧键 menubar.cpu.coloring / .warningPercent / .criticalPercent（D32 的着色，已由 D43 取消）不再读取
@@ -205,9 +205,14 @@ final class AppSettings {
         case .temperature: cpuTemperatureItemVisible
         case .power: cpuPowerItemVisible
         case .netLatency: latencyEnabled && (powerWidgetsVisible[widget] ?? widget.visibleByDefault)
+        case .deviceBattery: powerWidgetsVisible[widget] ?? devicePresenceDefault
         default: powerWidgetsVisible[widget] ?? widget.visibleByDefault
         }
     }
+
+    /// 电源设备 widget 的出厂开关（D89，取代 D84 的「出厂关」）：用户没动过开关时，跟随本机有没有 UPS 或内置电池
+    /// （去抖后的值，由 `PowerDevicesModel` 给出）；用户切过一次后以用户的选择为准。不持久化。
+    var devicePresenceDefault = false
 
     func setVisible(_ widget: MenuWidget, _ visible: Bool) {
         switch widget {
@@ -689,8 +694,11 @@ final class AppSettings {
         panelChartSpan = defaults?.string(forKey: Key.panelChartSpan).flatMap(ChartSpan.init(rawValue:)) ?? .twoMinutes
         panelSplitUserSystem = defaults?.object(forKey: Key.panelSplitUserSystem) as? Bool ?? true
         powerWidgetsVisible = Dictionary(
-            uniqueKeysWithValues: MenuWidget.allCases.filter { $0.module != .cpu }.map { widget in
-                (widget, defaults?.object(forKey: Key.widgetVisible(widget)) as? Bool ?? widget.visibleByDefault)
+            uniqueKeysWithValues: MenuWidget.allCases.filter { $0.module != .cpu }.compactMap { widget in
+                let stored = defaults?.object(forKey: Key.widgetVisible(widget)) as? Bool
+                // 电源设备 widget 没有存过时不填出厂值，留给 `devicePresenceDefault`（D89）。
+                if widget == .deviceBattery, stored == nil { return nil }
+                return (widget, stored ?? widget.visibleByDefault)
             })
         powerIntervalOverride = defaults.flatMap { SamplingInterval(rawValue: $0.integer(forKey: Key.powerInterval)) }
         powerPanelInterval = Self.int(defaults, Key.powerPanelInterval, choices: Self.panelIntervals) ?? 2
