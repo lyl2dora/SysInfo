@@ -8,11 +8,13 @@
 //   --pad-kb K        快照填充大小
 //   --ballast-mb M    让扩展额外分配 M MB
 //   --exit-after S    S 秒后退出（默认不退出）
+//   --activate        开一个窗口并切到前台（B3）
 import AppKit
 import WidgetKit
 
 final class HostDelegate: NSObject, NSApplicationDelegate {
     var timers: [Timer] = []
+    var window: NSWindow?
 
     func arg(_ name: String) -> Double? {
         let a = CommandLine.arguments
@@ -47,6 +49,16 @@ final class HostDelegate: NSObject, NSApplicationDelegate {
         }
         if reloadEvery > 0 {
             timers.append(Timer.scheduledTimer(withTimeInterval: reloadEvery, repeats: true) { [weak self] _ in self?.reload("every") })
+        }
+        // B3：开一个普通窗口并切到前台，看 chronod 的 containerApp 豁免是否生效
+        if has("--activate") {
+            NSApp.setActivationPolicy(.regular)
+            let w = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 320, height: 120), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            w.title = "Probe host (foreground)"
+            w.makeKeyAndOrderFront(nil)
+            window = w
+            NSApp.activate()
+            Probe.event("host.activate", ["active": NSApp.isActive])
         }
         if let s = arg("--exit-after") {
             DispatchQueue.main.asyncAfter(deadline: .now() + s) {
