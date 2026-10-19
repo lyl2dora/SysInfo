@@ -57,7 +57,8 @@ private struct UPSCard: View {
     /// 主 UPS 才有 HID 遥测与曲线（D84：只给主 UPS 指标）。
     let isPrimary: Bool
 
-    @State private var showsMore = false
+    /// 「更多」默认展开（2026-10-19 用户验收时要求）。
+    @State private var showsMore = true
     @Environment(\.panelLayoutChanged) private var layoutChanged
 
     var body: some View {
@@ -116,9 +117,6 @@ private struct UPSCard: View {
             if let load = telemetry.load {
                 let watts = telemetry.loadPower.map { String(localized: " · 约 \(String(format: "%.0f", $0)) W") } ?? ""
                 row(String(localized: "负载"), DevicesText.percent(load) + watts)
-                if let rated = info?.ratedActivePower {
-                    note(String(localized: "接在这台 UPS 上的所有设备，按额定 \(String(format: "%.0f", rated)) W 估算"))
-                }
             }
             if let input = telemetry.inputVoltage {
                 row(String(localized: "输入电压"), Self.inputText(input, info: info))
@@ -179,10 +177,6 @@ private struct UPSCard: View {
             Text(value).monospacedDigit()
         }
         .font(.panelRow)
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text).font(.panelNote).foregroundStyle(.secondary)
     }
 }
 
