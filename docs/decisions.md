@@ -863,3 +863,10 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 - **App Group 与隐私**（W6）：主 app 与扩展加 Team ID 前缀的 App Group（Release `D8MFB2YNN3.zone.lyl.sysinfo`、Debug `D8MFB2YNN3.zone.lyl.sysinfo.dev`，D02、D16），扩展 bundle ID 为 `<app>.widgets`；扩展开沙盒（必须）。隐私页「数据存放位置」补上组容器。
 - **K53**（W7）：关闭。开发者模式豁免在不重启 chronod 时不生效，且刷新本来没被限流，不做。
 - 开发约束（probe A）：同一 bundle ID 的 app 只能有一份被 LaunchServices 登记，否则 pkd 只认其中之一；组容器受 TCC「App 数据」保护，排查时不从终端直接读。
+
+### D91 桌面小组件的实现细节 · 已定（2026-10-19 用户确认 WS1–WS4 全部按推荐；细化 D90）
+- 依据：`docs/design/widgets.md`。
+- **各尺寸内容**（WS1）：小：CPU 占用、内存占用；中：再加整机功率、SoC 热点温度；大：中号四项 + 网速上下行，加 CPU 占用与整机功率的 24 h 曲线；超大竖版：大号全部 + 内存占用与 SoC 热点的 24 h 曲线、启动盘盘温。
+- **组件内不能自选指标**（WS2）：v1 用 `StaticConfiguration`，以后需要再改。
+- **SysInfo 没在运行时**（WS3）：保留最后的数据并变暗，注明「未运行」与时间，不清空。
+- **设置位置**（WS4）：新开侧栏页「桌面小组件」，放在「历史与导出」前面。
