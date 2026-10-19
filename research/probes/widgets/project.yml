@@ -1,0 +1,57 @@
+# 小组件探针（D87 probe A–E）。xcodegen 只在本机生成探针工程，产物在 out/，不进库。
+# 标识由 build.sh 通过 PROBE_ID / PROBE_GROUP 传入（dev 与 rel 两套）。
+name: WidgetProbe
+options:
+  bundleIdPrefix: zone.lyl.sysinfo
+  deploymentTarget:
+    macOS: "27.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    ARCHS: arm64
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: Developer ID Application
+    DEVELOPMENT_TEAM: D8MFB2YNN3
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: "NO"
+    ENABLE_HARDENED_RUNTIME: "YES"
+    PROBE_ID: zone.lyl.sysinfo.dev.probe
+    PROBE_GROUP: D8MFB2YNN3.zone.lyl.sysinfo.dev.probe
+    PROBE_NAME: SysInfo Probe
+    PROBE_EXT_ENTITLEMENTS: Ext/Ext.entitlements
+targets:
+  ProbeHost:
+    type: application
+    platform: macOS
+    sources: [Host, Shared]
+    dependencies:
+      - target: ProbeWidgets
+        embed: true
+    info:
+      path: Host/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: $(PROBE_NAME)
+        ProbeAppGroup: $(PROBE_GROUP)
+    settings:
+      base:
+        PRODUCT_NAME: SysInfoProbe
+        PRODUCT_BUNDLE_IDENTIFIER: $(PROBE_ID)
+        CODE_SIGN_ENTITLEMENTS: Host/Host.entitlements
+        ENABLE_APP_SANDBOX: "NO"
+  ProbeWidgets:
+    type: app-extension
+    platform: macOS
+    sources: [Ext, Shared]
+    info:
+      path: Ext/Info.plist
+      properties:
+        CFBundleDisplayName: $(PROBE_NAME) Widgets
+        ProbeAppGroup: $(PROBE_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_NAME: ProbeWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: $(PROBE_ID).widgets
+        CODE_SIGN_ENTITLEMENTS: $(PROBE_EXT_ENTITLEMENTS)
+        ENABLE_APP_SANDBOX: "YES"
