@@ -92,9 +92,10 @@ final class StatusItemView: NSView {
 
     private static var deviceLabels: [String] { [deviceLabel(.ups), deviceLabel(.internalBattery), deviceLabel(.accessory)] }
 
-    /// 电池图形：外框 + 正极头，内部按电量填充（D84 PD5）。
-    static let batteryWidth: CGFloat = 14
-    static let batteryHeight: CGFloat = 7
+    /// 电池图形：外框 + 正极头，内部按电量填充；充电时中间镂空一个闪电（D84 PD5）。
+    /// 18 × 9 pt：原先 14 × 7 画不清闪电（2026-10-19 用户验收时提出要看到充电状态）。
+    static let batteryWidth: CGFloat = 18
+    static let batteryHeight: CGFloat = 9
     static let batteryGap: CGFloat = 2
 
     /// 读写 widget 两行前面的字母（同 Stats 的 R / W）。
@@ -423,23 +424,57 @@ final class StatusItemView: NSView {
         let glyph = NSRect(
             x: startX, y: baseline + (font.capHeight - Self.batteryHeight) / 2, width: Self.batteryWidth - 1.5,
             height: Self.batteryHeight)
-        drawBatteryGlyph(in: glyph, level: device?.level, fill: fillColor)
+        drawBatteryGlyph(in: glyph, level: device?.level, fill: fillColor, charging: device?.isCharging == true)
         value.draw(at: NSPoint(x: startX + Self.batteryWidth + Self.batteryGap, y: baseline + font.descender))
         return "\(label) \(valueText)"
     }
 
     /// 外框（模板色）+ 右侧正极头；内部按电量填充，没有电量时只画外框。
-    private func drawBatteryGlyph(in rect: NSRect, level: Double?, fill: NSColor) {
-        let outline = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 1.5, yRadius: 1.5)
+    /// 充电时在中间画闪电：先在外框与填充上挖出比闪电略大的空隙，再画闪电，深浅色菜单栏上都能看清（同系统电池图标）。
+    private func drawBatteryGlyph(in rect: NSRect, level: Double?, fill: NSColor, charging: Bool) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let bolt = Self.boltPath(in: rect)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        let outline = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 2, yRadius: 2)
         outline.lineWidth = 1
         NSColor.labelColor.withAlphaComponent(0.6).setStroke()
         outline.stroke()
         NSColor.labelColor.withAlphaComponent(0.6).setFill()
         NSRect(x: rect.maxX + 0.5, y: rect.midY - 1.5, width: 1, height: 3).fill()
-        guard let level else { return }
-        let inner = rect.insetBy(dx: 1.5, dy: 1.5)
-        fill.setFill()
-        NSRect(x: inner.minX, y: inner.minY, width: max(inner.width * CGFloat(min(max(level, 0), 1)), 1), height: inner.height).fill()
+        if let level {
+            let inner = rect.insetBy(dx: 1.5, dy: 1.5)
+            fill.setFill()
+            NSRect(x: inner.minX, y: inner.minY, width: max(inner.width * CGFloat(min(max(level, 0), 1)), 1), height: inner.height).fill()
+        }
+        if charging {
+            // 挖空：闪电的描边部分清掉下面的外框与填充。
+            context.setBlendMode(.clear)
+            bolt.lineWidth = 2
+            bolt.stroke()
+            context.setBlendMode(.normal)
+        }
+        context.endTransparencyLayer()
+        if charging {
+            NSColor.labelColor.setFill()
+            bolt.fill()
+        }
+    }
+
+    /// 闪电的轮廓，居中放在电池里，略高于电池（上下各出 1 pt）。
+    private static func boltPath(in rect: NSRect) -> NSBezierPath {
+        let h = rect.height + 2
+        let w = h * 0.62
+        let x = rect.midX - w / 2
+        let y = rect.midY - h / 2
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: x + w * 0.62, y: y + h))
+        path.line(to: NSPoint(x: x, y: y + h * 0.42))
+        path.line(to: NSPoint(x: x + w * 0.46, y: y + h * 0.42))
+        path.line(to: NSPoint(x: x + w * 0.38, y: y))
+        path.line(to: NSPoint(x: x + w, y: y + h * 0.58))
+        path.line(to: NSPoint(x: x + w * 0.54, y: y + h * 0.58))
+        path.close()
+        return path
     }
 
     /// 文字起点的横坐标对齐到设备像素。居中算出的起点带小数（如 5.54 pt），在 1x 屏上字形会被抗锯齿摊到相邻像素，
