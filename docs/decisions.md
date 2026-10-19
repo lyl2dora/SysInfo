@@ -850,3 +850,16 @@ P1 实现。只在面板打开时调用 `/usr/bin/nettop`（约 20 ms/次），�
 - 跟随是持续的：设备出现立刻显示；消失持续 10 s 才隐藏（UPS 的 USB 重新枚举、IOPS 重建快照时不闪）。
 - 首次上屏：启动时 `PowerSourceMonitor.latest` 同步读一次 IOPS（约 18 µs），在第一次布局菜单栏之前就知道有没有设备，widget 与其他出厂 widget 同一次布局创建（2026-10-19 实测：M5 有 UPS 时 6 个 widget 在 12 ms 内依次创建、同一帧淡入；M4 无设备时只有 5 个出厂 widget）。开机自启时 USB UPS 还没枚举完的话，设备出现时再补上。
 - 出厂默认档的开销：有 UPS 的机器多一个事件驱动的 widget，待小组件 probe 结束后在 M5 上 `make measure` 复核（D80、D86）。
+
+## 2026-10-19（桌面小组件能力边界）
+
+### D90 桌面小组件的能力边界 · 已定（2026-10-19 用户确认 W1–W7 全部按推荐；落实 D07、K31，关闭 K53）
+- 依据：`docs/design/widgets-boundary.md`（2026-10-19 probe A–E，本机实测；M4 已验证扩展被接受、host 访问组容器不弹窗，扩展侧渲染待补测）。
+- **组件**（W1）：一个「总览」组件，支持小 / 中 / 大 / 超大竖版，内容随尺寸递增（小：一两项核心数值；中：四项；大与超大竖版：加 24 h 分钟曲线）。不按模块各做一个。
+- **刷新**（W2）：出厂每 5 分钟（timeline `.after`），设置里可选 1 分钟并标注开销（D19）。主进程只在有组件放置时（`currentConfigurations` 非空）才写快照、才主动刷新。依据：第三方组件的刷新不受 30–45 分钟的限制（probe B），但每分钟刷新时扩展单独约占 0.35% 单核（§7）。
+- **点击刷新**（W3）：组件上放刷新按钮，intent 用 `allowedExecutionTargets = .main` 在主进程执行，现采一次、写快照、刷新组件；不计预算（probe C）。
+- **Control**（W4）：这次不做，组件做完再定。
+- **快照**（W5）：各指标的当前值与数据质量状态（D24），加最近 24 h 的分钟曲线；不放设备唯一标识（D22）。格式沿用 `WidgetSnapshot`，按需要增加字段并递增版本。
+- **App Group 与隐私**（W6）：主 app 与扩展加 Team ID 前缀的 App Group（Release `D8MFB2YNN3.zone.lyl.sysinfo`、Debug `D8MFB2YNN3.zone.lyl.sysinfo.dev`，D02、D16），扩展 bundle ID 为 `<app>.widgets`；扩展开沙盒（必须）。隐私页「数据存放位置」补上组容器。
+- **K53**（W7）：关闭。开发者模式豁免在不重启 chronod 时不生效，且刷新本来没被限流，不做。
+- 开发约束（probe A）：同一 bundle ID 的 app 只能有一份被 LaunchServices 登记，否则 pkd 只认其中之一；组容器受 TCC「App 数据」保护，排查时不从终端直接读。
