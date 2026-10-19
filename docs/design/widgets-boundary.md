@@ -1,6 +1,6 @@
 # 桌面小组件能力边界（讨论稿）
 
-> 日期：2026-10-19 · 状态：**probe 进行中**（A、C、D 已测完；B 前两小时已有结论，24 h 上限在测；E 待定） · 分支：`module/widgets`
+> 日期：2026-10-19 · 状态：**probe 进行中**（A、C、D 已测完；B 前两小时已有结论，24 h 上限在测；E 已测完） · 分支：`module/widgets`
 > 依据 D87。结论定下来之后，要拍板的问题列在 §6，拍板后追加为新的 D 条目，再另写实现规格。
 
 ## 1. 目的与口径
@@ -73,6 +73,12 @@ P2 的桌面小组件（D07）开工前的 probe。9-28 的 gap 探针只验证�
 - 待测：显示器睡眠 / 锁屏时 chronod 是否暂停刷新；带电池的机型由电池供电时预算是否收紧（目标设备里暂时没有）。
 - B3（host 在前台时 `containerApp` 豁免）：只有预算会被用完时才有意义，等 B2 撞上上限再测。
 
-## 6. E：开发者模式豁免（待测）
+## 6. E：开发者模式豁免（K53）
 
-chronod 里有 `widgetKitDeveloperModeEnabled` 与豁免原因 `widgetKitDeveloperMode-and-extensionIsBeingDeveloped`，ChronoKit 里有 `com.apple.security.get-task-allow`。用户已同意本次修改 `com.apple.chronod` 偏好，测完恢复（D87）。测试前该键不存在。
+chronod 里有 `widgetKitDeveloperModeEnabled` 与豁免原因 `widgetKitDeveloperMode-and-extensionIsBeingDeveloped`，ChronoKit 里有 `com.apple.security.get-task-allow`。用户同意本次修改 `com.apple.chronod` 偏好、测完恢复（D87）。
+
+- 21:47 给 rel 换上带 get-task-allow 的扩展（`build.sh reldevmode`），host 每 60 s 主动刷新；21:47:40 写入 `widgetKitDeveloperModeEnabled = YES`（修改前该键不存在）。
+- 之后 3 分钟里每次刷新仍是 `externalRequest … budgeted` / `timelineExhausted … budgeted`，日志里**没有** `Ignoring budget … due to widgetKitDeveloperModeEnabled`。
+- 可能原因：chronod 只在启动时读这个偏好；或「extensionIsBeingDeveloped」要求扩展由 Xcode 调试启动。chronod 是系统进程，按 D18 不结束、不重启它，到此为止。
+- 21:51 已恢复：删除该键，复查为「不存在」，与修改前一致。rel 随后换回不带 get-task-allow 的普通构建。
+- 结论：这条路在不重启 chronod 的前提下不生效；而 B 显示第三方组件的刷新本来就没被限流，**豁免没有必要**。建议 K53 关闭：不做开发者模式豁免。
