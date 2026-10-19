@@ -156,8 +156,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         services.storageModel.onStructureChange = { [weak self] in self?.applySettings() }
         // 接口增减、主接口切换：网速 widget 绑定的接口是物理还是虚拟，要重新解析。
         services.networkModel.onStructureChange = { [weak self] in self?.applySettings() }
-        // 电源设备出现或全部消失：面板切换器里的「电源」tab 随之出现或隐藏（D84 PD5）。
-        services.devicesModel.onPresenceChange = { [weak self] in self?.applySettings() }
+        // 电源设备出现或全部消失：面板切换器里的「电源」tab 随之出现或隐藏（D84 PD5）；
+        // UPS / 内置电池的有无（去抖后）决定电源设备 widget 的出厂开关（D89）。第一次布局前已经有值。
+        settings.devicePresenceDefault = services.devicesModel.hasUPSOrBattery
+        services.devicesModel.onPresenceChange = { [weak self] in
+            guard let self else { return }
+            self.settings.devicePresenceDefault = self.services.devicesModel.hasUPSOrBattery
+            self.applySettings()
+        }
         applySettings()
         throttle.start()
 

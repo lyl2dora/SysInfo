@@ -195,6 +195,9 @@ public struct PowerDeviceSnapshot: Hashable, Codable, Sendable {
 
     public var accessories: [PowerDevice] { devices.filter { $0.kind == .accessory } }
 
+    /// 本机有 UPS 或内置电池（D89：电源设备 widget 的出厂开关按它定；配件连断频繁，不算）。
+    public var hasUPSOrBattery: Bool { primaryUPS != nil || internalBattery != nil }
+
     public func device(_ key: PowerDeviceKey) -> PowerDevice? { devices.first { $0.key == key } }
 }
 
@@ -328,4 +331,37 @@ extension MetricID {
 extension UnavailableReason {
     /// 没有这个设备（例如 HID 匹配不到 UPS）。
     public static func noDevice(_ detail: String? = nil) -> Self { Self(code: "noDevice", detail: detail) }
+}
+
+/// 设备在不在的去抖（D89）：出现立刻为真；消失要持续 `hideDelay` 才变假，
+/// 免得 UPS 的 USB 重新枚举、IOPS 重建快照时 widget 闪一下、旁边的 item 跟着跳。
+public struct PresenceLatch: Sendable, Equatable {
+    public static let defaultHideDelay: TimeInterval = 10
+
+    public private(set) var value: Bool
+    /// 观察到消失的时刻；设备回来时清掉。
+    public private(set) var absentSince: Date?
+    public let hideDelay: TimeInterval
+
+    public init(initial: Bool, hideDelay: TimeInterval = PresenceLatch.defaultHideDelay) {
+        value = initial
+        self.hideDelay = hideDelay
+    }
+
+    /// 喂一次观察结果，返回去抖后的值。
+    @discardableResult
+    public mutating func update(present: Bool, at now: Date) -> Bool {
+        if present {
+            value = true
+            absentSince = nil
+        } else if value {
+            let since = absentSince ?? now
+            absentSince = since
+            if now.timeIntervalSince(since) >= hideDelay { value = false; absentSince = nil }
+        }
+        return value
+    }
+
+    /// 还在等的话，什么时候该再检查一次（到点再喂一次 `present: false`）。
+    public var pendingDeadline: Date? { absentSince.map { $0.addingTimeInterval(hideDelay) } }
 }
