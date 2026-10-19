@@ -174,7 +174,7 @@ enum WidgetInfo {
         case .netLatency:
             return String(localized: "到所选目标的 ICMP 往返时间。只有在下方开启「延迟」后才可用，按延迟的发包间隔更新。")
         case .deviceBattery:
-            return String(localized: "所选设备的电量；UPS 由电池供电时改为剩余时间。数值随系统电源通知更新，几乎没有开销。")
+            return String(localized: "所选设备的电量；UPS 由电池供电时改为剩余时间。数值随系统电源通知更新，几乎没有开销。没有动过这个开关时，本机有 UPS 或内置电池就显示，没有就不显示。")
         }
     }
 }

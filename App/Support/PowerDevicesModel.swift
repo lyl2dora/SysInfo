@@ -25,11 +25,17 @@ final class PowerDevicesModel {
     private(set) var snapshot: PowerDeviceSnapshot = .empty
     /// 主 UPS 的 HID 读数（面板可见、历史记录时才有更新）。
     private(set) var upsReading: UPSTelemetryCollector.Reading?
-    /// 设备的有无变了（第一台出现或最后一台消失）：面板切换器、widget 绑定要更新。
+    /// 本机有没有 UPS 或内置电池，去抖后（出现立刻为真，消失 10 s 后才为假）。
+    /// 电源设备 widget 的开关用户没动过时按它定（D89）。启动时第一份快照直接定值，不等去抖。
+    private(set) var hasUPSOrBattery = false
+    /// 设备的有无变了（第一台出现或最后一台消失，或去抖后的 UPS / 电池有无变了）：面板切换器、widget 开关与绑定要更新。
     @ObservationIgnored var onPresenceChange: (() -> Void)?
     @ObservationIgnored private var observation: PowerSourceMonitor.Observation?
+    @ObservationIgnored private var presence: PresenceLatch?
+    @ObservationIgnored private var hideTimer: Timer?
 
-    /// 开始跟随监视器（启动时调用一次）。
+    /// 开始跟随监视器（启动时调用一次）。`monitor.latest` 在还没有快照时当场读一次 IOPS（约 18 µs），
+    /// 所以第一次布局菜单栏之前就知道有没有 UPS / 电池，widget 与其他 widget 一起上屏。
     func start(monitor: PowerSourceMonitor = .shared) {
         guard observation == nil else { return }
         observation = monitor.observe { [weak self] snapshot in
@@ -42,10 +48,33 @@ final class PowerDevicesModel {
 
     private func apply(_ snapshot: PowerDeviceSnapshot) {
         let hadDevices = !self.snapshot.devices.isEmpty
-        guard snapshot.devices != self.snapshot.devices || snapshot.accessoriesAvailable != self.snapshot.accessoriesAvailable
-        else { return }
-        self.snapshot = snapshot
-        if hadDevices != !snapshot.devices.isEmpty { onPresenceChange?() }
+        let changed = snapshot.devices != self.snapshot.devices || snapshot.accessoriesAvailable != self.snapshot.accessoriesAvailable
+        if changed { self.snapshot = snapshot }
+        let presenceChanged = updatePresence()
+        if (changed && hadDevices != !snapshot.devices.isEmpty) || presenceChanged { onPresenceChange?() }
+    }
+
+    /// 把当前快照喂给去抖；还在等消失确认时排一个到点的复查。返回去抖后的值是否变了。
+    @discardableResult
+    private func updatePresence() -> Bool {
+        let present = snapshot.hasUPSOrBattery
+        var latch = presence ?? PresenceLatch(initial: present)
+        let value = latch.update(present: present, at: Date())
+        presence = latch
+        hideTimer?.invalidate()
+        hideTimer = nil
+        if let deadline = latch.pendingDeadline {
+            hideTimer = Timer.scheduledTimer(withTimeInterval: max(deadline.timeIntervalSinceNow, 0) + 0.05, repeats: false) {
+                [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.updatePresence() else { return }
+                    self.onPresenceChange?()
+                }
+            }
+        }
+        guard value != hasUPSOrBattery else { return false }
+        hasUPSOrBattery = value
+        return true
     }
 
     func updateUPS(_ reading: UPSTelemetryCollector.Reading?) {
