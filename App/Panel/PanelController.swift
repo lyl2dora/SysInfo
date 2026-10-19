@@ -726,13 +726,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         frame.size.height = height
         if presentation == .anchored {
             frame = anchoredFrame(for: frame.size)
-        } else if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
-            // 浮窗向下长到屏幕可见区域以外（被程序坞挡住）时，整体往上挪，但顶边不超出可见区域。
-            let margin = Self.screenMargin
-            if frame.minY < visible.minY + margin {
-                frame.origin.y = min(visible.minY + margin, visible.maxY - margin - frame.height)
-            }
         }
+        // 浮窗（D85）：顶边始终不动，换页只改底边；高度上限已按「当前顶边到可用区域底边」截住，超出时内容区滚动。
         panel.setFrame(frame, display: true)
     }
 
@@ -785,8 +780,10 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
             let anchorFrame = validAnchor ?? NSRect(x: visible.maxX, y: visible.maxY, width: 0, height: 0)
             cap = Self.anchoredTop(anchorFrame: anchorFrame, visible: visible) - (visible.minY + Self.screenMargin)
         } else {
+            // D85：浮窗原地不动，上限是从当前顶边到可用区域底边（原 D66 为整个可用区域的高度，超出时整块上挪）。
             let visible = (panel?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-            cap = visible.height - 2 * Self.screenMargin
+            let top = min(panel?.frame.maxY ?? visible.maxY - Self.screenMargin, visible.maxY - Self.screenMargin)
+            cap = top - (visible.minY + Self.screenMargin)
         }
         let rounded = floor(max(cap, 300))
         if state.maxPanelHeight != rounded { state.maxPanelHeight = rounded }
