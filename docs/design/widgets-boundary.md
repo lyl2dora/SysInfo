@@ -77,8 +77,8 @@ P2 的桌面小组件（D07）开工前的 probe。9-28 的 gap 探针只验证�
 
 chronod 里有 `widgetKitDeveloperModeEnabled` 与豁免原因 `widgetKitDeveloperMode-and-extensionIsBeingDeveloped`，ChronoKit 里有 `com.apple.security.get-task-allow`。用户同意本次修改 `com.apple.chronod` 偏好、测完恢复（D87）。
 
-- 21:47 给 rel 换上带 get-task-allow 的扩展（`build.sh reldevmode`），host 每 60 s 主动刷新；21:47:40 写入 `widgetKitDeveloperModeEnabled = YES`（修改前该键不存在）。
+- 21:49 给 rel 换上带 get-task-allow 的扩展（`build.sh reldevmode`），host 每 60 s 主动刷新；21:49:46 写入 `widgetKitDeveloperModeEnabled = YES`（修改前该键不存在）。
 - 之后 3 分钟里每次刷新仍是 `externalRequest … budgeted` / `timelineExhausted … budgeted`，日志里**没有** `Ignoring budget … due to widgetKitDeveloperModeEnabled`。
 - 可能原因：chronod 只在启动时读这个偏好；或「extensionIsBeingDeveloped」要求扩展由 Xcode 调试启动。chronod 是系统进程，按 D18 不结束、不重启它，到此为止。
-- 21:51 已恢复：删除该键，复查为「不存在」，与修改前一致。rel 随后换回不带 get-task-allow 的普通构建。
+- 21:52:58 已恢复：删除该键，复查为「不存在」，与修改前一致。rel 随后换回不带 get-task-allow 的普通构建。
 - 结论：这条路在不重启 chronod 的前提下不生效；而 B 显示第三方组件的刷新本来就没被限流，**豁免没有必要**。建议 K53 关闭：不做开发者模式豁免。
