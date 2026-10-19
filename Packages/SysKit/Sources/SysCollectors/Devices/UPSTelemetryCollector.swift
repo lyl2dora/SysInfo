@@ -4,7 +4,8 @@
 // - 报告由内核解析：每个报告只对其中一个元素用 `kIOHIDDeviceGetValueWithUpdate`，其余元素读内核刚更新的值；
 // - 每次采样读常用项（电量、剩余时间、负载、输入 / 电池电压、状态位）；额定值、阈值、生产日期、自检结果在设备接入
 //   与 `refreshStatic()`（面板打开时）读一次；
-// - 只在有需求时打开 HID manager，60 s 没有采样就关闭；
+// - 只在有需求时打开 HID manager，180 s 没有采样就关闭。要长于历史的 60 s 间隔，否则后台每次采样都赶上刚关闭，
+//   每分钟重开一次（重新枚举设备与约 260 个元素、重读静态项）。开着闲置时不占 CPU（实测 20 s 不到 0.2 ms）；
 // - 自检：HID 的电量、输入电压与 IOPS 的同一台 UPS 对照（IOPS 就是系统从同一台设备读的）。没有 UPS 时通过（无设备不是失败）。
 //   运行中连续 3 次对照不一致 → 输出不可用，引擎随后复检。
 
@@ -21,8 +22,8 @@ public final class UPSTelemetryCollector: Collector {
     static let chargeTolerance = 0.02
     static let voltageTolerance = 2.0
     static let mismatchLimit = 3
-    /// 这么久没有采样就关掉 HID manager。
-    static let idleClose: DispatchTimeInterval = .seconds(60)
+    /// 这么久没有采样就关掉 HID manager（长于历史的 60 s 间隔，后台采样之间不关）。
+    static let idleClose: DispatchTimeInterval = .seconds(180)
 
     public var id: CollectorID { Self.collectorID }
     public var lane: CollectorLane { .blocking }
@@ -274,7 +275,7 @@ public final class UPSTelemetryCollector: Collector {
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
                 let idle = self.state.withLock { s in
-                    s.lastSample.map { ContinuousClock.now - $0 >= .seconds(59) } ?? true
+                    s.lastSample.map { ContinuousClock.now - $0 >= .seconds(179) } ?? true
                 }
                 guard idle else { return }
                 self.hidLock.withLock { self.closeManagerLocked() }

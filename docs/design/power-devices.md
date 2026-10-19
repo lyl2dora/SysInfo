@@ -126,7 +126,7 @@ CFRunLoopSourceRef csp_ps_acc_notify_create(void (*callback)(void *), void *cont
 
 ### 4.3 `UPSTelemetryCollector`（`devices.ups`，blocking）
 
-- HID：公开 IOHIDManager，匹配 `PrimaryUsagePage = 0x84`，只用 `IOHIDDeviceGetReport(kIOHIDReportTypeFeature)`；匹配回调维护设备列表（接入 / 移除时重建元素表、清空静态信息）。只在有需求时打开 manager，需求消失 60 s 后关闭。
+- HID：公开 IOHIDManager，匹配 `PrimaryUsagePage = 0x84`，只用 `IOHIDDeviceGetReport(kIOHIDReportTypeFeature)`；匹配回调维护设备列表（接入 / 移除时重建元素表、清空静态信息）。只在有需求时打开 manager，180 s 没有采样后关闭（偏离记录）。
 - 元素表：遍历 feature 元素，按（父集合 usage、usage）建索引；同一项有多份时按 PowerSummary → Battery → PresentStatus → 其他集合的优先级取一份；记下它的报告 ID 与位偏移（按元素顺序累加 `ReportSize × ReportCount`，报告首字节是报告 ID）。
 - 取值：读到的位段按 `logicalMinimum < 0` 决定有无符号（实测 8 位的 230 不能读成 −26）；单位按元素的 `unit` 与 `unitExponent` 换算（电压 0xf0d121 → V，功率 0xd121 → W，时间 0x1001 → s）；单位缺失时按 HID 电源设备规范的默认单位，并在诊断页标注。
 - 每次采样读常用报告（含电量与剩余时间、状态位、输入电压、负载、电池电压，M5 上 9 个报告，约 0.22 ms CPU、墙钟约 3 ms）；静态项在设备接入、`refreshStatic()`（面板打开时 app 调用）时读一次。
@@ -213,4 +213,10 @@ ThrottleMonitor 的「UPS / 电池放电」信号（K20）保持原样，不改�
 
 ## 11. 偏离记录
 
-（实现中追加）
+- 2026-10-19：HID 取值改由内核解析（§4.3 原写按元素顺序自己算位偏移）。每个报告只对其中一个元素用 `IOHIDDeviceGetValueWithOptions(…, withUpdate)` 发一次 GET_REPORT，同一报告的其余元素用 `withoutUpdate` 读内核刚更新的值。不依赖「元素枚举顺序 = 报告里的位序」这个假设，填充位也不用管。M5 实测与 IOPS 对照一致，8 位的输入额定电压读成 230（没有被当成有符号数）。
+- 2026-10-19：UPS 名字带固件号（APC：「Back-UPS RS 1000G FW:899.L2 .I USB FW:L2」），面板标题被中间截断。标题只取「 FW:」之前的型号，固件号放进 UPS 卡的「更多」。
+- 2026-10-19：配件的部件名改按角色显示（左耳 / 右耳 / 充电盒）。系统给的部件名是「AirPods Pro 🅛」这种，与设备名重复。
+- 2026-10-19：面板切换器多了「电源」后共 8 项，360 pt 宽里两字标签被折成两行。超过 7 项时把每项左右留白从 8 pt 收到 3 pt，并限制为单行（自查截图发现）。
+- 2026-10-19：菜单栏电池图形不画充电闪电（§6.1）。图形只有 7 pt 高，闪电画不清；充电状态在面板里看。
+- 2026-10-19：HID manager 的空闲关闭由 60 s 改为 180 s（§4.3）。60 s 与历史的采样间隔相同，后台每次采样都赶上刚关闭，每分钟要重开一次；开着闲置时实测不占 CPU。
+- 2026-10-19：诊断页打开时也登记电源设备的需求（IOPS 2 s，有 UPS 时 HID 2 s），与其他模块的诊断读数一致。
