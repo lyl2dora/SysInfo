@@ -90,11 +90,14 @@ if [ "${REMOTE_MODE}" = "1" ]; then
     sign_args=(CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
 fi
 
-echo "==> 构建 Release 配置（Bundle ID 改为 zone.lyl.sysinfo.dev）"
+# 标识用 SYSINFO_APP_ID 覆盖：app、小组件扩展与 App Group 都从它派生（直接覆盖 PRODUCT_BUNDLE_IDENTIFIER 会让扩展与 app 同 ID）。
+# 用 .dev.measure 而不是 .dev：同一 bundle ID 有两份时 pkd 只认其中一份（D90），会和桌面上 Debug 版的小组件抢登记。
+# 这份副本没有放置小组件，测到的就是出厂情况（小组件写入器闲着）。
+echo "==> 构建 Release 配置（标识改为 zone.lyl.sysinfo.dev.measure）"
 xcodebuild -project SysInfo.xcodeproj -scheme SysInfo -configuration Release \
     -destination 'platform=macOS,arch=arm64' -derivedDataPath "${derived_data}" \
     CURRENT_PROJECT_VERSION="${build_number}" SYSINFO_GIT_COMMIT="${git_commit}" \
-    PRODUCT_BUNDLE_IDENTIFIER=zone.lyl.sysinfo.dev INFOPLIST_KEY_CFBundleDisplayName="SysInfo Dev" \
+    SYSINFO_APP_ID=zone.lyl.sysinfo.dev.measure INFOPLIST_KEY_CFBundleDisplayName="SysInfo Dev" \
     ${sign_args[@]+"${sign_args[@]}"} build -quiet
 [ -x "${exe}" ] || { echo "构建产物不存在：${exe}" >&2; exit 1; }
 
