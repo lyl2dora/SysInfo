@@ -29,3 +29,9 @@
 - `appact_density.c`：每分钟活跃应用密度、各列 Top-K 并集的覆盖率与行数，以及应用能耗合计（槽位 11+41+39）对 SMC `PZC0` / `PDTR` 的覆盖。
 - `appact_cost.c`：应用活动窗口全表刷新（约 660 个 coalition）在 1 / 2 / 5 s 真实节奏下的开销。
 - 编译：`xcrun clang -O2 -framework IOKit -framework CoreFoundation <x>.c -o <x>`（`appact_*` 引用 `../cpu-module/processes/coal.h`）。结论见 `docs/design/app-activity.md` §1。输出（`out/`）按 `.gitignore` 只留在本地。
+
+## power-devices/（2026-10-19，P1 电源设备模块边界）
+- `iops_watch.swift`：IOPS 电源清单（公开列表与私有 `IOPSCopyPowerSourcesByType`）、单次读取开销、公开与配件两路变化通知的频率。按键名脱敏 `Accessory Identifier` 等标识。
+- `ups_corehid.swift`：公开 CoreHID 按 page 0x84 匹配 UPS，列元素、读全部 feature 值并按 HID 单位换算，测全量与常用项的读取开销。
+- `ups_iohid.c`：同样的读取改用公开 IOHIDManager / IOHIDDevice（C），对照开销。
+- 编译输出在 `out/`，与原始输出一起按 `.gitignore` 只留在本地。结论见 `docs/design/power-devices-boundary.md`。
