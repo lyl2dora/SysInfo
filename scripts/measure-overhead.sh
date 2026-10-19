@@ -3,7 +3,7 @@
 #
 # 用 Release 配置构建 app，按四档各测一次，结果追加到 docs/perf/cpu.md：
 #   0. 基线：不运行 SysInfo；
-#   1. 出厂默认配置：CPU 占用、整机功率、内存占用、盘温与网速五个 item（D38、D44、D51、D54、D60），面板关闭，历史与能耗记录开启（--factory-defaults 时历史库在临时目录）；
+#   1. 出厂默认配置：CPU 占用、整机功率、内存占用、盘温与网速五个 item（D38、D44、D51、D54、D60；本机有 UPS 或电池时再加电源设备，D89），面板关闭，历史与能耗记录开启（--factory-defaults 时历史库在临时目录）；
 #   2. 面板打开：CPU tab 可见（含 Top N 5 行），固定为浮窗（--open-panel --pin-panel），测量期间点别处也不会关；
 #   3. 面板打开且「详情」「中断来源」展开（再加 --expand-details），面板内最重的一档；
 #   power：面板打开且在「功耗与散热」tab（--panel-tab=power，功耗与散热模块设计 §1 第 8 项）；
@@ -296,7 +296,7 @@ fi
         IFS=$'\t' read -r label app_pct score equiv cyc p0share mw mba_pct ws_pct footprint mips p0gips note <<<"${row}"
         case "${label}" in
             baseline) name="基线（不运行 SysInfo）" ;;
-            default) name="出厂默认（CPU 占用、整机功率、内存占用、盘温、网速五个 item，面板关闭，历史与能耗开启）" ;;
+            default) name="出厂默认（CPU 占用、整机功率、内存占用、盘温、网速五个 item，有 UPS / 电池时加电源设备（D89），面板关闭，历史与能耗开启）" ;;
             panel) name="面板打开（CPU tab，Top N 5 行）" ;;
             details) name="面板打开 + 详情与中断来源展开" ;;
             power) name="面板打开（功耗与散热 tab）" ;;
