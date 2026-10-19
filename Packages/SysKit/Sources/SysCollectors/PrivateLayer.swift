@@ -7,7 +7,7 @@ internal import CSysPrivate
 
 /// 私有 C 层的元信息，供诊断页和 sysinfo-cli 显示。
 public enum PrivateLayer: Sendable {
-    /// 链接到的私有 C 层接口版本号。M0 为 0（只有占位）；CPU 模块从 1 开始；应用活动（D69）为 2。
+    /// 链接到的私有 C 层接口版本号。M0 为 0（只有占位）；CPU 模块从 1 开始；应用活动（D69）为 2；电源设备（D84）为 3。
     public static var version: UInt32 {
         csp_layer_version()
     }
@@ -20,12 +20,15 @@ public enum PrivateLayer: Sendable {
         public var smc: Bool
         /// 电源断言变化通知的登记函数（IOPMAssertionNotify，D69）。
         public var assertionNotify: Bool
+        /// 配件电源（IOPSCopyPowerSourcesByType，D84）。
+        public var accessoryPowerSources: Bool
     }
 
     public static func availability() -> Availability {
         Availability(
             ioReport: IOReportHub.shared.isAvailable,
             coalition: CoalitionReader.isAvailable,
-            smc: (try? SMCReader().open()) != nil, assertionNotify: csp_pm_available() != 0)
+            smc: (try? SMCReader().open()) != nil, assertionNotify: csp_pm_available() != 0,
+            accessoryPowerSources: csp_ps_available() != 0)
     }
 }

@@ -22,7 +22,7 @@
 extern "C" {
 #endif
 
-#define CSP_LAYER_VERSION 2
+#define CSP_LAYER_VERSION 3
 
 /// 私有 C 层的接口版本号，诊断页和 sysinfo-cli 据此确认链接到的是哪一版私有层。
 uint32_t csp_layer_version(void);
@@ -160,6 +160,22 @@ int csp_pm_available(void);
 
 /// 向 powerd 登记 notify(3) 名字 `name` 的断言变化通知（kIOPMNotifyRegister）。成功返回 0（IOReturn）；不可用返回 -1。
 int csp_pm_assertion_notify_register(const char * _Nonnull name);
+
+// MARK: - 电源设备（私有 IOPS，D22、D84）
+
+/// IOPSCopyPowerSourcesByType 已解析到。
+int csp_ps_available(void);
+
+/// 按类型复制电源列表（0 = 全部：UPS、内置电池、配件）。返回的 blob 交给公开的 IOPSCopyPowerSourcesList 解析。
+/// 不可用或失败返回 NULL。调用方负责释放。
+CFTypeRef _Nullable csp_ps_copy_by_type(int type) CF_RETURNS_RETAINED;
+
+/// IOPSAccNotificationCreateRunLoopSource 已解析到。
+int csp_ps_acc_notify_available(void);
+
+/// 配件电源变化通知的 run loop source（回调在挂上它的 run loop 上执行）。不可用或失败返回 NULL。调用方负责释放。
+CFRunLoopSourceRef _Nullable csp_ps_acc_notify_create(void (* _Nonnull callback)(void * _Nullable),
+                                                      void * _Nullable context) CF_RETURNS_RETAINED;
 
 #ifdef __cplusplus
 }
