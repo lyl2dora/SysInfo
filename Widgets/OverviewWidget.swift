@@ -13,10 +13,12 @@ struct OverviewEntry: TimelineEntry {
 }
 
 struct OverviewProvider: TimelineProvider {
-    func placeholder(in context: Context) -> OverviewEntry { OverviewEntry(date: .now, snapshot: nil) }
+    func placeholder(in context: Context) -> OverviewEntry { OverviewEntry(date: .now, snapshot: .sample(at: .now)) }
 
+    /// 图库预览：还没有快照时给示例数据，免得列表里只有一句「打开 SysInfo」。
     func getSnapshot(in context: Context, completion: @escaping @Sendable (OverviewEntry) -> Void) {
-        completion(entry())
+        let e = entry()
+        completion(context.isPreview && e.snapshot == nil ? OverviewEntry(date: .now, snapshot: .sample(at: .now)) : e)
     }
 
     func getTimeline(in context: Context, completion: @escaping @Sendable (Timeline<OverviewEntry>) -> Void) {
@@ -187,7 +189,9 @@ struct CurveRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ForEach(slots, id: \.self) { slot in
-                CurveChart(slot: slot, item: snapshot.item(slot), historyEnabled: snapshot.historyEnabled)
+                CurveChart(
+                    slot: slot, item: snapshot.item(slot), historyEnabled: snapshot.historyEnabled,
+                    generatedAt: snapshot.generatedAt)
             }
         }
     }
@@ -197,6 +201,11 @@ struct CurveChart: View {
     let slot: WidgetSlot
     let item: WidgetSnapshot.Item?
     let historyEnabled: Bool
+    let generatedAt: Date
+
+    private var xDomain: ClosedRange<Date> {
+        generatedAt.addingTimeInterval(historyEnabled ? -86_400 : -900)...generatedAt
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -204,20 +213,25 @@ struct CurveChart: View {
                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             let points = item?.curve ?? []
             if points.count > 1 {
+                // 横轴用时间、范围固定为最近 24 h（或 15 min）：数值轴的自动范围会把 0 包进去，
+                // 「Unix 分钟」那样的大数会全挤到最右边；固定范围也让 app 没运行的空档如实留白。
                 Chart(points, id: \.minute) { p in
-                    AreaMark(x: .value("时间", p.minute), y: .value("数值", p.value))
+                    AreaMark(x: .value("时间", p.date), y: .value("数值", p.value))
                         .foregroundStyle(.tint.opacity(0.25))
-                    LineMark(x: .value("时间", p.minute), y: .value("数值", p.value))
+                    LineMark(x: .value("时间", p.date), y: .value("数值", p.value))
                         .lineStyle(StrokeStyle(lineWidth: 1.2))
                 }
+                .chartXScale(domain: xDomain)
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .chartYScale(domain: yDomain(points))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .widgetAccentable()
             } else {
                 Text("暂无数据").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 占用类固定 0…100%；其余从 0 到最大值（留 10% 余量），温度从最小值往下留余量。
@@ -237,11 +251,14 @@ struct CurveChart: View {
 struct Footer: View {
     let snapshot: WidgetSnapshot
     let stale: Bool
+    @Environment(\.widgetFamily) private var family
 
     var body: some View {
         HStack(spacing: 4) {
             if stale {
-                Text("SysInfo 未运行 ·").font(.caption2).foregroundStyle(.secondary)
+                // 小号放不下全文，只写「未运行」
+                Text(family == .systemSmall ? "未运行 ·" : "SysInfo 未运行 ·").font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             // 相对时间由系统自己走字，不需要刷新
             Text(snapshot.generatedAt, style: .relative).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
@@ -253,5 +270,32 @@ struct Footer: View {
             .buttonStyle(.plain)
             .accessibilityLabel(String(localized: "刷新"))
         }
+    }
+}
+
+extension WidgetSnapshot.CurvePoint {
+    var date: Date { Date(timeIntervalSince1970: TimeInterval(minute) * 60) }
+}
+
+extension WidgetSnapshot {
+    /// 图库预览与占位用的示例数据（不是实测，只在没有快照时出现）。
+    static func sample(at now: Date) -> WidgetSnapshot {
+        let end = Int64(now.timeIntervalSince1970 / 60) / 5 * 5
+        func curve(_ base: Double, _ swing: Double) -> [CurvePoint] {
+            (0..<288).map { i in
+                CurvePoint(minute: end - Int64(287 - i) * 5, value: base + swing * sin(Double(i) / 23) * cos(Double(i) / 61))
+            }
+        }
+        return WidgetSnapshot(
+            generatedAt: now, refreshInterval: 300, historyEnabled: true,
+            items: [
+                .init(slot: .cpuUsage, value: 0.12, quality: .measured, curve: curve(0.15, 0.1)),
+                .init(slot: .memoryUsage, value: 0.56, quality: .measured, curve: curve(0.55, 0.05)),
+                .init(slot: .systemPower, value: 11.4, quality: .measured, curve: curve(12, 6)),
+                .init(slot: .socHotspot, value: 55, quality: .measured, curve: curve(58, 8)),
+                .init(slot: .networkIn, value: 48_000, quality: .measured),
+                .init(slot: .networkOut, value: 12_000, quality: .measured),
+                .init(slot: .bootDiskTemperature, value: 41, quality: .measured),
+            ])
     }
 }

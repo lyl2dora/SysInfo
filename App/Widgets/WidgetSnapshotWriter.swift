@@ -56,7 +56,13 @@ final class WidgetSnapshotWriter {
         timer = Timer.scheduledTimer(withTimeInterval: Self.pollSeconds, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
-        Task { await cycle(reason: "launch") }
+        // 启动时等第一批样本到了再写（最多 10 s），免得把「还没采到」写成不可用。
+        Task {
+            for _ in 0..<50 where store.latest[.cpuUsageTotal] == nil {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            await cycle(reason: "launch")
+        }
     }
 
     /// 设置变了：只有节奏改了才跟着改需求、立刻写一份。
