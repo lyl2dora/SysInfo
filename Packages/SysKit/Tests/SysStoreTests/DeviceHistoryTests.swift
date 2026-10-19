@@ -14,6 +14,7 @@ import Testing
         #expect(charge.unit == "ratio")
         #expect(charge.collector == PowerSourceCollector.collectorID)
         #expect(HistoryCatalog.spec(for: .upsInputVoltage)?.unit == "V")
+        #expect(HistoryCatalog.spec(for: .upsInputVoltage)?.collector == UPSTelemetryCollector.collectorID)
         #expect(HistoryCatalog.spec(for: .upsLoad)?.collector == UPSTelemetryCollector.collectorID)
     }
 

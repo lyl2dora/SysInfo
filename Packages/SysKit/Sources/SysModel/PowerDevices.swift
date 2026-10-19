@@ -130,7 +130,7 @@ public struct PowerDevice: Hashable, Codable, Sendable, Identifiable {
     public var productID: Int?
     /// 配件类别（`Accessory Category`，如 Headset、Audio Battery Case）。
     public var accessoryCategory: String?
-    /// UPS 的输入电压，V（IOPS `Voltage`，单位 mV）。
+    /// UPS 的输入电压，V（IOPS `Voltage`，单位 mV）；只在外接电源且 ≥ 80 V 时有值（由电池供电时 IOPS 报的是电池电压）。
     public var inputVoltage: Double?
 
     public var id: PowerDeviceKey { key }
@@ -313,7 +313,7 @@ extension MetricID {
     public static let upsCharge: MetricID = "devices.ups.charge"
     /// 主 UPS 剩余时间，s（IOPS `Time to Empty`）。
     public static let upsRuntime: MetricID = "devices.ups.runtime"
-    /// 主 UPS 输入电压，V（IOPS `Voltage`）。
+    /// 主 UPS 输入电压，V（HID；断电时为 0）。
     public static let upsInputVoltage: MetricID = "devices.ups.inputVoltage"
     /// 主 UPS 是否由电池供电，0 / 1。
     public static let upsOnBattery: MetricID = "devices.ups.onBattery"

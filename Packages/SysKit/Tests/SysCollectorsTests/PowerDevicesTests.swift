@@ -49,6 +49,14 @@ import SysModel
         #expect(device.timeToEmpty == 1620)
         #expect(device.inputVoltage == 228)
         #expect(device.powerSourceState == .external)
+        // 由电池供电、或刚恢复市电时 IOPS 的 Voltage 是电池电压：不当作输入电压。
+        var onBattery = ups
+        onBattery["Power Source State"] = "Battery Power"
+        onBattery["Voltage"] = 24_000
+        #expect(parse([onBattery]).first?.inputVoltage == nil)
+        var justBack = ups
+        justBack["Voltage"] = 26_000
+        #expect(parse([justBack]).first?.inputVoltage == nil)
         #expect(device.isCharging)
     }
 
@@ -175,10 +183,13 @@ import SysModel
         let device = try #require(parse([ups]).first)
         let good = UPSTelemetry(time: Date(), inputVoltage: 229, charge: 0.88)
         #expect(UPSTelemetryCollector.compare(good, ups: device).passed)
-        let badCharge = UPSTelemetry(time: Date(), inputVoltage: 228, charge: 0.5)
+        let badCharge = UPSTelemetry(time: Date(), inputVoltage: 228, charge: 0.5, flags: .acPresent)
         #expect(!UPSTelemetryCollector.compare(badCharge, ups: device).passed)
-        let badVoltage = UPSTelemetry(time: Date(), inputVoltage: -26, charge: 0.87)
+        let badVoltage = UPSTelemetry(time: Date(), inputVoltage: -26, charge: 0.87, flags: .acPresent)
         #expect(!UPSTelemetryCollector.compare(badVoltage, ups: device).passed)
+        // 放电时两边的电量估算一秒一跳（实测同一时刻差 6 个百分点）：容差内；断电时 HID 输入 0 V 不与 IOPS 比。
+        let lagging = UPSTelemetry(time: Date(), inputVoltage: 0, charge: 0.81, flags: .discharging)
+        #expect(UPSTelemetryCollector.compare(lagging, ups: device).passed)
         #expect(UPSTelemetryCollector.compare(good, ups: nil).passed)
     }
 
@@ -202,13 +213,14 @@ import SysModel
         let samples = PowerSourceCollector.samples(PowerDeviceSnapshot(time: Date(), devices: parse([ups]), accessoriesAvailable: true), at: time)
         #expect(samples.first { $0.id == .upsCharge }?.value == 0.87)
         #expect(samples.first { $0.id == .upsRuntime }?.value == 1620)
-        #expect(samples.first { $0.id == .upsInputVoltage }?.value == 228)
         #expect(samples.first { $0.id == .upsOnBattery }?.value == 0)
     }
 
     @Test func loadPowerIsEstimated() {
         let time = SampleTime(monotonicNanos: 1, wallClock: Date())
-        let samples = UPSTelemetryCollector.samples(UPSTelemetry(time: Date(), load: 0.23, loadPower: 138, batteryVoltage: 27.3), at: time)
+        let samples = UPSTelemetryCollector.samples(
+            UPSTelemetry(time: Date(), load: 0.23, loadPower: 138, inputVoltage: 228, batteryVoltage: 27.3), at: time)
+        #expect(samples.first { $0.id == .upsInputVoltage }?.value == 228)
         #expect(samples.first { $0.id == .upsLoadPower }?.quality == .estimated)
         #expect(samples.first { $0.id == .upsLoad }?.quality == .measured)
         let missing = UPSTelemetryCollector.samples(UPSTelemetry(time: Date(), load: 0.23), at: time)

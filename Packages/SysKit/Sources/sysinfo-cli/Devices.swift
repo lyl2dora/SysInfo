@@ -49,6 +49,8 @@ extension SysInfoCLI {
         }
 
         guard let watchSeconds else { return 0 }
+        // 放电实测时输出常重定向到文件：按行刷新，中途查看或进程被结束都不丢记录。
+        setvbuf(stdout, nil, _IOLBF, 0)
         let start = Date()
         print("事件驱动地观察 \(Int(watchSeconds)) s …")
         let observation = monitor.observe { snapshot in

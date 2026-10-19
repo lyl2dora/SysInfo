@@ -291,7 +291,16 @@ public final class PowerSourceMonitor: Sendable {
             parts: [part(item, role: .main)], powerSourceState: PowerSourceState(iopsValue: item["Power Source State"] as? String),
             timeToEmpty: minutes(item["Time to Empty"]), timeToFull: minutes(item["Time to Full Charge"]),
             vendorID: (item["Vendor ID"] as? NSNumber)?.intValue, productID: (item["Product ID"] as? NSNumber)?.intValue,
-            inputVoltage: kind == .ups ? (item["Voltage"] as? NSNumber).flatMap { $0.doubleValue > 0 ? $0.doubleValue / 1000 : nil } : nil)
+            inputVoltage: kind == .ups ? upsInputVoltage(item) : nil)
+    }
+
+    /// UPS 的输入电压：IOPS `Voltage`（mV）只在外接电源且像市电（≥ 80 V）时才是输入电压。
+    /// 2026-10-19 放电实测：由电池供电时它报电池电压（约 24 V），恢复市电后 15 s 以上仍停在 26 V。
+    static func upsInputVoltage(_ item: [String: Any]) -> Double? {
+        guard PowerSourceState(iopsValue: item["Power Source State"] as? String) == .external,
+            let millivolts = (item["Voltage"] as? NSNumber)?.doubleValue, millivolts >= 80_000
+        else { return nil }
+        return millivolts / 1000
     }
 
     /// 一组配件项合成一台设备：Combined 项展开 `Combined Parts`（左右耳），其余项（充电盒）按 Part 归位。

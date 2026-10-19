@@ -87,7 +87,7 @@ public struct UPSTelemetry: Hashable, Sendable {           // 每次采样
 |---|---|---|---|
 | `devices.ups.charge` | ratio | IOPS | measured |
 | `devices.ups.runtime` | s | IOPS（Time to Empty） | measured；外接电源时 UPS 自己的估算照样输出 |
-| `devices.ups.inputVoltage` | V | IOPS（Voltage） | measured |
+| `devices.ups.inputVoltage` | V | HID（偏离记录：IOPS 的 Voltage 由电池供电时是电池电压） | measured |
 | `devices.ups.onBattery` | 0 / 1 | IOPS（Power Source State） | measured |
 | `devices.ups.load` | ratio | HID | measured |
 | `devices.ups.loadPower` | W | HID | **estimated** |
@@ -219,4 +219,6 @@ ThrottleMonitor 的「UPS / 电池放电」信号（K20）保持原样，不改�
 - 2026-10-19：面板切换器多了「电源」后共 8 项，360 pt 宽里两字标签被折成两行。超过 7 项时把每项左右留白从 8 pt 收到 3 pt，并限制为单行（自查截图发现）。
 - 2026-10-19：菜单栏电池图形不画充电闪电（§6.1）。图形只有 7 pt 高，闪电画不清；充电状态在面板里看。
 - 2026-10-19：HID manager 的空闲关闭由 60 s 改为 180 s（§4.3）。60 s 与历史的采样间隔相同，后台每次采样都赶上刚关闭，每分钟要重开一次；开着闲置时实测不占 CPU。
+- 2026-10-19（PD8 放电实测）：IOPS 的 `Voltage` 不总是输入电压：由电池供电时报电池电压（约 24 V），恢复市电后 15 s 以上仍停在 26 V。`devices.ups.inputVoltage` 改由 HID 输出（断电时 0 V，面板显示「无市电」）；IOPS 的电压只在外接电源且 ≥ 80 V 时才当作输入电压；HID 与 IOPS 的电压对照只在外接电源时做。放电时两边的电量估算一秒一跳，同一时刻差到 6 个百分点，电量对照的容差由 2 个百分点放宽到 10 个（对照只为抓解码错误这类大偏差）。
+- 2026-10-19：`sysinfo-cli devices --watch` 的输出改为按行刷新（放电实测时重定向到文件，中途查看不丢记录）。
 - 2026-10-19：诊断页打开时也登记电源设备的需求（IOPS 2 s，有 UPS 时 HID 2 s），与其他模块的诊断读数一致。

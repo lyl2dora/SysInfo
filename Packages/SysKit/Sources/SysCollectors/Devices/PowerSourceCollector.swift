@@ -1,6 +1,7 @@
 // 电源设备采集器 `devices.sources`（电源设备设计 §4.2，D84）：inline 通道。
 //
-// - 不额外读 IOPS：取 `PowerSourceMonitor` 事件驱动维护的快照，输出主 UPS 的电量、剩余时间、输入电压与供电状态；
+// - 不额外读 IOPS：取 `PowerSourceMonitor` 事件驱动维护的快照，输出主 UPS 的电量、剩余时间与供电状态；
+//   输入电压由 `devices.ups`（HID）输出：IOPS 的电压由电池供电时是电池电压（2026-10-19 放电实测）；
 // - 没有 UPS 时不输出样本（设备不存在，不是不可用）；
 // - 自检：公开快照可读（必需）；私有按类型接口可用（提示：不可用时配件不显示）。复检时强制重建一次快照。
 
@@ -55,9 +56,6 @@ public final class PowerSourceCollector: Collector {
         samples.append(
             ups.timeToEmpty.map { Sample(id: .upsRuntime, value: $0, time: time) }
                 ?? .unavailable(.upsRuntime, reason: .readFailed("no time to empty"), at: time))
-        samples.append(
-            ups.inputVoltage.map { Sample(id: .upsInputVoltage, value: $0, time: time) }
-                ?? .unavailable(.upsInputVoltage, reason: .readFailed("no voltage"), at: time))
         if ups.powerSourceState != .unknown {
             samples.append(Sample(id: .upsOnBattery, value: ups.isOnBattery ? 1 : 0, time: time))
         } else {

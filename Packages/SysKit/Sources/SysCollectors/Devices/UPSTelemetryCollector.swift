@@ -19,7 +19,9 @@ public final class UPSTelemetryCollector: Collector {
     public static let collectorID: CollectorID = "devices.ups"
     public static let dataPath = "IOHIDManager（usage page 0x84，GET_REPORT feature）"
     /// 自检与运行中对照的容差。
-    static let chargeTolerance = 0.02
+    /// 电量容差放宽到 10 个百分点：放电时 IOPS 与 HID 的估算一秒一跳，同一时刻实测差到 6 个百分点（2026-10-19）。
+    /// 对照只为抓解码错误这类大偏差。
+    static let chargeTolerance = 0.10
     static let voltageTolerance = 2.0
     static let mismatchLimit = 3
     /// 这么久没有采样就关掉 HID manager（长于历史的 60 s 间隔，后台采样之间不关）。
@@ -198,11 +200,13 @@ public final class UPSTelemetryCollector: Collector {
                 ?? .unavailable(.upsLoadPower, reason: .readFailed("no rated power"), at: time),
             telemetry.batteryVoltage.map { Sample(id: .upsBatteryVoltage, value: $0, time: time) }
                 ?? .unavailable(.upsBatteryVoltage, reason: .readFailed("no battery voltage"), at: time),
+            telemetry.inputVoltage.map { Sample(id: .upsInputVoltage, value: $0, time: time) }
+                ?? .unavailable(.upsInputVoltage, reason: .readFailed("no input voltage"), at: time),
         ]
     }
 
     static func unavailableSamples(_ reason: UnavailableReason, at time: SampleTime) -> [Sample] {
-        [.upsLoad, .upsLoadPower, .upsBatteryVoltage].map { .unavailable($0, reason: reason, at: time) }
+        [.upsLoad, .upsLoadPower, .upsBatteryVoltage, .upsInputVoltage].map { .unavailable($0, reason: reason, at: time) }
     }
 
     /// 与 IOPS 的主 UPS 对应的读数：Vendor / Product 相同的第一台；IOPS 没有 UPS 时取第一台。
@@ -211,7 +215,7 @@ public final class UPSTelemetryCollector: Collector {
         return readings.first { $0.vendorID == vid && $0.productID == pid } ?? readings.first
     }
 
-    /// HID 与 IOPS 对照：电量差 ≤ 2 个百分点，输入电压差 ≤ 2 V（两边都有值时才比）。
+    /// HID 与 IOPS 对照：电量差 ≤ 10 个百分点；输入电压只在两边都是外接电源时比（差 ≤ 2 V）。
     static func compare(_ telemetry: UPSTelemetry, ups: PowerDevice?) -> (passed: Bool, detail: String) {
         guard let ups else { return (true, "no IOPS UPS to compare") }
         var parts: [String] = []
@@ -221,7 +225,7 @@ public final class UPSTelemetryCollector: Collector {
             passed = passed && ok
             parts.append(String(format: "charge hid=%.0f%% iops=%.0f%%%@", hid * 100, iops * 100, ok ? "" : " ✗"))
         }
-        if let hid = telemetry.inputVoltage, let iops = ups.inputVoltage {
+        if let hid = telemetry.inputVoltage, let iops = ups.inputVoltage, telemetry.flags.contains(.acPresent) {
             let ok = abs(hid - iops) <= voltageTolerance
             passed = passed && ok
             parts.append(String(format: "input hid=%.1fV iops=%.1fV%@", hid, iops, ok ? "" : " ✗"))

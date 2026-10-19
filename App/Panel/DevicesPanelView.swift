@@ -160,6 +160,8 @@ private struct UPSCard: View {
 
     /// 「228 V（切换 176–294 V）」。
     static func inputText(_ volts: Double, info: UPSStaticInfo?) -> String {
+        // 断电时 HID 读到 0 V（2026-10-19 放电实测）。
+        if volts < 1 { return String(localized: "无市电") }
         guard let low = info?.lowTransferVoltage, let high = info?.highTransferVoltage else { return DevicesText.volts(volts) }
         return String(localized: "\(DevicesText.volts(volts))（切换 \(String(format: "%.0f", low))–\(String(format: "%.0f", high)) V）")
     }

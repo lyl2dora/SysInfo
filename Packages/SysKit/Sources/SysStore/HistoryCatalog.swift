@@ -97,12 +97,13 @@ public enum HistoryCatalog {
         case .anePowered:
             // 0 / 1 的瞬时状态；分钟均值即这一分钟里上电的比例。
             return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: GPUAcceleratorCollector.collectorID, module: .gpu)
-        // 电源设备（电源设备设计 §5，D84 PD6）：主 UPS 的电量、输入电压（IOPS）与负载（HID）。负载功率由负载 × 额定功率算出，
+        // 电源设备（电源设备设计 §5，D84 PD6）：主 UPS 的电量（IOPS）、输入电压与负载（HID）。负载功率由负载 × 额定功率算出，
         // 剩余时间、电池电压、是否电池供电不入库（供电切换另记区间）。
         case .upsCharge:
             return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: PowerSourceCollector.collectorID, module: .devices)
         case .upsInputVoltage:
-            return HistoryMetricSpec(aggregation: .instant, unit: "V", collector: PowerSourceCollector.collectorID, module: .devices)
+            // HID：IOPS 的电压由电池供电时是电池电压（2026-10-19 放电实测）。
+            return HistoryMetricSpec(aggregation: .instant, unit: "V", collector: UPSTelemetryCollector.collectorID, module: .devices)
         case .upsLoad:
             return HistoryMetricSpec(aggregation: .instant, unit: "ratio", collector: UPSTelemetryCollector.collectorID, module: .devices)
         default:
