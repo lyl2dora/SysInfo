@@ -17,7 +17,7 @@
 #   overview：合并模式下面板打开且在「总览」（--merged --panel-tab=overview，D65 MG5）；
 #   appactivity：应用活动窗口打开在「现在」（--open-app-activity，全表每 2 s，D67；不属于出厂默认，只记录）。
 # 每档先预热 WARMUP 秒，再测 DURATION 秒。考核值按 D80：app 的总指令（sysinfo-cli rusage）÷ 本机满频最快核的
-# 每秒指令数（sysinfo-cli ipsref，启动 app 前测一次），按单核的比例；原 D40 的折算值仍作对照；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
+# 每秒指令数（sysinfo-cli ipsref，启动 app 前测，三次取最大，D86），按单核的比例；原 D40 的折算值仍作对照；`ps -o time=` 的原始 CPU 时间、按周期折算的值、能耗一并记录；
 # 同一时段 MenuBarAgent、WindowServer 的 CPU 增量作为软指标，另测一段不运行 SysInfo 的基线作对照。
 #
 # 操作边界（D18、D16）：
@@ -105,12 +105,18 @@ cli="Packages/SysKit/.build/release/sysinfo-cli"
 [ -x "${cli}" ] || { echo "sysinfo-cli 构建失败" >&2; exit 1; }
 
 # D80：考核值 = app 的总指令 ÷ 本机满频最快核的每秒指令数（参照值），按单核的比例。参照值在启动 app 之前测，
-# 单核连续负载约 10 s（D18 的短时负载）。
-echo "==> 测本机满频最快核的每秒指令数（sysinfo-cli ipsref，单核约 10 s）"
-ref_json="$("${cli}" ipsref --seconds 10)" || { echo "参照值测量失败：${ref_json}" >&2; exit 1; }
-ref_gips="$(printf '%s' "${ref_json}" | sed -n 's/.*"p0_gips":\([0-9.]*\).*/\1/p')"
+# 单核连续负载约 15 s（D18 的短时负载）。D86：连测 3 次、每次 5 s 取最大值，并记下最佳一次的频率与每周期指令；
+# 各次相差超过 5% 或频率偏低时 ipsref 标为受干扰，记录里注明，考核值仍照算。
+echo "==> 测本机满频最快核的每秒指令数（sysinfo-cli ipsref，单核约 15 s）"
+ref_json="$("${cli}" ipsref --runs 3 --seconds 5)" || { echo "参照值测量失败：${ref_json}" >&2; exit 1; }
+ref_field() { printf '%s' "${ref_json}" | sed -n "s/.*\"$1\":\([^,}]*\).*/\1/p"; }
+ref_gips="$(ref_field p0_gips)"
 [ -n "${ref_gips}" ] || { echo "参照值解析失败：${ref_json}" >&2; exit 1; }
-echo "    参照值 ${ref_gips} G 指令/s" >&2
+ref_runs="$(printf '%s' "${ref_json}" | sed -n 's/.*"runs":\[\([^]]*\)\].*/\1/p' | sed 's/,/、/g')"
+ref_detail="三次 ${ref_runs}，最佳一次 $(ref_field p0_ghz) GHz、每周期 $(ref_field p0_ipc) 条指令"
+ref_note=""
+[ "$(ref_field disturbed)" = "true" ] && ref_note="；**参照值可能受后台负载干扰**（各次相差 $(awk -v s="$(ref_field spread)" 'BEGIN { printf "%.0f%%", s * 100 }')，顶档 $(ref_field p0_top_ghz) GHz），考核值偏高"
+echo "    参照值 ${ref_gips} G 指令/s（${ref_detail}）${ref_note}" >&2
 
 # ---------------------------------------------------------------- 测量
 
@@ -279,7 +285,7 @@ fi
     echo "## ${date_str} · ${git_commit}（build ${build_number}）"
     echo ""
     echo "- 机器：${model}，${chip}，${ncpu} 个逻辑核，macOS ${os}"
-    echo "- 预热 ${WARMUP} s，每档测量 ${DURATION} s；满频最快核参照值 ${ref_gips} G 指令/s（D80）"
+    echo "- 预热 ${WARMUP} s，每档测量 ${DURATION} s；满频最快核参照值 ${ref_gips} G 指令/s（D80、D86：${ref_detail}）${ref_note}"
     echo ""
     echo "| 档位 | 考核值（满频最快核等效，单核 %，D80） | 原 D40 等效最快档（%） | app 原始 CPU（单核 %） | 按周期折算（%） | 最快档时间占比 | app 能耗（mW） | 总指令（M/s） | 最快档每秒指令（G） | MenuBarAgent（%） | WindowServer（%） | app footprint | 备注 |"
     echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
