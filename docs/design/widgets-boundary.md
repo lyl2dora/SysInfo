@@ -1,6 +1,6 @@
 # 桌面小组件能力边界（讨论稿）
 
-> 日期：2026-10-19 · 状态：**probe 进行中**（A、C、D 已测完；B、E 进行中） · 分支：`module/widgets`
+> 日期：2026-10-19 · 状态：**probe 进行中**（A、C、D 已测完；B 前两小时已有结论，24 h 上限在测；E 待定） · 分支：`module/widgets`
 > 依据 D87。结论定下来之后，要拍板的问题列在 §6，拍板后追加为新的 D 条目，再另写实现规格。
 
 ## 1. 目的与口径
@@ -59,11 +59,19 @@ P2 的桌面小组件（D07）开工前的 probe。9-28 的 gap 探针只验证�
 - 桌面扩展的内存上限至少在 250 MB 以上，比 iOS 宽得多；快照大小也不是瓶颈。真正的约束是刷新次数（B）。
 - 20:02 扩展进程被 SIGKILL 一次（同一时刻 chronod 有 AppIntents 连接报错 `LNConnectionErrorDomain 1004/1005`），原因未明；之后 chronod 照常重新拉起，组件不受影响。
 
-## 5. B：重载预算（进行中）
+## 5. B：重载预算
 
-- B2（dev，19:58 起）：host 每 60 s 调一次 `reloadAllTimelines`。前 50 分钟 chronod 照做 60 次，最长间隔 60 s，**没有限流**；每次都记作 `externalRequest … budgeted`。
-- B1（rel，20:48 起）：host 不调用刷新，timeline 用 `.after(5 min)`，看系统自然给多少次。
-- B3（待测）：host 切到前台时（chronod 有 `containerApp-ExemptReason`），刷新是否免预算。
+本机 M5（Mac mini，一直接着电源，桌面组件可见），用 `b_analyze.py` 从 chronod 日志统计：
+
+| 段 | 做法 | 窗口 | chronod 实际执行 | 预算记账 |
+|---|---|---|---|---|
+| B2（dev，5 个组件） | host 每 60 s 调一次 `reloadAllTimelines` | 19:58–21:48（110 min） | 每个 kind **119 次**，最长间隔 60 s，**没有限流** | 每次 `externalRequest … budgeted`，没有被拒 |
+| B1（rel，1 个小组件） | 不主动刷新，timeline 用 `.after(5 min)` | 20:48–21:48（60 min） | **13 次**，约每 5 min 一次，最长间隔 320 s | `timelineExhausted … budgeted` |
+
+- 9-28 的「放置后 30–45 分钟才重载一次」是系统天气组件**自己**排的节奏，不是第三方组件的上限。第三方组件请求 5 分钟就给 5 分钟，主 app 每分钟主动刷新也照做。
+- 「计预算」与「被限流」是两回事：至少两小时、每分钟一次的刷新都记了账，但没有一次被拒。每天有没有总量上限还不知道（B2 继续跑，看 24 h 内会不会撞上）。
+- 待测：显示器睡眠 / 锁屏时 chronod 是否暂停刷新；带电池的机型由电池供电时预算是否收紧（目标设备里暂时没有）。
+- B3（host 在前台时 `containerApp` 豁免）：只有预算会被用完时才有意义，等 B2 撞上上限再测。
 
 ## 6. E：开发者模式豁免（待测）
 
