@@ -103,6 +103,7 @@
 ## 8. 实现记录（D92，2026-10-20）
 
 - 「菜单栏」页的顺序改为：排序区（顶部）→ 合并 → 外观 →（单 widget 模式）溢出提示。
-- 合并模式下，排序区可拖拽（`reorderable()` + `reorderContainer(for:itemID:isEnabled:move:)`），保留左移 / 右移按钮。拖拽结果的计算放在 `SysModel.ReorderList`（SDK 没有 apply 函数），有单测。
-- **`reorderContainer` 在 Form 里不生效**：同样的合成拖动，在最小测试窗口里 VStack 的 `reorderable` 与 List 的 `onMove` 都有回调，grouped Form 的没有，挂在 Section 或 Form 上都不行。所以排序区的各行放在 Form 那一节里的一个 VStack 中，分隔线自己画，行高（56 pt）对齐 Form 的标准行。
-- 自查：M5 与 M4 都在 `--factory-defaults --merged` 下用合成拖动把「网速」拖到第一行，列表与合并 item 都跟着变；单 widget 模式下排序区是只读总览，注明按住 ⌘ 拖动。真实拖拽手感由用户验收。
+- 合并模式下，排序区可拖拽（`reorderable()` + `reorderContainer(for:itemID:isEnabled:move:)`）。拖拽结果的计算放在 `SysModel.ReorderList`（SDK 没有 apply 函数），有单测。
+- 2026-10-20 用户反馈「过于占位置」，改为横向：已开启的 widget 用真实的菜单栏预览做成小块，在一行里从左到右排开，放不下时换行（`WidgetFlowLayout`，自定义 Layout 也是文档列出的拖拽容器）；左右拖动排序。悬停显示名称、所属模块与宽度。上下箭头去掉，改为辅助功能的「左移 / 右移」动作。预览是 NSView，上面盖一层透明命中区，把拖动交给 SwiftUI。
+- **`reorderContainer` 在 Form 里不生效**：同样的合成拖动，在最小测试窗口里 VStack 的 `reorderable` 与 List 的 `onMove` 都有回调，grouped Form 的没有，挂在 Section 或 Form 上都不行。所以拖拽容器放在 Form 那一节里的一行中（先是 VStack，横向改版后是流式布局）。
+- 自查（横向版）：M5 与 M4 都在 `--factory-defaults --merged` 下用合成拖动把「网速」拖到最左，M5 另把 CPU 拖到末尾，排序区与合并 item 都跟着变；单 widget 模式下是只读的同一排小块，注明按住 ⌘ 拖动。出厂只有 5–6 个 widget，一行放得下，换行没有实测；真实拖拽手感由用户验收。

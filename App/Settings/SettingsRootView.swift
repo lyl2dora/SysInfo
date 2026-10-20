@@ -545,35 +545,28 @@ private struct MenuBarSettingsView: View {
         .formStyle(.grouped)
     }
 
-    /// 页面顶部的排序区（D92）：合并模式下是合并项目里各段的顺序，可拖拽，也可用左移 / 右移按钮；
-    /// 单 widget 模式下是已开启项目的只读总览，位置由用户在菜单栏上按住 ⌘ 拖动（app 不干预独立 item 的位置）。
+    /// 页面顶部的排序区（D92）：已开启的 widget 按菜单栏的样子横向排开（一行放不下时换行）。
+    /// 合并模式下是合并项目里各段的顺序，可左右拖动；单 widget 模式下只读，位置由用户在菜单栏上按住 ⌘ 拖动。
     private var orderSection: some View {
         let visible = settings.visibleWidgets
         let merged = settings.menuBarMerged
         let widgets = merged ? settings.mergedWidgets(from: visible) : visible
+        let configurations = widgets.map { StatusItemConfiguration(widget: $0, settings: settings) }
         return Section {
             if widgets.isEmpty {
                 Text("还没有开启任何菜单栏项目。").foregroundStyle(.secondary)
             } else {
-                // 27 的 reorderContainer 在 Form 里不生效（2026-10-20 实测：同样的拖动，VStack 与 List 有回调，Form 没有），
-                // 所以整组行放进一个 VStack 当拖拽容器，行间分隔线自己画，对齐 Form 的行。
-                VStack(spacing: 0) {
-                    ForEach(Array(widgets.enumerated()), id: \.element) { index, widget in
-                        VStack(spacing: 0) {
-                            row(widget, index: index, of: widgets)
-                                .padding(.vertical, 10)
-                            if index < widgets.count - 1 {
-                                Divider()
-                            }
-                        }
-                        .contentShape(.rect)
+                // 27 的 reorderContainer 在 Form 里不生效（§8），容器用这一行里的流式布局。
+                WidgetFlowLayout(spacing: 6) {
+                    ForEach(Array(zip(widgets.indices, configurations)), id: \.1.widget) { index, configuration in
+                        chip(configuration, index: index, of: widgets, draggable: merged)
                     }
                     .reorderable()
                 }
                 .reorderContainer(for: MenuWidget.self, itemID: \.self, isEnabled: merged) { difference in
                     apply(difference, to: widgets)
                 }
-                let configurations = widgets.map { StatusItemConfiguration(widget: $0, settings: settings) }
+                .padding(.vertical, 2)
                 LabeledContent(
                     "合计宽度",
                     value: Self.points(
@@ -585,7 +578,7 @@ private struct MenuBarSettingsView: View {
             Text(merged ? "合并项目里的顺序（从左到右）" : "已开启的项目")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(merged ? "拖动各行调整顺序。" : "在菜单栏上按住 ⌘ 拖动各项目调整位置。")
+                Text(merged ? "左右拖动调整顺序。" : "在菜单栏上按住 ⌘ 拖动各项目调整位置。")
                 HStack(spacing: 4) {
                     Text("各项目的开关和配置在所属模块页。")
                     Button("CPU") { openPage(.cpu) }
@@ -605,33 +598,32 @@ private struct MenuBarSettingsView: View {
         }
     }
 
-    private func row(_ widget: MenuWidget, index: Int, of widgets: [MenuWidget]) -> some View {
-        let configuration = StatusItemConfiguration(widget: widget, settings: settings)
-        return LabeledContent {
-            HStack(spacing: 8) {
-                StatusItemPreview(store: store, configuration: configuration)
-                if settings.menuBarMerged {
-                    Button {
-                        move(widgets, from: index, by: -1)
-                    } label: {
-                        Image(systemName: "arrow.up")
+    /// 一个 widget 的小块：真实的菜单栏预览，悬停显示名称、所属模块与宽度。
+    /// 预览是 NSView，上面盖一层透明命中区，拖动手势交给 SwiftUI。
+    private func chip(_ configuration: StatusItemConfiguration, index: Int, of widgets: [MenuWidget], draggable: Bool) -> some View {
+        let widget = configuration.widget
+        let title = WidgetInfo.title(widget)
+        let detail = "\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))"
+        return StatusItemPreview(store: store, configuration: configuration)
+            .allowsHitTesting(false)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.quaternary, in: .rect(cornerRadius: 6))
+            .overlay(Color.clear.contentShape(.rect))
+            .help(Text("\(title)（\(detail)）"))
+            .accessibilityElement()
+            .accessibilityLabel(Text(title))
+            .accessibilityValue(Text(detail))
+            .accessibilityActions {
+                if draggable {
+                    if index > 0 {
+                        Button("左移") { move(widgets, from: index, by: -1) }
                     }
-                    .disabled(index == 0)
-                    .help("在合并项目里左移")
-                    Button {
-                        move(widgets, from: index, by: 1)
-                    } label: {
-                        Image(systemName: "arrow.down")
+                    if index < widgets.count - 1 {
+                        Button("右移") { move(widgets, from: index, by: 1) }
                     }
-                    .disabled(index == widgets.count - 1)
-                    .help("在合并项目里右移")
                 }
             }
-            .buttonStyle(.borderless)
-        } label: {
-            Text(WidgetInfo.title(widget))
-            Text("\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))")
-        }
     }
 
     /// 在合并顺序里把一项左移或右移一位（D65 MG1）。
@@ -791,5 +783,54 @@ private struct WindowReader: NSViewRepresentable {
                 onWindow?(window)
             }
         }
+    }
+}
+
+/// 横向排开、一行放不下时换行的布局（菜单栏页的排序区，D92）。每行顶部对齐，子视图按自身理想尺寸摆放。
+private struct WidgetFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map { $0.width }.max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.indices.isEmpty, needed > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
     }
 }
