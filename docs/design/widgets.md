@@ -147,7 +147,7 @@ struct WidgetSnapshot: Codable {
   - 正常退出后变暗，显示「SysInfo 未运行 · 时长」（小号「未运行 ·」）。
 - 发现：
   1. **app 放在 `/tmp` 下时刷新按钮无效**。linkd 给 App Intents 建索引时找不到这个 app 的记录（-10814），chronod 报「There is no metadata for RefreshWidgetIntent」；`lsregister -f` 重登记也一样。同一份构建拷到 `~/Applications` 后 linkd 正常收录两份 `Metadata.appintents`，按钮可用。正式版装在 `/Applications` 不受影响；从「下载」直接打开、被 App Translocation 挪到临时路径运行的情况可能同样受影响，未验证。`remote-app.sh` 在 `/tmp` 下运行，测刷新按钮时要换位置。
-  2. **启动后的第一份快照可能缺启动盘温度**：启动时只等 CPU 的第一个样本就写，SMART 较慢，最多 5 分钟内显示「—」。待修：启动后有指标还没采到时，等它到了补写一份。
+  2. **启动盘温度偶尔是「—」**：起初以为是首份快照写得太早，加了补写后实测并非如此。真正原因是同时开着 Release 与 Dev 时两个实例每秒同一时刻抢独占的 SMART 连接，Dev 菜单栏的盘温也会闪空；与小组件无关，main 上就有。已在 `fix/smart-busy-retry` 修复（D93），补写逻辑撤掉未提交。
   3. **曲线头 5–10 分钟显示「暂无数据」**：历史曲线按 5 分钟分桶，少于两个桶时不画；`--factory-defaults` 用临时历史库，每次启动都从空开始。属预期，验收时注意。
   4. **一次被系统重新拉起**：23:31 结束 `/tmp` 下的实例后，launchd 以「launch job demand」立即重新拉起了它（不带 `--factory-defaults`，读写真实的 Dev 偏好域），触发方未查明；之后两次结束都没有复现。待观察，如果复现要查是不是 App Intents 的连接导致。
   5. 清场缺口：扩展的沙盒容器 `~/Library/Containers/<app>.widgets`（以及 `.measure.widgets`、`.probe.widgets`）不在 `remote-app.sh` 的痕迹清单里，M4 上这三个都是之前留下的，这次没删。
