@@ -2,7 +2,9 @@
 //
 // - 每次读取都「打开 → 读 → 关闭」，不常驻（D56）：NVMe SMART 的用户态连接是独占的（kIOReturnExclusiveAccess），
 //   常驻会让其他读 SMART 的程序与另一个 SysInfo 实例（D16）都读不到。单盘一次约 0.7–1.0 ms CPU（§1.1）；
-//   被别的程序占用时这一轮跳过该盘（保留上一次读数），连续 3 轮占用才标为不可用；
+//   被别的程序占用时先隔 `busyRetryDelays` 重试（D93：各 SysInfo 实例的 tick 都对齐到整秒，同时开着两个实例时
+//   每秒同一时刻抢这个连接，对方一次只占约 1 ms）；重试仍被占用则这一轮跳过该盘（保留上一次读数），
+//   连续 3 轮占用才标为不可用；
 // - 焦点盘（D55）：`focus` 为 nil 时每次读全部盘（面板存储 tab、诊断页、CLI）；为集合时每次只读这些盘
 //   （菜单栏 widget 绑定的盘），其余盘距上次读满 `backgroundSeconds` 才读一次（给历史）；
 // - 只读 SMART / Health 日志与 Identify Controller，不发任何会改变设备状态的命令（D54）；
@@ -93,6 +95,26 @@ public final class SMARTCollector: Collector {
     static let exclusiveAccess: Int32 = Int32(bitPattern: 0xE000_02BE)
     /// 连续这么多轮被占用才标为不可用。
     static let busyLimit = 3
+    /// 打开时被占用的重试间隔（D93）；blocking 通道，最坏多等 50 ms。
+    static let busyRetryDelays: [Duration] = [.milliseconds(25), .milliseconds(25)]
+
+    /// 打开连接；结果是 kIOReturnExclusiveAccess 时按 `delays` 依次等待后重试，其他错误不重试。
+    static func openRetrying<Handle>(
+        delays: [Duration] = busyRetryDelays, sleep: (Duration) -> Void = sleepBlocking,
+        open: () -> (handle: Handle?, result: Int32)
+    ) -> (handle: Handle?, result: Int32) {
+        var opened = open()
+        for delay in delays where opened.handle == nil && opened.result == exclusiveAccess {
+            sleep(delay)
+            opened = open()
+        }
+        return opened
+    }
+
+    private static func sleepBlocking(_ duration: Duration) {
+        let (seconds, attoseconds) = duration.components
+        Thread.sleep(forTimeInterval: Double(seconds) + Double(attoseconds) / 1e18)
+    }
 
     private struct State {
         var usable: Bool?
@@ -236,7 +258,7 @@ public final class SMARTCollector: Collector {
     /// 读一块盘：打开 → 读 SMART（首次另读 Identify）→ 关闭。成功时更新最新读数与状态。
     private func read(_ disk: PhysicalDisk, entry: DiskInventory.Entry, at date: Date) -> SMARTRecord? {
         let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
-        let opened = SMARTHandle.open(entry)
+        let opened = Self.openRetrying { SMARTHandle.open(entry) }
         guard let handle = opened.handle else {
             state.withLock { s in
                 if opened.result == Self.exclusiveAccess {
