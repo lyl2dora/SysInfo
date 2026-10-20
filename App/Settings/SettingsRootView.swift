@@ -497,6 +497,10 @@ private struct MenuBarSettingsView: View {
     let store: MetricStore
     let openPage: (SettingsPage) -> Void
 
+    @State private var snapshots = StatusItemSnapshots()
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorScheme) private var colorScheme
+
     /// 已开启的项目达到这么多时，建议切换到合并模式（D65 MG6）。
     static let mergeSuggestionCount = 6
 
@@ -558,11 +562,18 @@ private struct MenuBarSettingsView: View {
             } else {
                 // 27 的 reorderContainer 在 Form 里不生效（§8），容器用这一行里的流式布局。
                 WidgetFlowLayout(spacing: 6) {
-                    ForEach(Array(zip(widgets.indices, configurations)), id: \.1.widget) { index, configuration in
-                        chip(configuration, index: index, of: widgets, draggable: merged)
+                    // 数据元素必须就是 reorderContainer 声明的项类型（MenuWidget），否则拖动开始时 SwiftUI 取不到
+                    // 被拖项的数据，触发前置条件崩溃（2026-10-20 实测，元组元素会崩）。
+                    ForEach(widgets, id: \.self) { widget in
+                        chip(StatusItemConfiguration(widget: widget, settings: settings), index: widgets.firstIndex(of: widget) ?? 0, of: widgets, draggable: merged)
                     }
                     .reorderable()
                 }
+                .onAppear { syncSnapshots(configurations) }
+                .onChange(of: configurations) { syncSnapshots(configurations) }
+                .onChange(of: displayScale) { syncSnapshots(configurations) }
+                .onChange(of: colorScheme) { syncSnapshots(configurations) }
+                .onDisappear { snapshots.stop() }
                 .reorderContainer(for: MenuWidget.self, itemID: \.self, isEnabled: merged) { difference in
                     apply(difference, to: widgets)
                 }
@@ -604,12 +615,17 @@ private struct MenuBarSettingsView: View {
         let widget = configuration.widget
         let title = WidgetInfo.title(widget)
         let detail = "\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))"
-        return StatusItemPreview(store: store, configuration: configuration)
-            .allowsHitTesting(false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: .rect(cornerRadius: 6))
-            .overlay(Color.clear.contentShape(.rect))
+        // 内容是快照图像而不是 NSView，拖动和让位动画时文字跟着底色走；底色下面垫一层不透明的行底色
+        //（窗口底色 + secondarySystemFill，与分组 Form 的行一致），拖过相邻的块时不透出它们的文字。
+        // 块里不能有条件分支（if / switch）：27 的 reorderable 遇到被拖项是条件内容时，拖动开始就崩溃
+        //（「Unexpected identifier type」，最小样例可复现）。没有快照时显示空图。
+        return Image(nsImage: snapshots.images[widget] ?? NSImage())
+        .frame(width: StatusItemView.fixedWidth(for: configuration), height: NSStatusBar.system.thickness)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(.quaternary, in: .rect(cornerRadius: 6))
+        .background(Color(nsColor: .secondarySystemFill), in: .rect(cornerRadius: 6))
+        .background(Color(nsColor: .windowBackgroundColor), in: .rect(cornerRadius: 6))
             .help(Text("\(title)（\(detail)）"))
             .accessibilityElement()
             .accessibilityLabel(Text(title))
@@ -624,6 +640,10 @@ private struct MenuBarSettingsView: View {
                     }
                 }
             }
+    }
+
+    private func syncSnapshots(_ configurations: [StatusItemConfiguration]) {
+        snapshots.sync(configurations, store: store, scale: displayScale, dark: colorScheme == .dark)
     }
 
     /// 在合并顺序里把一项左移或右移一位（D65 MG1）。

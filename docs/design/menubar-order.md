@@ -107,3 +107,7 @@
 - 2026-10-20 用户反馈「过于占位置」，改为横向：已开启的 widget 用真实的菜单栏预览做成小块，在一行里从左到右排开，放不下时换行（`WidgetFlowLayout`，自定义 Layout 也是文档列出的拖拽容器）；左右拖动排序。悬停显示名称、所属模块与宽度。上下箭头去掉，改为辅助功能的「左移 / 右移」动作。预览是 NSView，上面盖一层透明命中区，把拖动交给 SwiftUI。
 - **`reorderContainer` 在 Form 里不生效**：同样的合成拖动，在最小测试窗口里 VStack 的 `reorderable` 与 List 的 `onMove` 都有回调，grouped Form 的没有，挂在 Section 或 Form 上都不行。所以拖拽容器放在 Form 那一节里的一行中（先是 VStack，横向改版后是流式布局）。
 - 自查（横向版）：M5 与 M4 都在 `--factory-defaults --merged` 下用合成拖动把「网速」拖到最左，M5 另把 CPU 拖到末尾，排序区与合并 item 都跟着变；单 widget 模式下是只读的同一排小块，注明按住 ⌘ 拖动。出厂只有 5–6 个 widget，一行放得下，换行没有实测；真实拖拽手感由用户验收。
+- **拖动时的视觉（2026-10-20 用户反馈「左右排序时的视觉效果」）**：连拍拖动过程发现两处问题。一是块里的预览是 NSView，让位动画和浮起的项只作用于 SwiftUI 内容，NSView 文字直接跳到终点，和底色错开；二是块的底色半透明，拖过相邻的块时两边文字叠在一起。改为：
+  - 各 widget 的 `StatusItemView` 离屏画成位图，块里显示 SwiftUI `Image`（`StatusItemSnapshots`，由菜单栏页统一持有）。数值刷新靠 AppKit 对 `draw` 的自动跟踪：离屏 view 被标记需要重绘时（`StatusItemView.onInvalidate`）重画快照，不轮询。外面再包一层 `withObservationTracking` 收不到变化，因为嵌套跟踪时读取只记在 AppKit 那一层。
+  - 底色下面垫一层不透明的行底色（窗口底色 + `secondarySystemFill`，深色下与分组 Form 的行一致，约 48 对 49），上面仍是 `.quaternary`。
+- **27 的 `reorderable` 崩溃条件**（最小样例 `bisect` 逐项排除）：被拖项的视图里有条件分支（`if/else`、`switch`）时，拖动开始就在 `DragContainerStorage.payload(for:)` 前置条件失败（「Unexpected identifier type. Expected String, got String」）。`@State`、`contentShape` 单独存在都不触发。所以块是没有分支的纯值视图：没有快照时显示空图。

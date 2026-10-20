@@ -233,6 +233,19 @@ final class StatusItemView: NSView {
     var configuration: StatusItemConfiguration {
         didSet { needsDisplay = true }
     }
+    /// 不在窗口里离屏绘制时（设置页的快照，D92）用的像素密度；在窗口里时取窗口的。
+    var drawingScale: CGFloat?
+    /// 离屏绘制时，AppKit 因 draw 里读到的数值变化而要求重绘就回调（设置页的快照据此重画，D92）。
+    var onInvalidate: (() -> Void)?
+
+    override var needsDisplay: Bool {
+        didSet { if needsDisplay { onInvalidate?() } }
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        super.setNeedsDisplay(invalidRect)
+        onInvalidate?()
+    }
 
     init(store: MetricStore, height: CGFloat, configuration: StatusItemConfiguration) {
         self.store = store
@@ -501,7 +514,7 @@ final class StatusItemView: NSView {
     /// 文字起点的横坐标对齐到设备像素。居中算出的起点带小数（如 5.54 pt），在 1x 屏上字形会被抗锯齿摊到相邻像素，
     /// 低对比的颜色（systemRed）看起来尤其发虚（2026-10-15 验收发现）。纵向的基线已经取整，不用再处理。
     private func pixelAligned(_ x: CGFloat) -> CGFloat {
-        let scale = window?.backingScaleFactor ?? 2
+        let scale = window?.backingScaleFactor ?? drawingScale ?? 2
         return (x * scale).rounded() / scale
     }
 
