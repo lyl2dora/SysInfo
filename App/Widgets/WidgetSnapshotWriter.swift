@@ -56,13 +56,20 @@ final class WidgetSnapshotWriter {
         timer = Timer.scheduledTimer(withTimeInterval: Self.pollSeconds, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
-        // 启动时等第一批样本到了再写（最多 10 s），免得把「还没采到」写成不可用。
+        // 启动时先查放置情况、登记需求，等每一项的第一个样本都到了再写（最多 10 s），
+        // 免得把「还没采到」写成不可用。盘温来自 blocking 通道的 SMART，往往比 CPU 晚到；
+        // 菜单栏没有绑定启动盘时，SMART 在登记需求之前也可能没人要。
         Task {
-            for _ in 0..<50 where store.latest[.cpuUsageTotal] == nil {
+            await updatePlacement()
+            for _ in 0..<50 where !placedFamilies.isEmpty && !firstSamplesArrived {
                 try? await Task.sleep(for: .milliseconds(200))
             }
             await cycle(reason: "launch")
         }
+    }
+
+    private var firstSamplesArrived: Bool {
+        WidgetSlot.allCases.allSatisfy { slot in Self.metric(slot).map { store.latest[$0] != nil } ?? false }
     }
 
     /// 设置变了：只有节奏改了才跟着改需求、立刻写一份。
@@ -89,6 +96,14 @@ final class WidgetSnapshotWriter {
 
     /// 查放置情况；有组件就写。
     private func cycle(reason: String) async {
+        let families = await updatePlacement()
+        guard !families.isEmpty || reason == "wanted" else { return }
+        await write(reason: reason)
+    }
+
+    /// 查放置情况，跟着登记或撤掉采样需求。
+    @discardableResult
+    private func updatePlacement() async -> [WidgetFamily] {
         let configs = (try? await WidgetCenter.shared.currentConfigurations()) ?? []
         let families = configs.filter { $0.kind == WidgetSnapshot.widgetKind }.map(\.family)
         let wasPlaced = !placedFamilies.isEmpty
@@ -97,8 +112,7 @@ final class WidgetSnapshotWriter {
             Log.widgets.info("已放置的组件：\(families.count, privacy: .public) 个")
         }
         applyDemand()
-        guard !families.isEmpty || reason == "wanted" else { return }
-        await write(reason: reason)
+        return families
     }
 
     private func applyDemand() {

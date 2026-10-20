@@ -52,7 +52,12 @@ struct WidgetsSettingsView: View {
     private var placedText: String {
         let families = writer?.placedFamilies ?? []
         guard !families.isEmpty else { return String(localized: "没有") }
-        return families.map(Self.familyName).joined(separator: "、")
+        // currentConfigurations 的顺序不固定，按尺寸从小到大列。
+        return families.sorted { Self.sizeRank($0) < Self.sizeRank($1) }.map(Self.familyName).joined(separator: "、")
+    }
+
+    private static func sizeRank(_ family: WidgetFamily) -> Int {
+        [WidgetFamily.systemSmall, .systemMedium, .systemLarge, .systemExtraLargePortrait].firstIndex(of: family) ?? .max
     }
 
     private static func familyName(_ family: WidgetFamily) -> String {
