@@ -131,6 +131,56 @@ import Testing
     }
 }
 
+/// D93：SMART 连接被另一个实例占用时短延时重试。
+@Suite struct SMARTBusyRetryTests {
+    private static let busy = SMARTCollector.exclusiveAccess
+
+    /// 依次返回给定结果的假 open，记下调用次数与等待。
+    private final class Fake {
+        var results: [(handle: Int?, result: Int32)]
+        var opens = 0
+        var sleeps: [Duration] = []
+        init(_ results: [(handle: Int?, result: Int32)]) { self.results = results }
+        func open() -> (handle: Int?, result: Int32) {
+            defer { opens += 1 }
+            return results[min(opens, results.count - 1)]
+        }
+    }
+
+    @Test func succeedsWithoutRetry() {
+        let fake = Fake([(1, 0)])
+        let r = SMARTCollector.openRetrying(sleep: { fake.sleeps.append($0) }, open: fake.open)
+        #expect(r.handle == 1)
+        #expect(fake.opens == 1)
+        #expect(fake.sleeps.isEmpty)
+    }
+
+    @Test func retriesWhileBusyThenSucceeds() {
+        let fake = Fake([(nil, Self.busy), (2, 0)])
+        let r = SMARTCollector.openRetrying(sleep: { fake.sleeps.append($0) }, open: fake.open)
+        #expect(r.handle == 2)
+        #expect(fake.opens == 2)
+        #expect(fake.sleeps == [.milliseconds(25)])
+    }
+
+    @Test func givesUpAfterAllDelaysStillBusy() {
+        let fake = Fake([(nil, Self.busy)])
+        let r = SMARTCollector.openRetrying(sleep: { fake.sleeps.append($0) }, open: fake.open)
+        #expect(r.handle == nil)
+        #expect(r.result == Self.busy)
+        #expect(fake.opens == 1 + SMARTCollector.busyRetryDelays.count)
+        #expect(fake.sleeps == SMARTCollector.busyRetryDelays)
+    }
+
+    @Test func otherErrorsAreNotRetried() {
+        let fake = Fake([(nil, -1)])
+        let r = SMARTCollector.openRetrying(sleep: { fake.sleeps.append($0) }, open: fake.open)
+        #expect(r.result == -1)
+        #expect(fake.opens == 1)
+        #expect(fake.sleeps.isEmpty)
+    }
+}
+
 @Suite struct SMARTParserTests {
     /// 按 NVMe 1.4 布局拼一份 SMART / Health 日志（小端）。
     static func log(
