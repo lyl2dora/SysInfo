@@ -134,4 +134,4 @@ struct WidgetSnapshot: Codable {
   2. M4 上扩展侧验证：需要 Developer ID 签名的构建（远端 ad-hoc 构建没有 App Group），拷到 M4 运行，用户用屏幕共享放一个组件。
   3. 用户手动删掉桌面上两个探针小组件（SysInfo Probe Dev / Rel）。本机两个探针的组容器还在（受 TCC 保护，没从终端删）。
   4. 写 `docs/design/widgets-acceptance.md`，用户验收后合并回 `main`。
-- 菜单栏拖拽排序是另一项工作，见 `docs/design/menubar-order.md`，从 `main` 开新分支。
+- 菜单栏拖拽排序已在 `main` 完成（D92），2026-10-20 合入本分支。

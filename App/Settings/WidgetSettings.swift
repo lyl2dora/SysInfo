@@ -290,6 +290,76 @@ enum CostLabel {
 }
 
 /// 设置页的菜单栏预览：用真实的 item view 渲染。
+/// 设置页排序区用的 widget 快照（D92）：把各 widget 的 `StatusItemView` 离屏画成位图，排序区用 SwiftUI `Image` 显示。
+/// - 为什么不直接放 NSView：拖拽排序时，SwiftUI 的让位动画和浮起的预览只作用于 SwiftUI 内容，NSView 会直接跳到终点、
+///   与底色错开（2026-10-20 连拍自查）。画成图像后文字与底色一起移动。
+/// - 由页面统一持有，块只是一张图：被拖的块里有条件分支（if / switch）时，27 的 reorderable 在拖动开始时崩溃
+///   （「Unexpected identifier type」，最小样例可复现），块要保持没有分支的纯值视图。
+/// - 刷新：draw 里读 MetricStore 由 AppKit 自动跟踪，数值变化时它把 view 标成需要重绘；离屏 view 不会真的重绘，
+///   这里接住标记，合并到下一轮主线程重画（外面再包一层 withObservationTracking 收不到，读取只记在 AppKit 那一层）。
+@MainActor @Observable
+final class StatusItemSnapshots {
+    private(set) var images: [MenuWidget: NSImage] = [:]
+    @ObservationIgnored private var views: [MenuWidget: StatusItemView] = [:]
+    @ObservationIgnored private var pending: Set<MenuWidget> = []
+
+    /// 按当前要显示的 widget 建立或更新离屏 view，并各画一次。
+    func sync(_ configurations: [StatusItemConfiguration], store: MetricStore, scale: CGFloat, dark: Bool) {
+        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let wanted = Set(configurations.map(\.widget))
+        for widget in views.keys where !wanted.contains(widget) {
+            views[widget]?.onInvalidate = nil
+            views[widget] = nil
+            images[widget] = nil
+        }
+        for configuration in configurations {
+            let widget = configuration.widget
+            let view = views[widget] ?? StatusItemView(store: store, height: NSStatusBar.system.thickness, configuration: configuration)
+            if view.configuration != configuration { view.configuration = configuration }
+            let width = StatusItemView.fixedWidth(for: configuration)
+            if view.frame.width != width { view.setFrameSize(NSSize(width: width, height: view.frame.height)) }
+            view.drawingScale = scale
+            view.appearance = appearance
+            view.onInvalidate = { [weak self] in self?.schedule(widget) }
+            views[widget] = view
+            render(widget)
+        }
+    }
+
+    func stop() {
+        for view in views.values { view.onInvalidate = nil }
+        views = [:]
+        pending = []
+    }
+
+    private func schedule(_ widget: MenuWidget) {
+        guard pending.insert(widget).inserted else { return }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.pending.remove(widget)
+                self.render(widget)
+            }
+        }
+    }
+
+    private func render(_ widget: MenuWidget) {
+        guard let view = views[widget] else { return }
+        let size = view.bounds.size
+        let scale = view.drawingScale ?? 2
+        guard size.width > 0,
+            let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int((size.width * scale).rounded()),
+                pixelsHigh: Int((size.height * scale).rounded()), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return }
+        rep.size = size
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let image = NSImage(size: size)
+        image.addRepresentation(rep)
+        images[widget] = image
+    }
+}
+
 struct StatusItemPreview: NSViewRepresentable {
     let store: MetricStore
     let configuration: StatusItemConfiguration
