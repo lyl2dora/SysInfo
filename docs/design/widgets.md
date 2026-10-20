@@ -131,7 +131,24 @@ struct WidgetSnapshot: Codable {
 - probe B 的 24 h 结论：没有每日上限（边界文档 §5）。probe 已停掉、注销。
 - 待办：
   1. ~~M4 复测出厂默认与面板两档~~（2026-10-20 完成，通过）。
-  2. M4 上扩展侧验证：需要 Developer ID 签名的构建（远端 ad-hoc 构建没有 App Group），拷到 M4 运行，用户用屏幕共享放一个组件。
+  2. ~~M4 上扩展侧验证~~（2026-10-20 完成，见 §11）。
   3. 用户手动删掉桌面上两个探针小组件（SysInfo Probe Dev / Rel）。本机两个探针的组容器还在（受 TCC 保护，没从终端删）。
   4. 写 `docs/design/widgets-acceptance.md`，用户验收后合并回 `main`。
 - 菜单栏拖拽排序已在 `main` 完成（D92），2026-10-20 合入本分支。
+
+## 11. M4 扩展侧验证（2026-10-20）
+
+本机 Developer ID 签名的 Debug 构建（2a4e306）拷到 M4，带 `--factory-defaults` 运行，用户屏幕共享放了小 / 中 / 大 / 超大竖版各一个。
+
+- 通过：
+  - App Group 可用，放置后不到 30 s 出数据；四种尺寸的内容与 D91 一致，读数与菜单栏一致。
+  - 5 分钟节奏的刷新照常到达。
+  - 点击刷新：在主进程执行（chronod「Successfully ran action」），约 0.3 s 内四个组件一起换成新快照。
+  - 正常退出后变暗，显示「SysInfo 未运行 · 时长」（小号「未运行 ·」）。
+- 发现：
+  1. **app 放在 `/tmp` 下时刷新按钮无效**。linkd 给 App Intents 建索引时找不到这个 app 的记录（-10814），chronod 报「There is no metadata for RefreshWidgetIntent」；`lsregister -f` 重登记也一样。同一份构建拷到 `~/Applications` 后 linkd 正常收录两份 `Metadata.appintents`，按钮可用。正式版装在 `/Applications` 不受影响；从「下载」直接打开、被 App Translocation 挪到临时路径运行的情况可能同样受影响，未验证。`remote-app.sh` 在 `/tmp` 下运行，测刷新按钮时要换位置。
+  2. **启动后的第一份快照可能缺启动盘温度**：启动时只等 CPU 的第一个样本就写，SMART 较慢，最多 5 分钟内显示「—」。待修：启动后有指标还没采到时，等它到了补写一份。
+  3. **曲线头 5–10 分钟显示「暂无数据」**：历史曲线按 5 分钟分桶，少于两个桶时不画；`--factory-defaults` 用临时历史库，每次启动都从空开始。属预期，验收时注意。
+  4. **一次被系统重新拉起**：23:31 结束 `/tmp` 下的实例后，launchd 以「launch job demand」立即重新拉起了它（不带 `--factory-defaults`，读写真实的 Dev 偏好域），触发方未查明；之后两次结束都没有复现。待观察，如果复现要查是不是 App Intents 的连接导致。
+  5. 清场缺口：扩展的沙盒容器 `~/Library/Containers/<app>.widgets`（以及 `.measure.widgets`、`.probe.widgets`）不在 `remote-app.sh` 的痕迹清单里，M4 上这三个都是之前留下的，这次没删。
+
