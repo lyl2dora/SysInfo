@@ -56,6 +56,13 @@ import SysModel
         #expect(snapshot(appRunning: false).isStale(at: t0))
     }
 
+    @Test func wantsRefreshAfterOneIntervalPlusGrace() {
+        let s = snapshot()
+        #expect(!s.wantsRefresh(at: t0.addingTimeInterval(359)))
+        #expect(s.wantsRefresh(at: t0.addingTimeInterval(361)))
+        #expect(snapshot(appRunning: false).wantsRefresh(at: t0))
+    }
+
     @Test func curveBucketsAverageAndDropOldPoints() {
         let points: [(minute: Int64, value: Double)] = [(98, 9), (100, 1), (101, 3), (104, 5), (105, 7), (106, .nan)]
         let curve = WidgetCurve.bucketed(points, bucketMinutes: 5, since: 100)

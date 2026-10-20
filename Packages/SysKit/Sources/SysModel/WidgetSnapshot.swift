@@ -99,6 +99,12 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
         !appRunning || now.timeIntervalSince(generatedAt) > refreshInterval * 3
     }
 
+    /// 比一个写入周期（加 60 s 余量）还旧：扩展该留「想要数据」标记，让主 app 立刻补写。
+    /// 比陈旧判断早得多：快照可能是还没放组件时写的（例如图库预览），新放上的组件不该等到下一次放置检查。
+    public func wantsRefresh(at now: Date) -> Bool {
+        !appRunning || now.timeIntervalSince(generatedAt) > refreshInterval + 60
+    }
+
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970

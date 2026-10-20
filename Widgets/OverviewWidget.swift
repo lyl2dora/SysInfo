@@ -30,7 +30,7 @@ struct OverviewProvider: TimelineProvider {
 
     private func entry() -> OverviewEntry {
         let snapshot = WidgetStorage.readSnapshot()
-        if snapshot == nil || snapshot?.isStale(at: .now) == true { WidgetStorage.markWanted() }
+        if snapshot?.wantsRefresh(at: .now) ?? true { WidgetStorage.markWanted() }
         return OverviewEntry(date: .now, snapshot: snapshot)
     }
 }
