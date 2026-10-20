@@ -428,14 +428,10 @@ final class StatusItemView: NSView {
 
         let body: NSRect
         if Self.effectiveStyle(configuration) == .inline {
-            if configuration.showsLabel {
-                let baseline = floor((bounds.height - Self.inlineValueFont.capHeight) / 2)
-                let attributed = NSAttributedString(
-                    string: label, attributes: [.font: Self.inlineLabelFont, .foregroundColor: NSColor.labelColor])
-                attributed.draw(at: NSPoint(x: Self.padding, y: baseline + Self.inlineLabelFont.descender))
-            }
             let x = bounds.width - Self.padding - Self.batteryNub - Self.batteryWidth
             body = NSRect(x: pixelAligned(x), y: floor((bounds.height - Self.batteryHeight) / 2), width: Self.batteryWidth, height: Self.batteryHeight)
+            // 小标签对齐到电池本体的中线（原先沿用数字的基线，比电池低）。
+            if configuration.showsLabel { drawInlineLabel(label, centeredOn: body.midY) }
         } else {
             let row = drawStackedLabel(label)
             // 电池本体与小标签同一条中线；电池比数字行高，底边放在数字行下方 2 pt，向上不压到小标签。
@@ -544,17 +540,25 @@ final class StatusItemView: NSView {
     }
 
     private func drawInline(_ labelText: String, _ valueText: String, _ valueColor: NSColor) {
-        // 两种字号共用一条基线：让数字的大写高度在 item 里垂直居中。
+        // 数字的大写高度在 item 里垂直居中；小标签按自己的大写高度对齐到数字的中线。
+        // 两种字号若共用一条基线，小标签的中线会比数字低约 1 pt（2026-10-20 用户反馈左右高度不一致）。
         let baseline = floor((bounds.height - Self.inlineValueFont.capHeight) / 2)
         if configuration.showsLabel {
-            let label = NSAttributedString(
-                string: labelText, attributes: [.font: Self.inlineLabelFont, .foregroundColor: NSColor.labelColor])
-            label.draw(at: NSPoint(x: Self.padding, y: baseline + Self.inlineLabelFont.descender))
+            drawInlineLabel(labelText, centeredOn: baseline + Self.inlineValueFont.capHeight / 2)
         }
         let value = NSAttributedString(
             string: valueText, attributes: [.font: Self.inlineValueFont, .foregroundColor: valueColor])
         let valueWidth = value.size().width
         value.draw(at: NSPoint(x: pixelAligned(bounds.width - Self.padding - valueWidth), y: baseline + Self.inlineValueFont.descender))
+    }
+
+    /// 左右排版的小标签：大写高度的中线放在 `midY`，基线取整到设备像素。
+    private func drawInlineLabel(_ text: String, centeredOn midY: CGFloat) {
+        let font = Self.inlineLabelFont
+        let scale = window?.backingScaleFactor ?? drawingScale ?? 2
+        let baseline = ((midY - font.capHeight / 2) * scale).rounded() / scale
+        let label = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        label.draw(at: NSPoint(x: Self.padding, y: baseline + font.descender))
     }
 
     private func drawSparkline(in rect: NSRect, color: NSColor) {
