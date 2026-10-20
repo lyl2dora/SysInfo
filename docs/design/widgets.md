@@ -123,3 +123,15 @@ struct WidgetSnapshot: Codable {
 - **WS2 组件里能不能自选指标**：推荐 v1 不做（固定内容，`StaticConfiguration`）；以后需要再改成 `AppIntentConfiguration`。
 - **WS3 SysInfo 没在运行时**：推荐保留最后的数据并变暗，注明「未运行」与时间（§6.3），不清空。
 - **WS4 设置放哪儿**：推荐新开侧栏页「桌面小组件」（放在「历史与导出」前面）；不并进「通用」。
+
+## 10. 进度（2026-10-20）
+
+- 已完成（`module/widgets`，未合并）：扩展 `SysInfoWidgets`、快照 v2、写入器、刷新 intent、设置页「桌面小组件」、隐私页一行、构建与发布检查。本机 M5 验证过：四种尺寸的渲染（fullColor 与 accented）、放置后 12 s 内出数据、点击刷新在主进程执行且不计预算、退出后显示「未运行」、重启后恢复。
+- 开销：扩展约 0.1% 单核（5 分钟）/ 0.4%（1 分钟），见 `docs/perf/widgets.md`。出厂与面板两档在 M5 上受后台干扰（参照值低 36%），**待在 M4 复测**（用户 2026-10-20 提议；M4 上的 Release 1.0.0 需先结束、测完重开，要用户同意）。
+- probe B 的 24 h 结论：没有每日上限（边界文档 §5）。probe 已停掉、注销。
+- 待办：
+  1. M4 复测出厂默认与面板两档（与 10-18 的 M4 记录比：默认 15.3 M 指令/s，面板 60.2 M 指令/s）。
+  2. M4 上扩展侧验证：需要 Developer ID 签名的构建（远端 ad-hoc 构建没有 App Group），拷到 M4 运行，用户用屏幕共享放一个组件。
+  3. 用户手动删掉桌面上两个探针小组件（SysInfo Probe Dev / Rel）。本机两个探针的组容器还在（受 TCC 保护，没从终端删）。
+  4. 写 `docs/design/widgets-acceptance.md`，用户验收后合并回 `main`。
+- 菜单栏拖拽排序是另一项工作，见 `docs/design/menubar-order.md`，从 `main` 开新分支。
