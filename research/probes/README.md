@@ -35,3 +35,8 @@
 - `ups_corehid.swift`：公开 CoreHID 按 page 0x84 匹配 UPS，列元素、读全部 feature 值并按 HID 单位换算，测全量与常用项的读取开销。
 - `ups_iohid.c`：同样的读取改用公开 IOHIDManager / IOHIDDevice（C），对照开销。
 - 编译输出在 `out/`，与原始输出一起按 `.gitignore` 只留在本地。结论见 `docs/design/power-devices-boundary.md`。
+
+## menubar-order/（2026-10-20，菜单栏 widget 排序）
+- `mborder.swift`：独立 accessory app（`local.probe.mborder`，只写自己的 defaults 域），按 `--steps` 脚本创建 / 移除 / 改名 / nil / 写 Preferred Position 键 / CGEvent 合成 ⌘ 拖动，报告本 app item 顺序、本域 `NSStatusItem*` 键，以及经 AX `AXExtrasMenuBar` 读到的全菜单栏顺序（27 的 status item 窗口不在 CGWindowList 里；其他 app 以序号代替）。
+- `build.sh [outdir]` 编译并另拷一份 `local.probe.mborder2` 充当「其他 app」；`exp.sh <app> <out>` 跑 N / P / R 三条路线共 33 次启动（约 2.5 min）。
+- 结论见 `docs/design/menubar-order.md` §6。输出（`out/`）按 `.gitignore` 只留在本地。

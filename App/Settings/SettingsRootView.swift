@@ -497,22 +497,16 @@ private struct MenuBarSettingsView: View {
     let store: MetricStore
     let openPage: (SettingsPage) -> Void
 
+    @State private var snapshots = StatusItemSnapshots()
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorScheme) private var colorScheme
+
     /// 已开启的项目达到这么多时，建议切换到合并模式（D65 MG6）。
     static let mergeSuggestionCount = 6
 
     var body: some View {
         Form {
-            Section {
-                Picker("排版", selection: $settings.menuBarLayout) {
-                    Text("上下（标签在上）").tag(MenuBarLayout.stacked)
-                    Text("左右").tag(MenuBarLayout.inline)
-                }
-                Toggle("显示小标签", isOn: $settings.menuBarShowsLabel)
-            } header: {
-                Text("外观")
-            } footer: {
-                Text("对所有模块的 widget 统一生效。折线、柱状等图形固定按上下排版绘制。")
-            }
+            orderSection
 
             Section {
                 Toggle("合并为单个项目", isOn: $settings.menuBarMerged)
@@ -529,50 +523,73 @@ private struct MenuBarSettingsView: View {
             }
 
             Section {
-                let visible = settings.visibleWidgets
-                let widgets = settings.menuBarMerged ? settings.mergedWidgets(from: visible) : visible
-                if widgets.isEmpty {
-                    Text("还没有开启任何菜单栏项目。").foregroundStyle(.secondary)
-                } else {
-                    ForEach(Array(widgets.enumerated()), id: \.element) { index, widget in
-                        let configuration = StatusItemConfiguration(widget: widget, settings: settings)
-                        LabeledContent {
-                            HStack(spacing: 8) {
-                                StatusItemPreview(store: store, configuration: configuration)
-                                if settings.menuBarMerged {
-                                    Button {
-                                        move(widgets, from: index, by: -1)
-                                    } label: {
-                                        Image(systemName: "arrow.up")
-                                    }
-                                    .disabled(index == 0)
-                                    .help("在合并项目里左移")
-                                    Button {
-                                        move(widgets, from: index, by: 1)
-                                    } label: {
-                                        Image(systemName: "arrow.down")
-                                    }
-                                    .disabled(index == widgets.count - 1)
-                                    .help("在合并项目里右移")
-                                }
-                            }
-                            .buttonStyle(.borderless)
-                        } label: {
-                            Text(WidgetInfo.title(widget))
-                            Text("\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))")
-                        }
-                    }
-                    let configurations = widgets.map { StatusItemConfiguration(widget: $0, settings: settings) }
-                    LabeledContent(
-                        "合计宽度",
-                        value: Self.points(
-                            settings.menuBarMerged
-                                ? MergedStatusItemView.fixedWidth(for: configurations, separator: settings.menuBarMergedSeparator)
-                                : configurations.map(StatusItemView.fixedWidth(for:)).reduce(0, +)))
+                Picker("排版", selection: $settings.menuBarLayout) {
+                    Text("上下（标签在上）").tag(MenuBarLayout.stacked)
+                    Text("左右").tag(MenuBarLayout.inline)
                 }
+                Toggle("显示小标签", isOn: $settings.menuBarShowsLabel)
             } header: {
-                Text(settings.menuBarMerged ? "合并项目里的顺序（从左到右）" : "已开启的项目")
+                Text("外观")
             } footer: {
+                Text("对所有模块的 widget 统一生效。折线、柱状等图形固定按上下排版绘制。")
+            }
+
+            if !settings.menuBarMerged {
+                Section {
+                    if settings.visibleWidgets.count >= Self.mergeSuggestionCount {
+                        Label("已开启 \(settings.visibleWidgets.count) 个项目，部分可能被系统收进溢出区。建议打开上面的「合并为单个项目」。", systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                    }
+                    Text("项目较多时，部分项目可能被系统收进溢出区；可以合并为单个项目，或到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// 页面顶部的排序区（D92）：已开启的 widget 按菜单栏的样子横向排开（一行放不下时换行）。
+    /// 合并模式下是合并项目里各段的顺序，可左右拖动；单 widget 模式下只读，位置由用户在菜单栏上按住 ⌘ 拖动。
+    private var orderSection: some View {
+        let visible = settings.visibleWidgets
+        let merged = settings.menuBarMerged
+        let widgets = merged ? settings.mergedWidgets(from: visible) : visible
+        let configurations = widgets.map { StatusItemConfiguration(widget: $0, settings: settings) }
+        return Section {
+            if widgets.isEmpty {
+                Text("还没有开启任何菜单栏项目。").foregroundStyle(.secondary)
+            } else {
+                // 27 的 reorderContainer 在 Form 里不生效（§8），容器用这一行里的流式布局。
+                WidgetFlowLayout(spacing: 6) {
+                    // 数据元素必须就是 reorderContainer 声明的项类型（MenuWidget），否则拖动开始时 SwiftUI 取不到
+                    // 被拖项的数据，触发前置条件崩溃（2026-10-20 实测，元组元素会崩）。
+                    ForEach(widgets, id: \.self) { widget in
+                        chip(StatusItemConfiguration(widget: widget, settings: settings), index: widgets.firstIndex(of: widget) ?? 0, of: widgets, draggable: merged)
+                    }
+                    .reorderable()
+                }
+                .onAppear { syncSnapshots(configurations) }
+                .onChange(of: configurations) { syncSnapshots(configurations) }
+                .onChange(of: displayScale) { syncSnapshots(configurations) }
+                .onChange(of: colorScheme) { syncSnapshots(configurations) }
+                .onDisappear { snapshots.stop() }
+                .reorderContainer(for: MenuWidget.self, itemID: \.self, isEnabled: merged) { difference in
+                    apply(difference, to: widgets)
+                }
+                .padding(.vertical, 2)
+                LabeledContent(
+                    "合计宽度",
+                    value: Self.points(
+                        merged
+                            ? MergedStatusItemView.fixedWidth(for: configurations, separator: settings.menuBarMergedSeparator)
+                            : configurations.map(StatusItemView.fixedWidth(for:)).reduce(0, +)))
+            }
+        } header: {
+            Text(merged ? "合并项目里的顺序（从左到右）" : "已开启的项目")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(merged ? "左右拖动调整顺序。" : "在菜单栏上按住 ⌘ 拖动各项目调整位置。")
                 HStack(spacing: 4) {
                     Text("各项目的开关和配置在所属模块页。")
                     Button("CPU") { openPage(.cpu) }
@@ -589,20 +606,44 @@ private struct MenuBarSettingsView: View {
                         .buttonStyle(.link)
                 }
             }
+        }
+    }
 
-            if !settings.menuBarMerged {
-                Section {
-                    if settings.visibleWidgets.count >= Self.mergeSuggestionCount {
-                        Label("已开启 \(settings.visibleWidgets.count) 个项目，部分可能被系统收进溢出区。建议打开上面的「合并为单个项目」。", systemImage: "exclamationmark.triangle")
-                            .font(.callout)
+    /// 一个 widget 的小块：真实的菜单栏预览，悬停显示名称、所属模块与宽度。
+    /// 预览是 NSView，上面盖一层透明命中区，拖动手势交给 SwiftUI。
+    private func chip(_ configuration: StatusItemConfiguration, index: Int, of widgets: [MenuWidget], draggable: Bool) -> some View {
+        let widget = configuration.widget
+        let title = WidgetInfo.title(widget)
+        let detail = "\(WidgetInfo.module(widget.module)) · \(Self.points(StatusItemView.fixedWidth(for: configuration)))"
+        // 内容是快照图像而不是 NSView，拖动和让位动画时文字跟着底色走；底色下面垫一层不透明的行底色
+        //（窗口底色 + secondarySystemFill，与分组 Form 的行一致），拖过相邻的块时不透出它们的文字。
+        // 块里不能有条件分支（if / switch）：27 的 reorderable 遇到被拖项是条件内容时，拖动开始就崩溃
+        //（「Unexpected identifier type」，最小样例可复现）。没有快照时显示空图。
+        return Image(nsImage: snapshots.images[widget] ?? NSImage())
+        .frame(width: StatusItemView.fixedWidth(for: configuration), height: NSStatusBar.system.thickness)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(.quaternary, in: .rect(cornerRadius: 6))
+        .background(Color(nsColor: .secondarySystemFill), in: .rect(cornerRadius: 6))
+        .background(Color(nsColor: .windowBackgroundColor), in: .rect(cornerRadius: 6))
+            .help(Text("\(title)（\(detail)）"))
+            .accessibilityElement()
+            .accessibilityLabel(Text(title))
+            .accessibilityValue(Text(detail))
+            .accessibilityActions {
+                if draggable {
+                    if index > 0 {
+                        Button("左移") { move(widgets, from: index, by: -1) }
                     }
-                    Text("每个菜单栏项目只显示一项，可以按住 ⌘ 单独拖动位置。项目较多时，部分项目可能被系统收进溢出区；可以合并为单个项目，或到「系统设置 → 菜单栏」查看和调整哪些项目允许显示。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    if index < widgets.count - 1 {
+                        Button("右移") { move(widgets, from: index, by: 1) }
+                    }
                 }
             }
-        }
-        .formStyle(.grouped)
+    }
+
+    private func syncSnapshots(_ configurations: [StatusItemConfiguration]) {
+        snapshots.sync(configurations, store: store, scale: displayScale, dark: colorScheme == .dark)
     }
 
     /// 在合并顺序里把一项左移或右移一位（D65 MG1）。
@@ -611,6 +652,20 @@ private struct MenuBarSettingsView: View {
         guard widgets.indices.contains(index), widgets.indices.contains(target) else { return }
         var order = widgets
         order.swapAt(index, target)
+        commit(order)
+    }
+
+    /// 拖拽结束（D92）：把被拖的项按拖动时选中的先后，插到目标项之前或末尾。
+    private func apply(_ difference: ReorderDifference<MenuWidget, ReorderableSingleCollectionIdentifier>, to widgets: [MenuWidget]) {
+        let before: MenuWidget? =
+            switch difference.destination.position {
+            case .before(let id): id
+            case .end: nil
+            }
+        commit(ReorderList.applying(sources: difference.sources, before: before, to: widgets))
+    }
+
+    private func commit(_ order: [MenuWidget]) {
         // 关着的 widget 保留在顺序记录的末尾，再开时出现在它记录的位置。
         settings.menuBarMergedOrder = order + settings.menuBarMergedOrder.filter { !order.contains($0) }
     }
@@ -748,5 +803,54 @@ private struct WindowReader: NSViewRepresentable {
                 onWindow?(window)
             }
         }
+    }
+}
+
+/// 横向排开、一行放不下时换行的布局（菜单栏页的排序区，D92）。每行顶部对齐，子视图按自身理想尺寸摆放。
+private struct WidgetFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map { $0.width }.max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.indices.isEmpty, needed > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
     }
 }
