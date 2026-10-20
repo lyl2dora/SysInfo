@@ -9,7 +9,7 @@ import SysModel
 
     private func snapshot(appRunning: Bool = true) -> WidgetSnapshot {
         WidgetSnapshot(
-            generatedAt: t0, appRunning: appRunning, refreshInterval: 300, historyEnabled: true,
+            generatedAt: t0, appRunning: appRunning, refreshInterval: 300,
             items: [
                 .init(slot: .cpuUsage, value: 0.25, quality: .measured, curve: [.init(minute: 10, value: 0.2)]),
                 .init(slot: .socHotspot, value: nil, quality: .unavailable(.sensorPowerGated())),
@@ -24,6 +24,17 @@ import SysModel
         old.version = 1
         #expect(WidgetSnapshot.decode(try old.encoded()) == nil)
         #expect(WidgetSnapshot.decode(Data("garbage".utf8)) == nil)
+    }
+
+    @Test func curveSourceIsPerItemAndOnlyWithACurve() throws {
+        let off = WidgetSnapshot.Item(slot: .cpuUsage, value: 0.2, quality: .measured, curve: [], curveSource: .historyOff)
+        #expect(off.curveSource == .historyOff && off.curveSource?.span == 900)
+        // 带曲线没说来源：按历史库处理；不带曲线：没有来源
+        #expect(WidgetSnapshot.Item(slot: .cpuUsage, value: 0.2, quality: .measured, curve: []).curveSource == .history)
+        #expect(WidgetSnapshot.Item(slot: .networkIn, value: 1, quality: .measured, curveSource: .recent).curveSource == nil)
+        var s = snapshot()
+        s.items.append(off)
+        #expect(WidgetSnapshot.decode(try s.encoded()) == s)
     }
 
     @Test func unavailableItemsCarryNoValue() {

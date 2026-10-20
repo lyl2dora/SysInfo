@@ -31,6 +31,8 @@ final class WidgetSnapshotWriter {
     @ObservationIgnored private var ticks = 0
     @ObservationIgnored private var writing = false
     @ObservationIgnored private var appliedInterval: TimeInterval?
+    /// 上一份快照写入时各曲线项的历史开关（`WidgetSlot.curved` 的顺序）。
+    @ObservationIgnored private var writtenCurveHistory: [Bool] = []
 
     /// 检查「想要数据」标记的间隔；写入周期是它的整数倍。
     static let pollSeconds: TimeInterval = 30
@@ -72,10 +74,13 @@ final class WidgetSnapshotWriter {
         WidgetSlot.allCases.allSatisfy { slot in Self.metric(slot).map { store.latest[$0] != nil } ?? false }
     }
 
-    /// 设置变了：只有节奏改了才跟着改需求、立刻写一份。
+    /// 设置变了：节奏改了就跟着改需求；节奏或曲线所看的历史开关改了，立刻写一份。
     func settingsChanged() {
-        guard available, appliedInterval != nil, appliedInterval != interval, !placedFamilies.isEmpty else { return }
-        applyDemand()
+        guard available, appliedInterval != nil, !placedFamilies.isEmpty else { return }
+        let curveSources = WidgetSlot.curved.map(historyEnabled)
+        let intervalChanged = appliedInterval != interval
+        guard intervalChanged || curveSources != writtenCurveHistory else { return }
+        if intervalChanged { applyDemand() }
         Task { await write(reason: "settings") }
     }
 
@@ -149,15 +154,15 @@ final class WidgetSnapshotWriter {
         writing = true
         defer { writing = false }
         let now = Date()
+        writtenCurveHistory = WidgetSlot.curved.map(historyEnabled)
         var items: [WidgetSnapshot.Item] = []
         for slot in WidgetSlot.allCases {
             let metric = Self.metric(slot)
             let (value, quality) = current(metric, now: now)
-            let curve = WidgetSlot.curved.contains(slot) ? await self.curve(metric, now: now) : nil
-            items.append(.init(slot: slot, value: value, quality: quality, curve: curve))
+            let curve = WidgetSlot.curved.contains(slot) ? await self.curve(slot, metric, now: now) : nil
+            items.append(.init(slot: slot, value: value, quality: quality, curve: curve?.points, curveSource: curve?.source))
         }
-        let snapshot = WidgetSnapshot(
-            generatedAt: now, refreshInterval: interval, historyEnabled: historyEnabled, items: items)
+        let snapshot = WidgetSnapshot(generatedAt: now, refreshInterval: interval, items: items)
         do {
             try WidgetStorage.write(snapshot)
             lastWrite = now
@@ -188,24 +193,36 @@ final class WidgetSnapshotWriter {
         return (sample.value, sample.quality)
     }
 
-    private var historyEnabled: Bool {
-        history != nil && settings.historyCPUEnabled && settings.historyPowerEnabled && settings.historyMemoryEnabled
+    /// 这一项所属模块的历史记录开着没有（规格 §4.3：每项各看各的）。
+    private func historyEnabled(_ slot: WidgetSlot) -> Bool {
+        guard history != nil else { return false }
+        return switch slot {
+        case .cpuUsage: settings.historyCPUEnabled
+        case .systemPower, .socHotspot: settings.historyPowerEnabled
+        case .memoryUsage: settings.historyMemoryEnabled
+        default: false
+        }
     }
 
-    /// 24 h 曲线，每 5 分钟一个点；历史库没有数据时退回内存里最近 15 分钟（规格 §4.3）。
-    private func curve(_ metric: MetricID?, now: Date) async -> [WidgetSnapshot.CurvePoint] {
-        guard let metric else { return [] }
-        let since = Int64(now.timeIntervalSince1970 / 60) - 24 * 60
-        if let history,
+    /// 24 h 曲线，每 5 分钟一个点；该模块的历史关着、或库里还没有数据时，用内存里最近 15 分钟（规格 §4.3）。
+    /// 历史关着时不读库：库里留着关之前的数据，画出来会和「已关闭」的说明对不上。
+    private func curve(_ slot: WidgetSlot, _ metric: MetricID?, now: Date) async
+        -> (points: [WidgetSnapshot.CurvePoint], source: WidgetSnapshot.CurveSource)
+    {
+        let enabled = historyEnabled(slot)
+        guard let metric else { return ([], enabled ? .history : .historyOff) }
+        if enabled, let history,
             let points = try? await history.series(
                 metric, from: now.addingTimeInterval(-86_400), to: now, granularity: .minute, bucketMinutes: 5),
             !points.isEmpty
         {
-            return WidgetCurve.bucketed(points.map { ($0.minute, $0.avg) }, bucketMinutes: 5, since: since)
+            let since = Int64(now.timeIntervalSince1970 / 60) - 24 * 60
+            return (WidgetCurve.bucketed(points.map { ($0.minute, $0.avg) }, bucketMinutes: 5, since: since), .history)
         }
         let recent = store.recentPoints(metric, seconds: 900).compactMap { p in
             p.value.map { (minute: Int64(p.wallClock.timeIntervalSince1970 / 60), value: $0) }
         }
-        return WidgetCurve.bucketed(recent, bucketMinutes: 1, since: since)
+        let since = Int64(now.timeIntervalSince1970 / 60) - 15
+        return (WidgetCurve.bucketed(recent, bucketMinutes: 1, since: since), enabled ? .recent : .historyOff)
     }
 }

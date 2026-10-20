@@ -189,9 +189,7 @@ struct CurveRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ForEach(slots, id: \.self) { slot in
-                CurveChart(
-                    slot: slot, item: snapshot.item(slot), historyEnabled: snapshot.historyEnabled,
-                    generatedAt: snapshot.generatedAt)
+                CurveChart(slot: slot, item: snapshot.item(slot), generatedAt: snapshot.generatedAt)
             }
         }
     }
@@ -200,16 +198,26 @@ struct CurveRow: View {
 struct CurveChart: View {
     let slot: WidgetSlot
     let item: WidgetSnapshot.Item?
-    let historyEnabled: Bool
     let generatedAt: Date
 
+    private var source: WidgetSnapshot.CurveSource { item?.curveSource ?? .history }
+
     private var xDomain: ClosedRange<Date> {
-        generatedAt.addingTimeInterval(historyEnabled ? -86_400 : -900)...generatedAt
+        generatedAt.addingTimeInterval(-source.span)...generatedAt
+    }
+
+    private var title: String {
+        let label = SlotText.label(slot)
+        return switch source {
+        case .history: String(localized: "\(label) · 24 小时")
+        case .historyOff: String(localized: "\(label) · 15 分钟（历史记录已关闭）")
+        case .recent: String(localized: "\(label) · 15 分钟")
+        }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(historyEnabled ? "\(SlotText.label(slot)) · 24 小时" : "\(SlotText.label(slot)) · 15 分钟（历史记录已关闭）")
+            Text(title)
                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             let points = item?.curve ?? []
             if points.count > 1 {
@@ -226,6 +234,7 @@ struct CurveChart: View {
                 .chartYAxis(.hidden)
                 .chartYScale(domain: yDomain(points))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()  // 横轴范围外的点不画到隔壁的图上
                 .widgetAccentable()
             } else {
                 Text("暂无数据").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -287,7 +296,7 @@ extension WidgetSnapshot {
             }
         }
         return WidgetSnapshot(
-            generatedAt: now, refreshInterval: 300, historyEnabled: true,
+            generatedAt: now, refreshInterval: 300,
             items: [
                 .init(slot: .cpuUsage, value: 0.12, quality: .measured, curve: curve(0.15, 0.1)),
                 .init(slot: .memoryUsage, value: 0.56, quality: .measured, curve: curve(0.55, 0.05)),

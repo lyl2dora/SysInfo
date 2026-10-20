@@ -28,19 +28,37 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
     /// 小组件的 kind。
     public static let widgetKind = "overview"
 
+    /// 曲线从哪儿来（规格 §4.3）。按项各自判断：每项看自己所属模块的历史开关。
+    public enum CurveSource: String, Sendable, Hashable, Codable {
+        /// 历史库里最近 24 h，每 5 分钟一个点。
+        case history
+        /// 该模块的历史记录关着：内存里最近 15 分钟，每分钟一个点。
+        case historyOff
+        /// 历史开着但库里还没有这一项（刚启动）：同样是内存里最近 15 分钟。
+        case recent
+
+        /// 横轴跨度（秒）。
+        public var span: TimeInterval { self == .history ? 86_400 : 900 }
+    }
+
     public struct Item: Sendable, Hashable, Codable {
         public var slot: WidgetSlot
         /// 不可用时为 nil，原因在 `quality` 里（D24）。
         public var value: Double?
         public var quality: DataQuality
-        /// 最近 24 h，每 5 分钟一个点；只有 `WidgetSlot.curved` 里的项才带。
+        /// 只有 `WidgetSlot.curved` 里的项才带；跨度与粒度见 `curveSource`。
         public var curve: [CurvePoint]?
+        public var curveSource: CurveSource?
 
-        public init(slot: WidgetSlot, value: Double?, quality: DataQuality, curve: [CurvePoint]? = nil) {
+        public init(
+            slot: WidgetSlot, value: Double?, quality: DataQuality, curve: [CurvePoint]? = nil,
+            curveSource: CurveSource? = nil
+        ) {
             self.slot = slot
             self.value = quality.isAvailable ? value : nil
             self.quality = value == nil && quality.isAvailable ? .unavailable(.readFailed("missing")) : quality
             self.curve = curve
+            self.curveSource = curve == nil ? nil : curveSource ?? .history
         }
     }
 
@@ -61,19 +79,16 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
     public var appRunning: Bool
     /// 主 app 当前的写入节奏（秒），扩展据此判断陈旧。
     public var refreshInterval: TimeInterval
-    /// 历史记录是否开着；关着时曲线只有最近 15 分钟（规格 §4.3）。
-    public var historyEnabled: Bool
     public var items: [Item]
 
     public init(
-        generatedAt: Date, appRunning: Bool = true, refreshInterval: TimeInterval, historyEnabled: Bool, items: [Item],
+        generatedAt: Date, appRunning: Bool = true, refreshInterval: TimeInterval, items: [Item],
         version: Int = WidgetSnapshot.currentVersion
     ) {
         self.version = version
         self.generatedAt = generatedAt
         self.appRunning = appRunning
         self.refreshInterval = refreshInterval
-        self.historyEnabled = historyEnabled
         self.items = items
     }
 
