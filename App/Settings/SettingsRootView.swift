@@ -150,6 +150,8 @@ private struct SettingsSplitView: View {
         case .appActivity:
             AppActivitySettingsView(
                 settings: context.settings, store: context.store, services: context.services, openPage: openPage)
+        case .widgets:
+            WidgetsSettingsView(settings: context.settings, writer: context.services.widgets)
         case .history:
             HistorySettingsView(settings: context.settings, history: context.services.history, openPage: openPage)
         case .privacy:
@@ -725,7 +727,10 @@ private struct PrivacySettingsView: View {
                 if let url = ChipProfileStore.calibrationDirectory() {
                     PathRow(title: String(localized: "传感器校准缓存"), url: url)
                 }
-                Text("历史库和导出文件不含序列号、硬件 UUID、MAC 地址等设备唯一标识。")
+                if let url = WidgetStorage.containerURL {
+                    PathRow(title: String(localized: "桌面小组件的快照"), url: url)
+                }
+                Text("历史库、导出文件和小组件快照都不含序列号、硬件 UUID、MAC 地址等设备唯一标识。小组件快照所在的组容器受系统保护，只有 SysInfo 和它的小组件能读。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

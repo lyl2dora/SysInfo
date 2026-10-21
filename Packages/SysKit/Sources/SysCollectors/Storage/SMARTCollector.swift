@@ -186,7 +186,12 @@ public final class SMARTCollector: Collector {
                 detail: capable.isEmpty ? "no NVMe disks" : "\(readable)/\(capable.count) readable"),
             at: 0)
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
-        state.withLock { $0.usable = result.isUsable }
+        state.withLock {
+            $0.usable = result.isUsable
+            // 自检读到的数不进 MetricStore：清掉读取时间，下一次采样照常读全部盘，
+            // 否则非焦点盘要等 backgroundSeconds 才有第一个样本（启动后盘温「—」最多 55 s）。
+            $0.lastReadNanos = [:]
+        }
         return result
     }
 

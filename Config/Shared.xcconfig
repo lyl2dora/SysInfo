@@ -17,6 +17,9 @@ SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES
 // 沙盒与签名：不开沙盒（D03），开启 Hardened Runtime；Debug/Release 都用 Developer ID 手动签名（D11、D23）。
 // Debug 保留 Xcode 注入的 get-task-allow；不加 disable-library-validation。
 ENABLE_APP_SANDBOX = NO
+// 桌面小组件（D90 W6）：主 app 与扩展共用的 App Group，必须带 Team ID 前缀（Developer ID 签名下不需要描述文件）。
+SYSINFO_APP_GROUP = $(DEVELOPMENT_TEAM).$(SYSINFO_APP_ID)
+CODE_SIGN_ENTITLEMENTS = Config/SysInfo.entitlements
 ENABLE_HARDENED_RUNTIME = YES
 RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO
 CODE_SIGN_STYLE = Manual

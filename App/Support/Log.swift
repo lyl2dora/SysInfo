@@ -13,4 +13,5 @@ nonisolated enum Log {
     static let panel = Logger(subsystem: subsystem, category: "panel")
     static let settings = Logger(subsystem: subsystem, category: "settings")
     static let throttle = Logger(subsystem: subsystem, category: "throttle")
+    static let widgets = Logger(subsystem: subsystem, category: "widgets")
 }
