@@ -60,7 +60,7 @@
 1. 放置与删除：放置已验证（2026-10-21，设置页列表正确）；还剩删掉全部组件后列表变为「没有」、不再写快照。
 2. ~~历史关闭时的曲线降级~~：2026-10-21 Claude 关掉 `.dev` 的 CPU 历史后截图验证（发现的问题见 §6 第 3 条，已修），只有 CPU 曲线标「15 分钟（历史记录已关闭）」，其余三条仍是 24 小时；验完已恢复。
 3. ~~锁屏后解锁~~：2026-10-21 用 `pmset displaysleepnow` 锁屏 01:07:16–01:12:25（本机显示器睡眠即锁定）。锁屏期间 01:10:23 照常写快照，chronod「Reload success」；解锁后组件显示 2 分钟前的数据，在节奏之内。补上了边界文档 §5 没测到的「锁屏时 chronod 是否刷新」：会。
-4. ~~Debug 与 Release 并存~~：2026-10-21 经用户同意在本机运行 Release（worktree 构建，新建了日用版偏好域），用户放了一个 Release 小号。两版菜单栏的盘温各连拍 6–8 帧都没有「—」（D93）；Release 组件只显示 Release 写的快照；结束 Release 后只有它的组件变暗（「未运行 · 1 分钟 4 秒」），chronod 只刷新 `zone.lyl.sysinfo.widgets`，Debug 的四个不受影响。验收中发现的补写问题见 §6 第 4 条。
+4. ~~Debug 与 Release 并存~~：2026-10-21 经用户同意在本机运行 Release（worktree 构建，新建了日用版偏好域），用户放了一个 Release 小号。两版菜单栏的盘温各连拍 6–8 帧都没有「—」（D93）；Release 组件只显示 Release 写的快照；结束 Release 后只有它的组件变暗（「未运行 · 1 分钟 4 秒」），chronod 只刷新 `zone.lyl.sysinfo.widgets`，Debug 的四个不受影响。验收中发现的补写问题见 §6 第 4 条。验完清场（用户要求）：用户删掉 Release 组件后，撤掉 Release 构建的登记，删掉偏好域 `zone.lyl.sysinfo` 与 `~/Library/Application Support/zone.lyl.sysinfo`；组容器 `<Team>.zone.lyl.sysinfo` 与扩展容器 `~/Library/Containers/zone.lyl.sysinfo.widgets` 受 TCC 保护，终端删不掉，交给用户在访达里删。
 
 已知问题（不阻塞验收，记下待观察）：
 
