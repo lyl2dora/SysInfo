@@ -2,7 +2,6 @@
 // 扩展开沙盒、只链接 SysModel：只读组容器里主 app 写的快照，不自己采样。
 
 import AppIntents
-import Charts
 import SwiftUI
 import SysModel
 import WidgetKit
@@ -279,6 +278,8 @@ struct MetricCard: View {
 }
 
 /// 卡片底下的曲线：没有坐标轴，只看形状。
+/// 曲线一律用 Path 自绘，不用 Swift Charts：Charts 每张图都要建刻度、做布局，
+/// 四种尺寸合计 17 张图时扩展每次重绘约 120 ms / 组件（docs/perf/widgets.md）。
 struct Sparkline: View {
     let slot: WidgetSlot
     let item: WidgetSnapshot.Item?
@@ -287,20 +288,61 @@ struct Sparkline: View {
     var body: some View {
         let points = item?.curve ?? []
         if points.count > 1 {
-            Chart(points, id: \.minute) { p in
-                AreaMark(x: .value("时间", p.date), y: .value("数值", p.value))
-                    .foregroundStyle(.linearGradient(colors: [.accentColor.opacity(0.35), .accentColor.opacity(0.05)], startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("时间", p.date), y: .value("数值", p.value))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                    .foregroundStyle(.tint.opacity(0.7))
+            let x = CurveScale.xDomain(item, generatedAt)
+            let y = CurveScale.yDomain(slot, points)
+            ZStack {
+                CurveShape(points: points, x: x, y: y, filled: true)
+                    .fill(.linearGradient(colors: [.accentColor.opacity(0.35), .accentColor.opacity(0.05)], startPoint: .top, endPoint: .bottom))
+                CurveShape(points: points, x: x, y: y, filled: false)
+                    .stroke(.tint.opacity(0.7), lineWidth: 1)
             }
-            .chartXScale(domain: CurveScale.xDomain(item, generatedAt))
-            .chartYScale(domain: CurveScale.yDomain(slot, points))
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartPlotStyle { $0.frame(maxWidth: .infinity, maxHeight: .infinity) }
             .widgetAccentable()
         }
+    }
+}
+
+/// 折线或其下方的面积。横轴范围外的点不画，纵轴超出范围的值压到边上；相邻点直接连线（与原来的 LineMark 一致）。
+nonisolated struct CurveShape: Shape {
+    let points: [WidgetSnapshot.CurvePoint]
+    let x: ClosedRange<Date>
+    let y: ClosedRange<Double>
+    let filled: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let x0 = x.lowerBound.timeIntervalSince1970
+        let xSpan = max(x.upperBound.timeIntervalSince1970 - x0, 1)
+        let ySpan = max(y.upperBound - y.lowerBound, .ulpOfOne)
+        let pts = points.compactMap { p -> CGPoint? in
+            let t = (p.date.timeIntervalSince1970 - x0) / xSpan
+            guard t >= 0, t <= 1, p.value.isFinite else { return nil }
+            let v = (min(max(p.value, y.lowerBound), y.upperBound) - y.lowerBound) / ySpan
+            return CGPoint(x: rect.minX + t * rect.width, y: rect.maxY - v * rect.height)
+        }
+        var path = Path()
+        guard let first = pts.first, let last = pts.last, pts.count > 1 else { return path }
+        path.move(to: first)
+        for p in pts.dropFirst() { path.addLine(to: p) }
+        if filled {
+            path.addLine(to: CGPoint(x: last.x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: first.x, y: rect.maxY))
+            path.closeSubpath()
+        }
+        return path
+    }
+}
+
+/// 竖直参考线（超大竖版的曲线）：把横轴等分成 `divisions` 段。
+nonisolated struct GridLines: Shape {
+    let divisions: Int
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        for i in 0...divisions {
+            let px = rect.minX + rect.width * CGFloat(i) / CGFloat(divisions)
+            path.move(to: CGPoint(x: px, y: rect.minY))
+            path.addLine(to: CGPoint(x: px, y: rect.maxY))
+        }
+        return path
     }
 }
 
@@ -448,22 +490,15 @@ struct AnnotatedChart: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption2.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
             if points.count > 1 {
-                Chart(points, id: \.minute) { p in
-                    AreaMark(x: .value("时间", p.date), y: .value("数值", p.value))
-                        .foregroundStyle(.tint.opacity(0.2))
-                    LineMark(x: .value("时间", p.date), y: .value("数值", p.value))
-                        .lineStyle(StrokeStyle(lineWidth: 1.2))
+                let x = CurveScale.xDomain(item, snapshot.generatedAt)
+                let y = CurveScale.yDomain(slot, points)
+                ZStack {
+                    GridLines(divisions: 4)
+                        .stroke(.quaternary, style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                    CurveShape(points: points, x: x, y: y, filled: true).fill(.tint.opacity(0.2))
+                    CurveShape(points: points, x: x, y: y, filled: false).stroke(.tint, lineWidth: 1.2)
                 }
-                .chartXScale(domain: CurveScale.xDomain(item, snapshot.generatedAt))
-                .chartYScale(domain: CurveScale.yDomain(slot, points))
-                .chartXAxis {
-                    AxisMarks(values: xTicks) { _ in
-                        AxisGridLine().foregroundStyle(.quaternary)
-                    }
-                }
-                .chartYAxis(.hidden)
                 .frame(maxHeight: .infinity)
-                .clipped()
                 .widgetAccentable()
                 // 竖线每 6 h（或 5 min）一条，不另标时间；下面只放统计
                 Text(stats(points))
@@ -476,13 +511,6 @@ struct AnnotatedChart: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    /// 横轴每 6 h（或 5 min）一条竖线。
-    private var xTicks: [Date] {
-        let span = source.span
-        let step = span / 4
-        return (0...4).map { snapshot.generatedAt.addingTimeInterval(-span + Double($0) * step) }
     }
 
     /// 「低 12%  均 18%  高 64%」
@@ -522,7 +550,7 @@ struct Footer: View {
     }
 }
 
-extension WidgetSnapshot.CurvePoint {
+nonisolated extension WidgetSnapshot.CurvePoint {
     var date: Date { Date(timeIntervalSince1970: TimeInterval(minute) * 60) }
 }
 
