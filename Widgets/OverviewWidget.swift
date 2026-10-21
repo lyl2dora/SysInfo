@@ -128,8 +128,8 @@ enum SlotText {
         case .memoryPressure: String(localized: "压力")
         case .swapUsed: String(localized: "交换")
         case .fanSpeed: String(localized: "风扇")
-        case .bootDiskFree: String(localized: "启动盘")
-        case .bootDiskTotal: String(localized: "启动盘")
+        case .bootDiskFree: String(localized: "磁盘")
+        case .bootDiskTotal: String(localized: "磁盘")
         }
     }
 
@@ -376,7 +376,7 @@ struct Bar: View {
     }
 }
 
-/// 两列明细：网速、盘温、交换，最后一行是启动盘可用与容量条。
+/// 两列明细：网速、盘温、交换，最后一行是可用空间与容量条（盘与容量组跟随菜单栏 widget 的设置）。
 struct DetailGrid: View {
     let snapshot: WidgetSnapshot
 

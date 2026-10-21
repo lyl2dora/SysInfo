@@ -33,6 +33,8 @@ final class WidgetSnapshotWriter {
     @ObservationIgnored private var appliedInterval: TimeInterval?
     /// 上一份快照写入时各曲线项的历史开关（`WidgetSlot.curved` 的顺序）。
     @ObservationIgnored private var writtenCurveHistory: [Bool] = []
+    /// 上一份快照写入时的盘温与可用空间目标（跟随菜单栏 widget 的设置）。
+    @ObservationIgnored private var writtenDiskTargets: [StorageTarget] = []
 
     /// 检查「想要数据」标记的间隔；写入周期是它的整数倍。
     static let pollSeconds: TimeInterval = 30
@@ -73,17 +75,18 @@ final class WidgetSnapshotWriter {
 
     private var firstSamplesArrived: Bool {
         // 风扇可能根本没有（不适用），不等它
-        WidgetSlot.allCases.filter { $0 != .fanSpeed }.allSatisfy { slot in
-            Self.metric(slot).map { store.latest[$0] != nil } ?? false
+        // 「所有盘最高温」时盘温不对应单个指标，也不等它
+        WidgetSlot.allCases.filter { $0 != .fanSpeed && !($0 == .bootDiskTemperature && hottest) }.allSatisfy { slot in
+            metric(slot).map { store.latest[$0] != nil } ?? false
         }
     }
 
-    /// 设置变了：节奏改了就跟着改需求；节奏或曲线所看的历史开关改了，立刻写一份。
+    /// 设置变了：节奏改了就跟着改需求；节奏、曲线所看的历史开关或盘的目标改了，立刻写一份。
     func settingsChanged() {
         guard available, appliedInterval != nil, !placedFamilies.isEmpty else { return }
         let curveSources = WidgetSlot.curved.map(historyEnabled)
         let intervalChanged = appliedInterval != interval
-        guard intervalChanged || curveSources != writtenCurveHistory else { return }
+        guard intervalChanged || curveSources != writtenCurveHistory || diskTargets != writtenDiskTargets else { return }
         if intervalChanged { applyDemand() }
         Task { await write(reason: "settings") }
     }
@@ -159,6 +162,7 @@ final class WidgetSnapshotWriter {
         defer { writing = false }
         let now = Date()
         writtenCurveHistory = WidgetSlot.curved.map(historyEnabled)
+        writtenDiskTargets = diskTargets
         var items: [WidgetSnapshot.Item] = []
         for slot in WidgetSlot.allCases {
             let (value, quality): (Double?, DataQuality)
@@ -167,10 +171,14 @@ final class WidgetSnapshotWriter {
                 let fans = store.latest.filter { $0.key.fanSpeedIndex != nil }
                 guard !fans.isEmpty else { continue }
                 (value, quality) = current(fans.max { ($0.value.value ?? 0) < ($1.value.value ?? 0) }?.key, now: now)
+            } else if slot == .bootDiskTemperature, hottest {
+                // 「所有盘最高温」：与菜单栏盘温 widget 相同，取各盘读数的最大值
+                let temps = store.latest.filter { $0.key.storageDiskMetric?.metric == .temp && $0.value.value != nil }
+                (value, quality) = current(temps.max { $0.value.value! < $1.value.value! }?.key, now: now)
             } else {
-                (value, quality) = current(Self.metric(slot), now: now)
+                (value, quality) = current(metric(slot), now: now)
             }
-            let curve = WidgetSlot.curved.contains(slot) ? await self.curve(slot, Self.metric(slot), now: now) : nil
+            let curve = WidgetSlot.curved.contains(slot) ? await self.curve(slot, metric(slot), now: now) : nil
             items.append(.init(slot: slot, value: value, quality: quality, curve: curve?.points, curveSource: curve?.source))
         }
         let snapshot = WidgetSnapshot(
@@ -184,15 +192,20 @@ final class WidgetSnapshotWriter {
         }
     }
 
-    private static func metric(_ slot: WidgetSlot) -> MetricID? {
-        switch slot {
+    /// 盘温与可用空间跟随菜单栏 widget 的设置（与菜单栏、面板总览相同的解析）。
+    private var diskTargets: [StorageTarget] { [settings.diskTemperatureTarget, settings.diskFreeTarget] }
+    private var hottest: Bool { settings.diskTemperatureTarget == .hottest }
+
+    private func metric(_ slot: WidgetSlot) -> MetricID? {
+        let storage = StorageModel.shared
+        return switch slot {
         case .cpuUsage: .cpuUsageTotal
         case .memoryUsage: .memoryUsage
         case .systemPower: .powerSystem
         case .socHotspot: .thermalSoCHotspot
         case .networkIn: .networkPrimaryIn
         case .networkOut: .networkPrimaryOut
-        case .bootDiskTemperature: StorageModel.shared.resolveDisk(.primary).map { .storageDisk($0, .temp) }
+        case .bootDiskTemperature: storage.resolveDisk(settings.diskTemperatureTarget).map { .storageDisk($0, .temp) }
         case .gpuUsage: .gpuActive
         case .gpuPower: .powerGPU
         case .memoryUsed: .memoryUsed
@@ -200,8 +213,8 @@ final class WidgetSnapshotWriter {
         case .memoryPressure: .memoryPressure
         case .swapUsed: .memorySwapUsed
         case .fanSpeed: nil  // 多个风扇取最高，见 write
-        case .bootDiskFree: StorageModel.shared.resolveGroup(.primary).map { .storageGroup($0, .available) }
-        case .bootDiskTotal: StorageModel.shared.resolveGroup(.primary).map { .storageGroup($0, .total) }
+        case .bootDiskFree: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .available) }
+        case .bootDiskTotal: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .total) }
         }
     }
 
@@ -215,12 +228,14 @@ final class WidgetSnapshotWriter {
     }
 
     /// 当前值：比一个写入周期还旧的样本按陈旧处理，写成不可用，不拿旧值冒充（规格 §4.2）。
+    /// 功率类取与菜单栏相同的平滑值（K24）；只有小组件在采样时间隔远超时间常数，平滑值就等于原始值。
     private func current(_ metric: MetricID?, now: Date) -> (Double?, DataQuality) {
         guard let metric, let sample = store.latest[metric] else { return (nil, .unavailable(.readFailed("noSample"))) }
         if now.timeIntervalSince(sample.time.wallClock) > interval + 30 {
             return (nil, .unavailable(UnavailableReason(code: "stale")))
         }
-        return (sample.value, sample.quality)
+        let value = MetricStore.smoothedIDs.contains(metric) ? store.smoothed[metric] ?? sample.value : sample.value
+        return (value, sample.quality)
     }
 
     /// 这一项所属模块的历史记录开着没有（规格 §4.3：每项各看各的）。
