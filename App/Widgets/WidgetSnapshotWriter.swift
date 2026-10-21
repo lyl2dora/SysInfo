@@ -75,8 +75,9 @@ final class WidgetSnapshotWriter {
 
     private var firstSamplesArrived: Bool {
         // 风扇可能根本没有（不适用），不等它
-        // 「所有盘最高温」时盘温不对应单个指标，也不等它
-        WidgetSlot.allCases.filter { $0 != .fanSpeed && !($0 == .diskTemperature && hottest) }.allSatisfy { slot in
+        // 「所有盘最高温」时盘温与容量不对应固定的指标，也不等它
+        let diskSlots: Set<WidgetSlot> = [.diskTemperature, .diskFree, .diskTotal]
+        return WidgetSlot.allCases.filter { $0 != .fanSpeed && !(hottest && diskSlots.contains($0)) }.allSatisfy { slot in
             metric(slot).map { store.latest[$0] != nil } ?? false
         }
     }
@@ -164,7 +165,17 @@ final class WidgetSnapshotWriter {
         writtenCurveHistory = WidgetSlot.curved.map(historyEnabled)
         writtenDiskTargets = diskTargets
         var items: [WidgetSnapshot.Item] = []
-        var tempDisk = metric(.diskTemperature)?.storageDiskMetric?.key
+        // 盘温取哪块盘先定下来，容量跟着这块盘所在的容量组
+        let tempMetric: MetricID? =
+            if hottest {
+                // 「所有盘最高温」：与菜单栏盘温 widget 相同，取各盘读数的最大值
+                store.latest.filter { $0.key.storageDiskMetric?.metric == .temp && $0.value.value != nil }
+                    .max { $0.value.value! < $1.value.value! }?.key
+            } else {
+                metric(.diskTemperature)
+            }
+        let tempDisk = tempMetric?.storageDiskMetric?.key
+        let group = capacityGroup(of: tempDisk)
         for slot in WidgetSlot.allCases {
             let (value, quality): (Double?, DataQuality)
             if slot == .fanSpeed {
@@ -172,12 +183,10 @@ final class WidgetSnapshotWriter {
                 let fans = store.latest.filter { $0.key.fanSpeedIndex != nil }
                 guard !fans.isEmpty else { continue }
                 (value, quality) = current(fans.max { ($0.value.value ?? 0) < ($1.value.value ?? 0) }?.key, now: now)
-            } else if slot == .diskTemperature, hottest {
-                // 「所有盘最高温」：与菜单栏盘温 widget 相同，取各盘读数的最大值
-                let temps = store.latest.filter { $0.key.storageDiskMetric?.metric == .temp && $0.value.value != nil }
-                let hottestID = temps.max { $0.value.value! < $1.value.value! }?.key
-                tempDisk = hottestID?.storageDiskMetric?.key
-                (value, quality) = current(hottestID, now: now)
+            } else if slot == .diskTemperature {
+                (value, quality) = current(tempMetric, now: now)
+            } else if slot == .diskFree || slot == .diskTotal {
+                (value, quality) = current(group.map { .storageGroup($0.key, slot == .diskFree ? .available : .total) }, now: now)
             } else {
                 (value, quality) = current(metric(slot), now: now)
             }
@@ -189,10 +198,9 @@ final class WidgetSnapshotWriter {
         let diskName = tempDisk.flatMap { storage.inventory.disk($0) }.map {
             StorageText.diskName($0, inventory: storage.inventory)
         }
-        let groupKey = storage.resolveGroup(settings.diskFreeTarget)
         let snapshot = WidgetSnapshot(
             generatedAt: now, refreshInterval: interval, items: items, cpuLevels: cpuLevels(now: now),
-            diskName: diskName, diskGroupName: storage.groups.first { $0.key == groupKey }?.name)
+            diskName: diskName, diskGroupName: group?.name)
         do {
             try WidgetStorage.write(snapshot)
             lastWrite = now
@@ -202,8 +210,8 @@ final class WidgetSnapshotWriter {
         }
     }
 
-    /// 盘温与可用空间跟随菜单栏 widget 的设置（与菜单栏、面板总览相同的解析）。
-    private var diskTargets: [StorageTarget] { [settings.diskTemperatureTarget, settings.diskFreeTarget] }
+    /// 盘温跟随菜单栏盘温 widget 的设置（与菜单栏、面板总览相同的解析）；容量跟着这块盘，不看可用空间 widget 的设置。
+    private var diskTargets: [StorageTarget] { [settings.diskTemperatureTarget] }
     private var hottest: Bool { settings.diskTemperatureTarget == .hottest }
 
     private func metric(_ slot: WidgetSlot) -> MetricID? {
@@ -223,9 +231,18 @@ final class WidgetSnapshotWriter {
         case .memoryPressure: .memoryPressure
         case .swapUsed: .memorySwapUsed
         case .fanSpeed: nil  // 多个风扇取最高，见 write
-        case .diskFree: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .available) }
-        case .diskTotal: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .total) }
+        case .diskFree: capacityGroup(of: storage.resolveDisk(settings.diskTemperatureTarget)).map { .storageGroup($0.key, .available) }
+        case .diskTotal: capacityGroup(of: storage.resolveDisk(settings.diskTemperatureTarget)).map { .storageGroup($0.key, .total) }
         }
+    }
+
+    /// 这块盘所在的容量组：RAID 成员取所属的 RAID 组，其余取以它为载体的组；有多个时取非辅助组里最大的。
+    /// 没有挂载的组（例如未格式化的盘）时为 nil，组件显示「—」。
+    private func capacityGroup(of disk: DiskKey?) -> CapacityGroup? {
+        let storage = StorageModel.shared
+        guard let disk, let physical = storage.inventory.disk(disk) else { return nil }
+        let owner: CapacityOwner = physical.raid.map { .raid($0.setKey) } ?? .disk(disk)
+        return storage.groups.filter { $0.owner == owner && !$0.isAuxiliary }.max { $0.totalBytes < $1.totalBytes }
     }
 
     /// CPU 各档占用：档数与档名运行时取（D20）；拓扑不成立时不写。
