@@ -76,7 +76,7 @@ final class WidgetSnapshotWriter {
     private var firstSamplesArrived: Bool {
         // 风扇可能根本没有（不适用），不等它
         // 「所有盘最高温」时盘温不对应单个指标，也不等它
-        WidgetSlot.allCases.filter { $0 != .fanSpeed && !($0 == .bootDiskTemperature && hottest) }.allSatisfy { slot in
+        WidgetSlot.allCases.filter { $0 != .fanSpeed && !($0 == .diskTemperature && hottest) }.allSatisfy { slot in
             metric(slot).map { store.latest[$0] != nil } ?? false
         }
     }
@@ -164,6 +164,7 @@ final class WidgetSnapshotWriter {
         writtenCurveHistory = WidgetSlot.curved.map(historyEnabled)
         writtenDiskTargets = diskTargets
         var items: [WidgetSnapshot.Item] = []
+        var tempDisk = metric(.diskTemperature)?.storageDiskMetric?.key
         for slot in WidgetSlot.allCases {
             let (value, quality): (Double?, DataQuality)
             if slot == .fanSpeed {
@@ -171,18 +172,27 @@ final class WidgetSnapshotWriter {
                 let fans = store.latest.filter { $0.key.fanSpeedIndex != nil }
                 guard !fans.isEmpty else { continue }
                 (value, quality) = current(fans.max { ($0.value.value ?? 0) < ($1.value.value ?? 0) }?.key, now: now)
-            } else if slot == .bootDiskTemperature, hottest {
+            } else if slot == .diskTemperature, hottest {
                 // 「所有盘最高温」：与菜单栏盘温 widget 相同，取各盘读数的最大值
                 let temps = store.latest.filter { $0.key.storageDiskMetric?.metric == .temp && $0.value.value != nil }
-                (value, quality) = current(temps.max { $0.value.value! < $1.value.value! }?.key, now: now)
+                let hottestID = temps.max { $0.value.value! < $1.value.value! }?.key
+                tempDisk = hottestID?.storageDiskMetric?.key
+                (value, quality) = current(hottestID, now: now)
             } else {
                 (value, quality) = current(metric(slot), now: now)
             }
             let curve = WidgetSlot.curved.contains(slot) ? await self.curve(slot, metric(slot), now: now) : nil
             items.append(.init(slot: slot, value: value, quality: quality, curve: curve?.points, curveSource: curve?.source))
         }
+        // 只写显示名，不写盘与组的键（D22）
+        let storage = StorageModel.shared
+        let diskName = tempDisk.flatMap { storage.inventory.disk($0) }.map {
+            StorageText.diskName($0, inventory: storage.inventory)
+        }
+        let groupKey = storage.resolveGroup(settings.diskFreeTarget)
         let snapshot = WidgetSnapshot(
-            generatedAt: now, refreshInterval: interval, items: items, cpuLevels: cpuLevels(now: now))
+            generatedAt: now, refreshInterval: interval, items: items, cpuLevels: cpuLevels(now: now),
+            diskName: diskName, diskGroupName: storage.groups.first { $0.key == groupKey }?.name)
         do {
             try WidgetStorage.write(snapshot)
             lastWrite = now
@@ -205,7 +215,7 @@ final class WidgetSnapshotWriter {
         case .socHotspot: .thermalSoCHotspot
         case .networkIn: .networkPrimaryIn
         case .networkOut: .networkPrimaryOut
-        case .bootDiskTemperature: storage.resolveDisk(settings.diskTemperatureTarget).map { .storageDisk($0, .temp) }
+        case .diskTemperature: storage.resolveDisk(settings.diskTemperatureTarget).map { .storageDisk($0, .temp) }
         case .gpuUsage: .gpuActive
         case .gpuPower: .powerGPU
         case .memoryUsed: .memoryUsed
@@ -213,8 +223,8 @@ final class WidgetSnapshotWriter {
         case .memoryPressure: .memoryPressure
         case .swapUsed: .memorySwapUsed
         case .fanSpeed: nil  // 多个风扇取最高，见 write
-        case .bootDiskFree: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .available) }
-        case .bootDiskTotal: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .total) }
+        case .diskFree: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .available) }
+        case .diskTotal: storage.resolveGroup(settings.diskFreeTarget).map { .storageGroup($0, .total) }
         }
     }
 

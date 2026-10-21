@@ -120,7 +120,7 @@ enum SlotText {
         case .socHotspot: String(localized: "SoC 温度")
         case .networkIn: String(localized: "下载")
         case .networkOut: String(localized: "上传")
-        case .bootDiskTemperature: String(localized: "盘温")
+        case .diskTemperature: String(localized: "盘温")
         case .gpuUsage: String(localized: "GPU")
         case .gpuPower: String(localized: "GPU 功率")
         case .memoryUsed: String(localized: "已用")
@@ -128,8 +128,8 @@ enum SlotText {
         case .memoryPressure: String(localized: "压力")
         case .swapUsed: String(localized: "交换")
         case .fanSpeed: String(localized: "风扇")
-        case .bootDiskFree: String(localized: "磁盘")
-        case .bootDiskTotal: String(localized: "磁盘")
+        case .diskFree: String(localized: "磁盘")
+        case .diskTotal: String(localized: "磁盘")
         }
     }
 
@@ -182,7 +182,7 @@ struct RingGrid: View {
             }
             GridRow {
                 Ring(label: SlotText.label(.memoryUsage), ratio: snapshot.value(.memoryUsage))
-                Ring(label: String(localized: "磁盘"), ratio: snapshot.bootDiskUsedRatio)
+                Ring(label: String(localized: "磁盘"), ratio: snapshot.diskUsedRatio)
             }
         }
         .frame(maxWidth: .infinity)
@@ -316,7 +316,7 @@ enum CurveScale {
         let hi = values.max() ?? 1
         switch slot {
         case .cpuUsage, .memoryUsage, .gpuUsage: return 0...1
-        case .socHotspot, .bootDiskTemperature:
+        case .socHotspot, .diskTemperature:
             let lo = values.min() ?? 0
             return max(lo - 5, 0)...max(hi + 5, lo + 10)
         default: return 0...max(hi * 1.1, 1)
@@ -376,40 +376,52 @@ struct Bar: View {
     }
 }
 
-/// 两列明细：网速、盘温、交换，最后一行是可用空间与容量条（盘与容量组跟随菜单栏 widget 的设置）。
+/// 明细：一行网速与交换；一行盘温（带盘名）；一行容量组可用与容量条。盘与容量组跟随菜单栏 widget 的设置。
 struct DetailGrid: View {
     let snapshot: WidgetSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                GridRow {
-                    detail("arrow.down", .networkIn)
-                    detail("arrow.up", .networkOut)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                compact("arrow.down", .networkIn)
+                compact("arrow.up", .networkOut)
+                compact("arrow.left.arrow.right", .swapUsed)
+            }
+            HStack(spacing: 4) {
+                Image(systemName: "thermometer.medium").font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+                Text(SlotText.label(.diskTemperature)).font(.caption2).foregroundStyle(.secondary)
+                if let name = snapshot.diskName {
+                    Text(name).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
-                GridRow {
-                    detail("internaldrive", .bootDiskTemperature)
-                    detail("arrow.left.arrow.right", .swapUsed)
-                }
+                Spacer(minLength: 4)
+                Text(SlotText.value(snapshot, .diskTemperature)).font(.caption.monospacedDigit()).lineLimit(1)
+                    .fixedSize().widgetAccentable()
             }
             HStack(spacing: 8) {
-                Text(SlotText.label(.bootDiskFree)).font(.caption2).foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .leading)
-                Bar(ratio: snapshot.bootDiskUsedRatio)
-                Text(String(localized: "可用 \(SlotText.value(snapshot, .bootDiskFree))"))
+                HStack(spacing: 4) {
+                    Image(systemName: "internaldrive").font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+                    Text(snapshot.diskGroupName ?? SlotText.label(.diskFree)).font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                .layoutPriority(1)  // 名字按自身宽度排，太长时截断，容量条至少留 60
+                Bar(ratio: snapshot.diskUsedRatio).frame(minWidth: 60)
+                Text(String(localized: "可用 \(SlotText.value(snapshot, .diskFree))"))
                     .font(.caption2.monospacedDigit()).lineLimit(1).fixedSize()
             }
         }
     }
 
-    private func detail(_ symbol: String, _ slot: WidgetSlot) -> some View {
+    /// 只有图标和数值，三项并排。
+    private func compact(_ symbol: String, _ slot: WidgetSlot) -> some View {
         HStack(spacing: 4) {
             Image(systemName: symbol).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
-            Text(SlotText.label(slot)).font(.caption2).foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text(SlotText.value(snapshot, slot)).font(.caption.monospacedDigit()).lineLimit(1).widgetAccentable()
+            Text(SlotText.value(snapshot, slot)).font(.caption.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.8)
+                .widgetAccentable()
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(SlotText.label(slot)) \(SlotText.value(snapshot, slot))")
     }
 }
 
@@ -539,13 +551,14 @@ extension WidgetSnapshot {
                 .init(slot: .swapUsed, value: 0, quality: .measured),
                 .init(slot: .networkIn, value: 48_000, quality: .measured),
                 .init(slot: .networkOut, value: 12_000, quality: .measured),
-                .init(slot: .bootDiskTemperature, value: 41, quality: .measured),
-                .init(slot: .bootDiskFree, value: 412e9, quality: .measured),
-                .init(slot: .bootDiskTotal, value: 994e9, quality: .measured),
+                .init(slot: .diskTemperature, value: 41, quality: .measured),
+                .init(slot: .diskFree, value: 412e9, quality: .measured),
+                .init(slot: .diskTotal, value: 994e9, quality: .measured),
             ],
             cpuLevels: [
                 .init(label: String(localized: "超级核"), name: "Super", value: 0.18, quality: .measured),
                 .init(label: String(localized: "性能核"), name: "Performance", value: 0.06, quality: .measured),
-            ])
+            ],
+            diskName: "APPLE SSD", diskGroupName: "Macintosh HD")
     }
 }

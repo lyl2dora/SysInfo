@@ -82,8 +82,8 @@ import SysModel
     @Test func formatsMemoryAndDiskSizes() {
         #expect(WidgetFormat.string(.memoryTotal, 64 * 1_073_741_824) == "64 GB")
         #expect(WidgetFormat.string(.swapUsed, 1.25 * 1_073_741_824) == "1.2 GB")
-        #expect(WidgetFormat.string(.bootDiskFree, 719_400_000_000) == "719 GB")
-        #expect(WidgetFormat.string(.bootDiskFree, 1_520_000_000_000) == "1.52 TB")
+        #expect(WidgetFormat.string(.diskFree, 719_400_000_000) == "719 GB")
+        #expect(WidgetFormat.string(.diskFree, 1_520_000_000_000) == "1.52 TB")
         #expect(WidgetFormat.string(.fanSpeed, 1094.6) == "1095 rpm")
         #expect(WidgetFormat.string(.gpuUsage, 0.07) == "7%")
     }
@@ -95,15 +95,17 @@ import SysModel
             .init(label: "性能核", name: "Performance", value: 0.3, quality: .unavailable(.readFailed())),
         ]
         #expect(s.cpuLevels[1].value == nil)
+        s.diskName = "成员 1 · 示例 SSD"
+        s.diskGroupName = "示例组"
         #expect(WidgetSnapshot.decode(try s.encoded()) == s)
     }
 
-    @Test func bootDiskUsedRatioNeedsBothValues() {
+    @Test func diskUsedRatioNeedsBothValues() {
         var s = snapshot()
-        #expect(s.bootDiskUsedRatio == nil)
-        s.items.append(.init(slot: .bootDiskFree, value: 250, quality: .measured))
-        #expect(s.bootDiskUsedRatio == nil)
-        s.items.append(.init(slot: .bootDiskTotal, value: 1000, quality: .measured))
-        #expect(s.bootDiskUsedRatio == 0.75)
+        #expect(s.diskUsedRatio == nil)
+        s.items.append(.init(slot: .diskFree, value: 250, quality: .measured))
+        #expect(s.diskUsedRatio == nil)
+        s.items.append(.init(slot: .diskTotal, value: 1000, quality: .measured))
+        #expect(s.diskUsedRatio == 0.75)
     }
 }

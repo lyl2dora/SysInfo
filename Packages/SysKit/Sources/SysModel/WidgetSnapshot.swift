@@ -11,7 +11,8 @@ public enum WidgetSlot: String, Sendable, Hashable, Codable, CaseIterable {
     case socHotspot
     case networkIn
     case networkOut
-    case bootDiskTemperature
+    /// 盘温：跟随菜单栏盘温 widget 绑定的盘（含「所有盘最高温」），盘名见 `diskName`。
+    case diskTemperature
     // v3（docs/design/widgets-rich.md §3）
     case gpuUsage
     /// GPU 功率（AGX，D44）。
@@ -25,9 +26,9 @@ public enum WidgetSlot: String, Sendable, Hashable, Codable, CaseIterable {
     case swapUsed
     /// 所有风扇的最高转速，rpm；没有风扇的机器不写这一项。
     case fanSpeed
-    /// 启动容量组的可用与总量，字节。
-    case bootDiskFree
-    case bootDiskTotal
+    /// 容量组的可用与总量，字节：跟随菜单栏可用空间 widget 绑定的组，组名见 `diskGroupName`。
+    case diskFree
+    case diskTotal
 
     /// 带 24 h 曲线的槽位。
     public static let curved: [WidgetSlot] = [.cpuUsage, .gpuUsage, .memoryUsage, .systemPower, .socHotspot]
@@ -115,10 +116,15 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
     public var items: [Item]
     /// CPU 各档占用，按档序号排列；拓扑不成立时为空。
     public var cpuLevels: [CPULevel]
+    /// 盘温来自哪块盘的显示名（型号，RAID 成员为「成员 n · 型号」）；不放盘的键与序列号（D22）。
+    public var diskName: String?
+    /// 可用空间所属容量组的名称（卷名或 RAID 组名）。
+    public var diskGroupName: String?
 
     public init(
         generatedAt: Date, appRunning: Bool = true, refreshInterval: TimeInterval, items: [Item],
-        cpuLevels: [CPULevel] = [], version: Int = WidgetSnapshot.currentVersion
+        cpuLevels: [CPULevel] = [], diskName: String? = nil, diskGroupName: String? = nil,
+        version: Int = WidgetSnapshot.currentVersion
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -126,6 +132,8 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
         self.refreshInterval = refreshInterval
         self.items = items
         self.cpuLevels = cpuLevels
+        self.diskName = diskName
+        self.diskGroupName = diskGroupName
     }
 
     public func item(_ slot: WidgetSlot) -> Item? { items.first { $0.slot == slot } }
@@ -133,9 +141,9 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
     /// 这一项的数值（不可用或没写时为 nil）。
     public func value(_ slot: WidgetSlot) -> Double? { item(slot)?.value }
 
-    /// 启动盘已用比例（可用与总量都有时）。
-    public var bootDiskUsedRatio: Double? {
-        guard let free = value(.bootDiskFree), let total = value(.bootDiskTotal), total > 0 else { return nil }
+    /// 容量组已用比例（可用与总量都有时）。
+    public var diskUsedRatio: Double? {
+        guard let free = value(.diskFree), let total = value(.diskTotal), total > 0 else { return nil }
         return min(max(1 - free / total, 0), 1)
     }
 
@@ -198,10 +206,10 @@ public enum WidgetFormat {
         switch slot {
         case .cpuUsage, .memoryUsage, .gpuUsage, .memoryPressure: return PercentFormat.string(fromRatio: value)
         case .systemPower, .gpuPower: return String(format: value < 10 ? "%.1f W" : "%.0f W", value)
-        case .socHotspot, .bootDiskTemperature: return String(format: "%.0f°", value)
+        case .socHotspot, .diskTemperature: return String(format: "%.0f°", value)
         case .networkIn, .networkOut: return bytesPerSecond(value)
         case .memoryUsed, .memoryTotal, .swapUsed: return gigabytes(value)
-        case .bootDiskFree, .bootDiskTotal: return decimalBytes(value)
+        case .diskFree, .diskTotal: return decimalBytes(value)
         case .fanSpeed: return String(format: "%.0f rpm", value)
         }
     }
