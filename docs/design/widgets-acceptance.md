@@ -67,7 +67,7 @@
 1. **app 放在 `/tmp` 下时刷新按钮无效**：linkd 给 App Intents 建索引时找不到 app（-10814）。拷到 `~/Applications` 后正常；正式版装在 `/Applications` 不受影响。从「下载」直接打开、被 App Translocation 挪到临时路径运行时可能也受影响，未验证。
 2. **主进程没在运行时点刷新**：`.main` 的 intent 会不会拉起 SysInfo 还没专门测过（边界文档 §3）。
 3. **一次被系统重新拉起**：M4 上结束 `/tmp` 下的实例后，launchd 以「launch job demand」立即重新拉起了它，原因未查明，之后两次没复现。如果复现，要查是不是 App Intents 的连接导致。
-4. **对照机清场缺口**：扩展的沙盒容器 `~/Library/Containers/<app>.widgets`（以及 `.measure.widgets`、`.probe.widgets`）不在 `remote-app.sh` 的痕迹清单里，M4 上三个都还在（D39）。
+4. **对照机清场缺口**：扩展的沙盒容器 `~/Library/Containers/<app>.widgets`（以及 `.measure.widgets`、`.probe.widgets`）不在 `remote-app.sh` 的痕迹清单里，M4 上三个都还在（D39）。2026-10-21 已修：`.dev.widgets`、`.dev.measure.widgets` 加进了痕迹清单；删不掉的（TCC 保护）清场时列出并以非零退出，请用户在访达里删，启动前就在的也列出来，不再静默跳过。M4 上通过 ssh 实测能删掉，`.dev`、`.dev.measure`、`.dev.probe` 三个旧容器已删；`zone.lyl.sysinfo.probe.widgets`（探针，不是 Release）留给用户决定。
 
 ## 5. 合并备注
 
