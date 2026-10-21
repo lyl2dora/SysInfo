@@ -2,7 +2,7 @@
 
 > 日期：2026-10-21。范围：D87、D90、D91（分支 `module/widgets`，已合入 `main` 到 D93）。能力边界与探针结果见 `widgets-boundary.md`，规格与进度见 `widgets.md`，开销见 `docs/perf/widgets.md`。
 
-## 结论（待用户验收）
+## 结论（2026-10-21 §4 各项验完，待用户确认合并）
 
 - D90、D91 列的内容已完成：
   - 扩展 `SysInfoWidgets`（沙盒，只链接 SysModel，碰不到私有层）：一个「总览」组件，小 / 中 / 大 / 超大竖版四种尺寸，内容按 WS1 固定（`StaticConfiguration`，WS2）；
@@ -26,7 +26,7 @@
 | 4 | 点击刷新 | 在主进程执行，不计刷新预算 | 在主进程执行（chronod「Successfully ran action」），约 0.3 s 内四个组件一起换新；app 放在 `/tmp` 下时无效（§4 第 3 条） |
 | 5 | 主进程退出 / 重启 | 退出后变暗并显示「SysInfo 未运行 · 时长」（小号「未运行 ·」），重启后恢复 | 同左 |
 | 6 | 启动盘盘温偶尔「—」 | — | 查明是 Release 与 Dev 同时运行时抢独占的 SMART 连接，与小组件无关；D93 已修并于 2026-10-21 合入本分支 |
-| 7 | 单测（`make test`，合入 D93 与 §6 的修复后） | 377 项通过（`swift test` 分三轮报告：263 + 58 + 56；之前只看了最后一行的 263）；`WidgetSnapshotTests` 共 7 项：v2 编解码、每项曲线来源、陈旧与补写判断、曲线分桶、格式 | 合入前 `make remote-test` 通过；合入 D93 后未在 M4 重跑 |
+| 7 | 单测（`make test`，合入 D93 与 §6 的修复后） | 377 项通过（`swift test` 分三轮报告：263 + 58 + 56；之前只看了最后一行的 263）；`WidgetSnapshotTests` 共 7 项：v2 编解码、每项曲线来源、陈旧与补写判断、曲线分桶、格式 | 2026-10-21 合入 D93 与 §6 的修复后 `make remote-test`（含硬件测试）377 项通过 |
 | 8 | Release 构建（`make release`） | 通过；扩展 `zone.lyl.sysinfo.widgets` 以 Developer ID 签名，entitlements 为沙盒 + 组 `<Team>.zone.lyl.sysinfo` | — |
 | 9a | 验收复查（2026-10-21，合入 D93 后） | 用户放了四种尺寸；数值与菜单栏一致（启动盘按 D91 固定显示 disk0，菜单栏的盘温绑定了外置盘，两者不同属预期）；设置页列出「小、中、大、超大竖版」与最近写入时间；重启后第一份快照约 2 s 写出、各项齐全（§6 修复后） | — |
 | 9 | 没有 App Group（ad-hoc 签名）时 | 写入器不启动，设置页注明不可用 | 同左（bb31489 修过一次：没有 Team ID 前缀的组按不可用处理） |
@@ -57,7 +57,7 @@
 
 需要用户点按确认（D18：真实点击由用户验收）：
 
-1. 放置与删除：放置已验证（2026-10-21，设置页列表正确）；还剩删掉全部组件后列表变为「没有」、不再写快照。
+1. ~~放置与删除~~：放置已验证（设置页列表正确）；2026-10-21 用户删掉全部组件后，设置页显示「已放置的组件：没有」「最近一次写入：—」；chronod 日志里同一时段其他组件照常刷新，SysInfo Dev 的组件 3 小时内没有任何刷新请求，说明删掉后写入器不再写快照。
 2. ~~历史关闭时的曲线降级~~：2026-10-21 Claude 关掉 `.dev` 的 CPU 历史后截图验证（发现的问题见 §6 第 3 条，已修），只有 CPU 曲线标「15 分钟（历史记录已关闭）」，其余三条仍是 24 小时；验完已恢复。
 3. ~~锁屏后解锁~~：2026-10-21 用 `pmset displaysleepnow` 锁屏 01:07:16–01:12:25（本机显示器睡眠即锁定）。锁屏期间 01:10:23 照常写快照，chronod「Reload success」；解锁后组件显示 2 分钟前的数据，在节奏之内。补上了边界文档 §5 没测到的「锁屏时 chronod 是否刷新」：会。
 4. ~~Debug 与 Release 并存~~：2026-10-21 经用户同意在本机运行 Release（worktree 构建，新建了日用版偏好域），用户放了一个 Release 小号。两版菜单栏的盘温各连拍 6–8 帧都没有「—」（D93）；Release 组件只显示 Release 写的快照；结束 Release 后只有它的组件变暗（「未运行 · 1 分钟 4 秒」），chronod 只刷新 `zone.lyl.sysinfo.widgets`，Debug 的四个不受影响。验收中发现的补写问题见 §6 第 4 条。验完清场（用户要求）：用户删掉 Release 组件后，撤掉 Release 构建的登记，删掉偏好域 `zone.lyl.sysinfo` 与 `~/Library/Application Support/zone.lyl.sysinfo`；组容器 `<Team>.zone.lyl.sysinfo` 与扩展容器 `~/Library/Containers/zone.lyl.sysinfo.widgets` 受 TCC 保护，终端删不掉，交给用户在访达里删。
