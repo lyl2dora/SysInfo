@@ -35,6 +35,9 @@ traces=(
     "Library/Application Support/zone.lyl.sysinfo.dev.measure"
     "Library/Group Containers/D8MFB2YNN3.zone.lyl.sysinfo.dev"
     "Library/Group Containers/D8MFB2YNN3.zone.lyl.sysinfo.dev.measure"
+    # 小组件扩展的沙盒容器（D87）。受 TCC「App 数据」保护，可能删不掉，删不掉时清场会列出来请用户在访达里删。
+    "Library/Containers/zone.lyl.sysinfo.dev.widgets"
+    "Library/Containers/zone.lyl.sysinfo.dev.measure.widgets"
 )
 
 remote() { "${ssh_cmd[@]}" "$@"; }
@@ -97,8 +100,21 @@ clean)
     remote "for a in '$app' '$dir/measure-dd/Build/Products/Release/SysInfo.app'; do /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u \"\$a\" 2>/dev/null; done; true"
     list=""
     for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
-    remote "touch $dir/preexisting.txt; for p in $list; do if [ -e \"\$p\" ] && ! grep -qxF \"\$p\" $dir/preexisting.txt; then rm -rf \"\$p\" && echo \"删除 \$p\"; fi; done; true"
+    # 删不掉的（TCC 保护的容器）和启动前就在的都列出来，不静默跳过。
+    leftover="$(remote "touch $dir/preexisting.txt; for p in $list; do [ -e \"\$p\" ] || continue; \
+        if grep -qxF \"\$p\" $dir/preexisting.txt; then echo \"[pre] \$p\"; continue; fi; \
+        rm -rf \"\$p\" 2>/dev/null; if [ -e \"\$p\" ]; then echo \"[left] \$p\"; else echo \"删除 \$p\" >&2; fi; done; true")"
     remote "defaults read zone.lyl.sysinfo.dev >/dev/null 2>&1 && ! grep -q Preferences $dir/preexisting.txt && defaults delete zone.lyl.sysinfo.dev && echo '删除偏好域 zone.lyl.sysinfo.dev'; true"
+    if grep -q '^\[pre\] ' <<<"$leftover"; then
+        echo "==> 启动前就存在、这次没动的痕迹（确认是旧残留后可手动删除）："
+        sed -n 's/^\[pre\] /    /p' <<<"$leftover"
+    fi
+    if grep -q '^\[left\] ' <<<"$leftover"; then
+        echo "==> 以下残留终端删不掉（多半是 TCC「App 数据」保护），请在对照机的访达里手动删除"
+        echo "    （~/Library/Containers 里访达显示的是 app 显示名；在对照机上 open -R <路径> 可直接定位）："
+        sed -n 's/^\[left\] /    /p' <<<"$leftover"
+        exit 1
+    fi
     ;;
 *)
     sed -n '2,13p' "$0"
