@@ -40,7 +40,7 @@ struct WidgetsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section("怎么放") {
-                Text("在桌面上右键，选「编辑小组件」，在列表里找到「SysInfo」，把「总览」拖到桌面。有小、中、大、超大竖版四种尺寸，大尺寸带 24 小时曲线。SysInfo 没在运行时，组件保留最后的数据并注明「未运行」。")
+                Text("在桌面上右键，选「编辑小组件」，在列表里找到「SysInfo」，把「总览」拖到桌面。有小、中、大、超大竖版四种尺寸：小号是四个圆环，中号起是带 24 小时曲线的卡片，大号加核心分档与网速、磁盘，超大竖版再加四张带标注的 24 小时曲线。SysInfo 没在运行时，组件保留最后的数据并注明「未运行」。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

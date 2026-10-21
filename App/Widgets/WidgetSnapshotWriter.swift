@@ -40,6 +40,7 @@ final class WidgetSnapshotWriter {
     static let collectors: Set<CollectorID> = [
         CPULoadCollector.collectorID, MemoryCollector.collectorID, PowerRailCollector.collectorID,
         PowerSensorCollector.collectorID, SMARTCollector.collectorID, NetworkIOCollector.collectorID,
+        GPUPowerCollector.collectorID, StorageCapacityCollector.collectorID,
     ]
 
     init(store: MetricStore, settings: AppSettings, history: HistoryRecorder?, engine: SamplingEngine) {
@@ -71,7 +72,10 @@ final class WidgetSnapshotWriter {
     }
 
     private var firstSamplesArrived: Bool {
-        WidgetSlot.allCases.allSatisfy { slot in Self.metric(slot).map { store.latest[$0] != nil } ?? false }
+        // 风扇可能根本没有（不适用），不等它
+        WidgetSlot.allCases.filter { $0 != .fanSpeed }.allSatisfy { slot in
+            Self.metric(slot).map { store.latest[$0] != nil } ?? false
+        }
     }
 
     /// 设置变了：节奏改了就跟着改需求；节奏或曲线所看的历史开关改了，立刻写一份。
@@ -157,12 +161,20 @@ final class WidgetSnapshotWriter {
         writtenCurveHistory = WidgetSlot.curved.map(historyEnabled)
         var items: [WidgetSnapshot.Item] = []
         for slot in WidgetSlot.allCases {
-            let metric = Self.metric(slot)
-            let (value, quality) = current(metric, now: now)
-            let curve = WidgetSlot.curved.contains(slot) ? await self.curve(slot, metric, now: now) : nil
+            let (value, quality): (Double?, DataQuality)
+            if slot == .fanSpeed {
+                // 没有风扇的机器不写这一项（不适用，不是不可用）
+                let fans = store.latest.filter { $0.key.fanSpeedIndex != nil }
+                guard !fans.isEmpty else { continue }
+                (value, quality) = current(fans.max { ($0.value.value ?? 0) < ($1.value.value ?? 0) }?.key, now: now)
+            } else {
+                (value, quality) = current(Self.metric(slot), now: now)
+            }
+            let curve = WidgetSlot.curved.contains(slot) ? await self.curve(slot, Self.metric(slot), now: now) : nil
             items.append(.init(slot: slot, value: value, quality: quality, curve: curve?.points, curveSource: curve?.source))
         }
-        let snapshot = WidgetSnapshot(generatedAt: now, refreshInterval: interval, items: items)
+        let snapshot = WidgetSnapshot(
+            generatedAt: now, refreshInterval: interval, items: items, cpuLevels: cpuLevels(now: now))
         do {
             try WidgetStorage.write(snapshot)
             lastWrite = now
@@ -181,6 +193,24 @@ final class WidgetSnapshotWriter {
         case .networkIn: .networkPrimaryIn
         case .networkOut: .networkPrimaryOut
         case .bootDiskTemperature: StorageModel.shared.resolveDisk(.primary).map { .storageDisk($0, .temp) }
+        case .gpuUsage: .gpuActive
+        case .gpuPower: .powerGPU
+        case .memoryUsed: .memoryUsed
+        case .memoryTotal: .memoryPhysical
+        case .memoryPressure: .memoryPressure
+        case .swapUsed: .memorySwapUsed
+        case .fanSpeed: nil  // 多个风扇取最高，见 write
+        case .bootDiskFree: StorageModel.shared.resolveGroup(.primary).map { .storageGroup($0, .available) }
+        case .bootDiskTotal: StorageModel.shared.resolveGroup(.primary).map { .storageGroup($0, .total) }
+        }
+    }
+
+    /// CPU 各档占用：档数与档名运行时取（D20）；拓扑不成立时不写。
+    private func cpuLevels(now: Date) -> [WidgetSnapshot.CPULevel] {
+        guard let topology = CPUTopologyService.shared.current else { return [] }
+        return topology.perfLevels.map { level in
+            let (value, quality) = current(.cpuUsagePerfLevel(level.index), now: now)
+            return .init(label: DisplayNames.perfLevel(level.name), name: level.name, value: value, quality: quality)
         }
     }
 
@@ -198,6 +228,7 @@ final class WidgetSnapshotWriter {
         guard history != nil else { return false }
         return switch slot {
         case .cpuUsage: settings.historyCPUEnabled
+        case .gpuUsage: settings.historyGPUEnabled
         case .systemPower, .socHotspot: settings.historyPowerEnabled
         case .memoryUsage: settings.historyMemoryEnabled
         default: false

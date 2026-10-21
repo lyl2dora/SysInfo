@@ -1,4 +1,4 @@
-// 桌面小组件快照 v2（D90、D91，规格 docs/design/widgets.md §3）。
+// 桌面小组件快照 v3（D90、D91，规格 docs/design/widgets.md §3、widgets-rich.md §3）。
 
 import Foundation
 import Testing
@@ -21,7 +21,7 @@ import SysModel
         let s = snapshot()
         #expect(WidgetSnapshot.decode(try s.encoded()) == s)
         var old = s
-        old.version = 1
+        old.version = 2
         #expect(WidgetSnapshot.decode(try old.encoded()) == nil)
         #expect(WidgetSnapshot.decode(Data("garbage".utf8)) == nil)
     }
@@ -77,5 +77,33 @@ import SysModel
         #expect(WidgetFormat.string(.networkIn, 1_234_000) == "1.2 MB/s")
         #expect(WidgetFormat.string(.networkOut, 812) == "812 B/s")
         #expect(WidgetFormat.string(.cpuUsage, nil) == PercentFormat.placeholder)
+    }
+
+    @Test func formatsMemoryAndDiskSizes() {
+        #expect(WidgetFormat.string(.memoryTotal, 64 * 1_073_741_824) == "64 GB")
+        #expect(WidgetFormat.string(.swapUsed, 1.25 * 1_073_741_824) == "1.2 GB")
+        #expect(WidgetFormat.string(.bootDiskFree, 719_400_000_000) == "719 GB")
+        #expect(WidgetFormat.string(.bootDiskFree, 1_520_000_000_000) == "1.52 TB")
+        #expect(WidgetFormat.string(.fanSpeed, 1094.6) == "1095 rpm")
+        #expect(WidgetFormat.string(.gpuUsage, 0.07) == "7%")
+    }
+
+    @Test func cpuLevelsRoundTripAndCarryNoValueWhenUnavailable() throws {
+        var s = snapshot()
+        s.cpuLevels = [
+            .init(label: "超级核", name: "Super", value: 0.42, quality: .measured),
+            .init(label: "性能核", name: "Performance", value: 0.3, quality: .unavailable(.readFailed())),
+        ]
+        #expect(s.cpuLevels[1].value == nil)
+        #expect(WidgetSnapshot.decode(try s.encoded()) == s)
+    }
+
+    @Test func bootDiskUsedRatioNeedsBothValues() {
+        var s = snapshot()
+        #expect(s.bootDiskUsedRatio == nil)
+        s.items.append(.init(slot: .bootDiskFree, value: 250, quality: .measured))
+        #expect(s.bootDiskUsedRatio == nil)
+        s.items.append(.init(slot: .bootDiskTotal, value: 1000, quality: .measured))
+        #expect(s.bootDiskUsedRatio == 0.75)
     }
 }

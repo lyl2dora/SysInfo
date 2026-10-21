@@ -12,15 +12,31 @@ public enum WidgetSlot: String, Sendable, Hashable, Codable, CaseIterable {
     case networkIn
     case networkOut
     case bootDiskTemperature
+    // v3（docs/design/widgets-rich.md §3）
+    case gpuUsage
+    /// GPU 功率（AGX，D44）。
+    case gpuPower
+    /// 内存已用与总量，字节。
+    case memoryUsed
+    case memoryTotal
+    /// 内存压力，比例。
+    case memoryPressure
+    /// 交换已用，字节。
+    case swapUsed
+    /// 所有风扇的最高转速，rpm；没有风扇的机器不写这一项。
+    case fanSpeed
+    /// 启动容量组的可用与总量，字节。
+    case bootDiskFree
+    case bootDiskTotal
 
-    /// 带 24 h 曲线的槽位（D91：大号起 CPU 与整机功率，超大竖版再加内存与 SoC 热点）。
-    public static let curved: [WidgetSlot] = [.cpuUsage, .systemPower, .memoryUsage, .socHotspot]
+    /// 带 24 h 曲线的槽位。
+    public static let curved: [WidgetSlot] = [.cpuUsage, .gpuUsage, .memoryUsage, .systemPower, .socHotspot]
 }
 
-/// 写给桌面小组件的快照（v2）。
+/// 写给桌面小组件的快照（v3）。
 public struct WidgetSnapshot: Sendable, Hashable, Codable {
     /// 快照格式版本；字段有不兼容变化时递增。v1 只定义过类型，从没写出过。
-    public static let currentVersion = 2
+    public static let currentVersion = 3
     /// 组容器里的文件名。
     public static let fileName = "widget-snapshot.json"
     /// 扩展发现快照缺失或陈旧时写的标记，主 app 看到后立刻补写（规格 §4.1）。
@@ -62,6 +78,23 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
         }
     }
 
+    /// CPU 的一档（`hw.perflevelN`，D20）：档数与档名运行时发现。
+    public struct CPULevel: Sendable, Hashable, Codable {
+        /// 本地化后的档名（主 app 写，扩展直接显示）。
+        public var label: String
+        /// `hw.perflevelN.name` 原文，扩展据此取颜色（D29）。
+        public var name: String
+        public var value: Double?
+        public var quality: DataQuality
+
+        public init(label: String, name: String, value: Double?, quality: DataQuality) {
+            self.label = label
+            self.name = name
+            self.value = quality.isAvailable ? value : nil
+            self.quality = value == nil && quality.isAvailable ? .unavailable(.readFailed("missing")) : quality
+        }
+    }
+
     public struct CurvePoint: Sendable, Hashable, Codable {
         /// UTC Unix 分钟。
         public var minute: Int64
@@ -80,19 +113,31 @@ public struct WidgetSnapshot: Sendable, Hashable, Codable {
     /// 主 app 当前的写入节奏（秒），扩展据此判断陈旧。
     public var refreshInterval: TimeInterval
     public var items: [Item]
+    /// CPU 各档占用，按档序号排列；拓扑不成立时为空。
+    public var cpuLevels: [CPULevel]
 
     public init(
         generatedAt: Date, appRunning: Bool = true, refreshInterval: TimeInterval, items: [Item],
-        version: Int = WidgetSnapshot.currentVersion
+        cpuLevels: [CPULevel] = [], version: Int = WidgetSnapshot.currentVersion
     ) {
         self.version = version
         self.generatedAt = generatedAt
         self.appRunning = appRunning
         self.refreshInterval = refreshInterval
         self.items = items
+        self.cpuLevels = cpuLevels
     }
 
     public func item(_ slot: WidgetSlot) -> Item? { items.first { $0.slot == slot } }
+
+    /// 这一项的数值（不可用或没写时为 nil）。
+    public func value(_ slot: WidgetSlot) -> Double? { item(slot)?.value }
+
+    /// 启动盘已用比例（可用与总量都有时）。
+    public var bootDiskUsedRatio: Double? {
+        guard let free = value(.bootDiskFree), let total = value(.bootDiskTotal), total > 0 else { return nil }
+        return min(max(1 - free / total, 0), 1)
+    }
 
     /// 陈旧：主 app 已退出，或者超过三个写入周期没有新快照（规格 §6.3）。
     public func isStale(at now: Date) -> Bool {
@@ -151,11 +196,33 @@ public enum WidgetFormat {
     public static func string(_ slot: WidgetSlot, _ value: Double?) -> String {
         guard let value, value.isFinite else { return PercentFormat.placeholder }
         switch slot {
-        case .cpuUsage, .memoryUsage: return PercentFormat.string(fromRatio: value)
-        case .systemPower: return String(format: value < 10 ? "%.1f W" : "%.0f W", value)
+        case .cpuUsage, .memoryUsage, .gpuUsage, .memoryPressure: return PercentFormat.string(fromRatio: value)
+        case .systemPower, .gpuPower: return String(format: value < 10 ? "%.1f W" : "%.0f W", value)
         case .socHotspot, .bootDiskTemperature: return String(format: "%.0f°", value)
         case .networkIn, .networkOut: return bytesPerSecond(value)
+        case .memoryUsed, .memoryTotal, .swapUsed: return gigabytes(value)
+        case .bootDiskFree, .bootDiskTotal: return decimalBytes(value)
+        case .fanSpeed: return String(format: "%.0f rpm", value)
         }
+    }
+
+    /// 内存类：按 1024 换算的 GB（与「活动监视器」一致），<10 一位小数。
+    public static func gigabytes(_ value: Double) -> String {
+        let gb = max(value, 0) / 1_073_741_824
+        return String(format: gb < 9.95 ? "%.1f GB" : "%.0f GB", gb)
+    }
+
+    /// 磁盘类：按 1000 换算（K24，与访达一致），位数与菜单栏「可用空间」相同。
+    public static func decimalBytes(_ value: Double) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+        var v = max(value, 0)
+        var unit = 0
+        while v >= 999.5, unit < units.count - 1 {
+            v /= 1000
+            unit += 1
+        }
+        let format = unit == 0 || v >= 99.5 ? "%.0f %@" : v >= 9.95 ? "%.1f %@" : "%.2f %@"
+        return String(format: format, v, units[unit])
     }
 
     /// 「12 KB/s」「1.2 MB/s」：<10 一位小数，否则取整。
