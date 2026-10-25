@@ -372,6 +372,8 @@ public final class UPSTelemetryCollector: Collector {
         var collections: [UInt32]
         var quantity: UPSReportLayout.Quantity
         var label: String
+        /// 只在 `collections` 里找（电压类：含义随所在集合而变）。
+        var exact = false
     }
 
     static let summaryFirst = [UPSUsage.powerSummary, UPSUsage.battery]
@@ -383,8 +385,10 @@ public final class UPSTelemetryCollector: Collector {
         Field(usage: UPSUsage.capacityMode, collections: summaryFirst, quantity: .plain, label: "CapacityMode"),
         Field(usage: UPSUsage.runTimeToEmpty, collections: summaryFirst, quantity: .second, label: "RunTimeToEmpty"),
         Field(usage: UPSUsage.percentLoad, collections: [UPSUsage.powerConverter, UPSUsage.output], quantity: .plain, label: "PercentLoad"),
-        Field(usage: UPSUsage.voltage, collections: [UPSUsage.input], quantity: .volt, label: "Input.Voltage"),
-        Field(usage: UPSUsage.voltage, collections: [UPSUsage.battery, UPSUsage.powerSummary], quantity: .volt, label: "Battery.Voltage"),
+        Field(usage: UPSUsage.voltage, collections: [UPSUsage.input], quantity: .volt, label: "Input.Voltage", exact: true),
+        Field(
+            usage: UPSUsage.voltage, collections: [UPSUsage.battery, UPSUsage.powerSummary], quantity: .volt,
+            label: "Battery.Voltage", exact: true),
     ]
 
     static let flagFields: [(UInt32, UPSStatusFlags)] = [
@@ -397,10 +401,12 @@ public final class UPSTelemetryCollector: Collector {
 
     static let staticFields: [Field] = [
         Field(usage: UPSUsage.configActivePower, collections: [UPSUsage.powerConverter, UPSUsage.output], quantity: .watt, label: "ConfigActivePower"),
-        Field(usage: UPSUsage.configVoltage, collections: [UPSUsage.input], quantity: .volt, label: "Input.ConfigVoltage"),
+        Field(usage: UPSUsage.configVoltage, collections: [UPSUsage.input], quantity: .volt, label: "Input.ConfigVoltage", exact: true),
         Field(usage: UPSUsage.lowVoltageTransfer, collections: [UPSUsage.input], quantity: .volt, label: "LowVoltageTransfer"),
         Field(usage: UPSUsage.highVoltageTransfer, collections: [UPSUsage.input], quantity: .volt, label: "HighVoltageTransfer"),
-        Field(usage: UPSUsage.configVoltage, collections: [UPSUsage.battery, UPSUsage.powerSummary], quantity: .volt, label: "Battery.ConfigVoltage"),
+        Field(
+            usage: UPSUsage.configVoltage, collections: [UPSUsage.battery, UPSUsage.powerSummary], quantity: .volt,
+            label: "Battery.ConfigVoltage", exact: true),
         Field(usage: UPSUsage.manufacturerDate, collections: [UPSUsage.battery, UPSUsage.powerSummary], quantity: .plain, label: "ManufacturerDate"),
         Field(usage: UPSUsage.test, collections: [UPSUsage.battery], quantity: .plain, label: "Test"),
         Field(usage: UPSUsage.remainingCapacityLimit, collections: summaryFirst, quantity: .plain, label: "RemainingCapacityLimit"),
@@ -429,7 +435,7 @@ public final class UPSTelemetryCollector: Collector {
         }
 
         func read(_ field: Field) -> Double? {
-            guard let info = entry.layout.element(field.usage, in: field.collections) else {
+            guard let info = entry.layout.element(field.usage, in: field.collections, exact: field.exact) else {
                 missing.append(field.label)
                 return nil
             }

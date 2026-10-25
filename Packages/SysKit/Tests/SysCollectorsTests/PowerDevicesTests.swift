@@ -130,6 +130,16 @@ import SysModel
         UPSElementInfo(usage: 0, collection: 0, reportID: 1, reportSize: size, logicalMin: logicalMin, unit: unit, unitExponent: exponent)
     }
 
+    @Test func voltageLookupDoesNotBorrowAnotherCollection() {
+        // 只有 Input 下有 Voltage 的 UPS：电池电压不能借用市电电压
+        let input = UPSElementInfo(usage: UPSUsage.voltage, collection: UPSUsage.input, reportID: 1, reportSize: 8)
+        let layout = UPSReportLayout(elements: [input])
+        #expect(layout.element(UPSUsage.voltage, in: [UPSUsage.battery, UPSUsage.powerSummary], exact: true) == nil)
+        #expect(layout.element(UPSUsage.voltage, in: [UPSUsage.input], exact: true) == input)
+        // 含义不随集合变的 usage 仍可回退
+        #expect(layout.element(UPSUsage.voltage, in: [UPSUsage.battery]) == input)
+    }
+
     @Test func normalizesSignedness() {
         // 8 位、逻辑最小 0 的 230 被读成 −26 时改回无符号（CoreHID 实测）。
         #expect(UPSReportLayout.normalize(-26, element: element(size: 8, logicalMin: 0)) == 230)
