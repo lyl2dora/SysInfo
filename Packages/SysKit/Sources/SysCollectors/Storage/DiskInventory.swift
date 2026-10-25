@@ -4,6 +4,7 @@
 //   模拟器 cryptex 都是 Virtual Interface / File）。RAID 虚拟盘不在 `IOBlockStorageDevice` 下，天然不算；
 // - RAID 关系读 IORegistry 的 `AppleRAIDMember` / `AppleRAIDSet`（`AppleRAID-*` 属性），不 spawn `diskutil`；
 // - 盘插拔：IOKit 匹配通知（发布 / 终止）在私有队列上把「脏」标记置位，下一次取快照时重新枚举；
+//   之后 10 s 内每次取快照都再枚举（最多每秒一次），等驱动与介质挂上；
 //   RAID 与卷的状态变化没有通知，由容量采集器每次取快照时强制刷新（最多 60 s 一次）；
 // - 只用公开 IOKit 接口。
 
@@ -39,6 +40,11 @@ public final class DiskInventory: Sendable {
     private struct State {
         var snapshot: Snapshot?
         var dirty = true
+        /// 每次置脏加一：枚举期间又来了通知时，枚举完不清脏标记（审计 A42）。
+        var dirtySerial: UInt64 = 0
+        /// 插拔通知之后的这段时间里每次取快照都重新枚举（最多每秒一次）：首次匹配时 driver、整盘 IOMedia
+        /// 可能还没挂上，之后挂上不会再来通知。
+        var settleUntil: ContinuousClock.Instant?
         var generation: UInt64 = 0
         var notificationsInstalled = false
         var lastEnumeration: ContinuousClock.Instant?
@@ -60,17 +66,34 @@ public final class DiskInventory: Sendable {
 
     /// 让下一次取快照时重新枚举（自检、唤醒）。
     public func invalidate() {
-        state.withLock { $0.dirty = true }
+        state.withLock {
+            $0.dirty = true
+            $0.dirtySerial &+= 1
+        }
+    }
+
+    /// 插拔后驱动与介质陆续挂上的时间窗。
+    static let settleSeconds: Int64 = 10
+
+    /// 插拔通知：置脏，并在之后的 `settleSeconds` 里持续重新枚举。
+    func noteDeviceChange() {
+        let until = ContinuousClock.now + .seconds(Self.settleSeconds)
+        state.withLock {
+            $0.dirty = true
+            $0.dirtySerial &+= 1
+            $0.settleUntil = until
+        }
     }
 
     /// 当前快照：脏了或 `refresh` 时重新枚举。同一秒内的重复刷新合并成一次（三个采集器在同一个 tick 里都要取）。
     func snapshot(refresh: Bool = false) -> Snapshot {
         installNotificationsIfNeeded()
         let now = ContinuousClock.now
-        let cached: Snapshot? = state.withLock { s in
-            guard let snapshot = s.snapshot, !s.dirty else { return nil }
-            if refresh, let last = s.lastEnumeration, now - last >= .seconds(1) { return nil }
-            return snapshot
+        let (cached, serial): (Snapshot?, UInt64) = state.withLock { s in
+            guard let snapshot = s.snapshot, !s.dirty else { return (nil, s.dirtySerial) }
+            let settling = s.settleUntil.map { now < $0 } ?? false
+            if refresh || settling, let last = s.lastEnumeration, now - last >= .seconds(1) { return (nil, s.dirtySerial) }
+            return (snapshot, s.dirtySerial)
         }
         if let cached { return cached }
         let fresh = Self.enumerate()
@@ -82,7 +105,7 @@ public final class DiskInventory: Sendable {
             var snapshot = fresh.snapshot
             snapshot.inventory.generation = s.generation
             s.snapshot = snapshot
-            s.dirty = false
+            if s.dirtySerial == serial { s.dirty = false }
             s.lastEnumeration = now
             return (snapshot, changed)
         }
@@ -109,7 +132,7 @@ public final class DiskInventory: Sendable {
         let callback: IOServiceMatchingCallback = { refcon, iterator in
             _ = IORegistryObject.drain(iterator)  // 必须取空，否则不再通知
             guard let refcon else { return }
-            Unmanaged<DiskInventory>.fromOpaque(refcon).takeUnretainedValue().invalidate()
+            Unmanaged<DiskInventory>.fromOpaque(refcon).takeUnretainedValue().noteDeviceChange()
         }
         for type in [kIOFirstMatchNotification, kIOTerminatedNotification] {
             var iterator: io_iterator_t = 0
@@ -154,6 +177,12 @@ public final class DiskInventory: Sendable {
         }
     }
 
+    /// 一次枚举里重复出现的键，全部换成各自的路径键；不重复的保持原样（纯函数，便于单测；D104）。
+    static func disambiguatedKeys(_ keys: [DiskKey], pathKeys: [DiskKey]) -> [DiskKey] {
+        let counts = Dictionary(keys.map { ($0, 1) }, uniquingKeysWith: +)
+        return zip(keys, pathKeys).map { key, pathKey in counts[key, default: 0] > 1 ? pathKey : key }
+    }
+
     /// BSD 名里的数字（排序用）：disk10 → 10。
     static func bsdNumber(_ name: String?) -> Int {
         guard let name, name.hasPrefix("disk") else { return .max }
@@ -168,6 +197,7 @@ public final class DiskInventory: Sendable {
 
     static func enumerate() -> Enumeration {
         var disks: [(disk: PhysicalDisk, entry: Entry, member: MemberInfo?)] = []
+        var pathKeys: [DiskKey] = []
         for device in IORegistryObject.services(matching: "IOBlockStorageDevice") {
             guard let (interconnect, location) = physicalInterconnect(device.dictionary("Protocol Characteristics")) else {
                 continue
@@ -176,13 +206,9 @@ public final class DiskInventory: Sendable {
             let model = (characteristics["Product Name"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
             let serial = (characteristics["Serial Number"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
             let firmware = (characteristics["Product Revision Level"] as? String)?.trimmingCharacters(in: .whitespaces)
-            let key: DiskKey
-            if !serial.isEmpty {
-                key = DiskIdentity.key(["disk", serial, model])
-            } else {
-                let path = IORegistryEntryCopyPath(device.entry, kIOServicePlane)?.takeRetainedValue() as String? ?? ""
-                key = DiskIdentity.key(["path", path])
-            }
+            let path = IORegistryEntryCopyPath(device.entry, kIOServicePlane)?.takeRetainedValue() as String? ?? ""
+            let pathKey = DiskIdentity.key(["path", path])
+            let key = serial.isEmpty ? pathKey : DiskIdentity.key(["disk", serial, model])
             var driver: IORegistryObject?
             var whole: IORegistryObject?
             var member: MemberInfo?
@@ -204,6 +230,12 @@ public final class DiskInventory: Sendable {
                 medium: medium(characteristics["Medium Type"] as? String),
                 smartCapable: device.bool("NVMe SMART Capable") ?? false, raid: nil)
             disks.append((disk, Entry(key: key, device: device, driver: driver, registryID: device.registryID), member))
+            pathKeys.append(pathKey)
+        }
+        // 同款 USB 桥报同一个假序列号：键重复的盘改用 IOService 路径作键（D104）。
+        for (i, key) in Self.disambiguatedKeys(disks.map(\.disk.key), pathKeys: pathKeys).enumerated() {
+            disks[i].disk.key = key
+            disks[i].entry.key = key
         }
 
         // RAID 组：成员序号按阵列的 AppleRAID-Members 顺序。

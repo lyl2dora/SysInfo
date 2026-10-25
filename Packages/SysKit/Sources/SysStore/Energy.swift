@@ -85,12 +85,27 @@ public struct EnergyIntegrator: Sendable {
         }
         buckets = buckets.filter { $0.key >= cutoff }
     }
+
+    /// 丢掉分钟号大于 `minute` 的数据（墙钟跳到未来时记下的分钟，D103）。
+    public mutating func discard(after minute: Int64) {
+        buckets = buckets.filter { $0.key <= minute }
+    }
 }
 
 /// 能耗锚点：上一次提交时的累加器读数（kv 表的 `energy.anchor`）。
 public struct EnergyAnchor: Codable, Hashable, Sendable {
     public var telemetry: PowerTelemetryReading
     public var bootTime: Date
+    /// 那次开机的会话 UUID（D105）；旧版本写下的锚点没有。
+    public var bootSessionUUID: String?
+
+    public init(telemetry: PowerTelemetryReading, boot: BootSession) {
+        self.telemetry = telemetry
+        self.bootTime = boot.time
+        self.bootSessionUUID = boot.uuid
+    }
+
+    public var boot: BootSession { BootSession(time: bootTime, uuid: bootSessionUUID) }
 }
 
 public enum EnergyGap {
@@ -99,9 +114,10 @@ public enum EnergyGap {
 
     /// 由锚点与当前读数算出要补的能量：返回缺口的起止与焦耳数；不需要补或无法补时为 nil。
     public static func fill(
-        anchor: EnergyAnchor?, now: PowerTelemetryReading, bootTime: Date
+        anchor: EnergyAnchor?, now: PowerTelemetryReading, boot: BootSession
     ) -> (start: Date, end: Date, joules: Double)? {
-        if let anchor, abs(anchor.bootTime.timeIntervalSince(bootTime)) < 2 {
+        let bootTime = boot.time
+        if let anchor, anchor.boot.isSameBoot(as: boot) {
             // 同一次开机：累加器差值。倒退（不应发生）时不补。
             let delta = now.accumulatedSystemPowerIn - anchor.telemetry.accumulatedSystemPowerIn
             let seconds = now.wallClock.timeIntervalSince(anchor.telemetry.wallClock)
@@ -158,6 +174,7 @@ extension HistoryStore {
                 """)
             for row in rows { try upsert.run([.int(row.minute), .double(row.joules), .double(row.covered)]) }
         }
+        markDirty(sample: nil, energy: rows.lazy.map(\.minute).min())
     }
 
     static let energyTables: [(table: String, source: Int64)] = [("energy_minute", 0), ("energy_fill_minute", 1)]
@@ -171,7 +188,11 @@ extension HistoryStore {
                 try db.statement("SELECT MAX(t) FROM energy_hour WHERE source = ?").query([.int(source)]) { $0.optionalInt(0) }
                 .first ?? nil
             let firstMinute = try db.statement("SELECT MIN(t) FROM \(table)").query { $0.optionalInt(0) }.first ?? nil
-            guard let start = lastHour ?? firstMinute.map({ Self.floorDiv($0, 60) }), start <= throughHour else { continue }
+            guard
+                let start = Self.rollUpStart(
+                    last: lastHour ?? firstMinute.map({ Self.floorDiv($0, 60) }), dirty: dirtyEnergyHour, through: throughHour),
+                start <= throughHour
+            else { continue }
             try db.statement(
                 """
                 INSERT OR REPLACE INTO energy_hour(t, source, joules, covered_s)
@@ -179,6 +200,7 @@ extension HistoryStore {
                 """
             ).run([.int(start * 60), .int((throughHour + 1) * 60)])
         }
+        if let dirty = dirtyEnergyHour, dirty <= throughHour { dirtyEnergyHour = nil }
     }
 
     /// 一段时间内的能耗（按分钟边界）：分钟级保留期内取分钟表，更早的部分取小时汇总（按小时边界）。

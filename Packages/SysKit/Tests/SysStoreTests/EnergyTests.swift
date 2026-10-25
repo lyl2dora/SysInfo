@@ -57,25 +57,51 @@ private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReadi
 
 @Suite struct EnergyGapTests {
     let boot = Date(timeIntervalSince1970: 1_000_000)
+    var session: BootSession { BootSession(time: boot, uuid: nil) }
 
     @Test func sameBootUsesAccumulatorDelta() throws {
-        let anchor = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), bootTime: boot)
-        let gap = try #require(EnergyGap.fill(anchor: anchor, now: reading(5_720_000, at: 1_010_100 + 3500), bootTime: boot))
+        let anchor = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), boot: session)
+        let gap = try #require(EnergyGap.fill(anchor: anchor, now: reading(5_720_000, at: 1_010_100 + 3500), boot: session))
         #expect(gap.joules == 720)
         #expect(gap.start == anchor.telemetry.wallClock)
     }
 
     @Test func rebootCountsFromBoot() throws {
-        let anchor = EnergyAnchor(telemetry: reading(9_000_000, at: 900_000), bootTime: Date(timeIntervalSince1970: 800_000))
-        let gap = try #require(EnergyGap.fill(anchor: anchor, now: reading(36_000, at: 1_000_600), bootTime: boot))
+        let anchor = EnergyAnchor(telemetry: reading(9_000_000, at: 900_000), boot: BootSession(time: Date(timeIntervalSince1970: 800_000), uuid: nil))
+        let gap = try #require(EnergyGap.fill(anchor: anchor, now: reading(36_000, at: 1_000_600), boot: session))
         #expect(gap.start == boot)
         #expect(gap.joules == 36)
     }
 
+    @Test func sessionUUIDDecidesSameBootDespiteClockAdjustments() throws {
+        // 校时让 kern.boottime 往后移了 30 s，会话 UUID 不变：仍是同一次开机，只补累加器差值（D105）。
+        let anchor = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), boot: BootSession(time: boot, uuid: "A"))
+        let shifted = BootSession(time: boot.addingTimeInterval(30), uuid: "A")
+        let gap = try #require(EnergyGap.fill(anchor: anchor, now: reading(5_720_000, at: 1_013_600), boot: shifted))
+        #expect(gap.joules == 720)
+        // UUID 变了：即使开机时刻相同也是重启
+        let rebooted = try #require(
+            EnergyGap.fill(anchor: anchor, now: reading(36_000, at: 1_000_600), boot: BootSession(time: boot, uuid: "B")))
+        #expect(rebooted.start == boot)
+        // 旧锚点没有 UUID：退回开机时刻判据
+        let legacy = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), boot: session)
+        #expect(try #require(EnergyGap.fill(anchor: legacy, now: reading(5_720_000, at: 1_013_600), boot: shifted)).start == boot.addingTimeInterval(30))
+    }
+
+    @Test func legacyAnchorWithoutSessionDecodes() throws {
+        // 旧版本写下的锚点没有 bootSessionUUID 字段
+        let anchor = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), boot: BootSession(time: boot, uuid: "A"))
+        var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(anchor)) as? [String: Any])
+        object["bootSessionUUID"] = nil
+        let legacy = try JSONDecoder().decode(EnergyAnchor.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(legacy.bootSessionUUID == nil)
+        #expect(legacy.bootTime == boot)
+    }
+
     @Test func shortOrBackwardGapsAreSkipped() {
-        let anchor = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), bootTime: boot)
-        #expect(EnergyGap.fill(anchor: anchor, now: reading(5_100_000, at: 1_010_060), bootTime: boot) == nil)
-        #expect(EnergyGap.fill(anchor: anchor, now: reading(4_000_000, at: 1_020_000), bootTime: boot) == nil)
+        let anchor = EnergyAnchor(telemetry: reading(5_000_000, at: 1_010_000), boot: session)
+        #expect(EnergyGap.fill(anchor: anchor, now: reading(5_100_000, at: 1_010_060), boot: session) == nil)
+        #expect(EnergyGap.fill(anchor: anchor, now: reading(4_000_000, at: 1_020_000), boot: session) == nil)
     }
 
     @Test func perMinuteSplitIsProportional() {
@@ -129,7 +155,7 @@ private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReadi
 
     @Test func keyValueRoundTrip() throws {
         let store = try HistoryStore.inMemory()
-        let anchor = EnergyAnchor(telemetry: reading(123, at: 1000.5), bootTime: Date(timeIntervalSince1970: 10))
+        let anchor = EnergyAnchor(telemetry: reading(123, at: 1000.5), boot: BootSession(time: Date(timeIntervalSince1970: 10), uuid: "A"))
         try store.setEncoded(anchor, forKey: "energy.anchor")
         #expect(try store.decoded(EnergyAnchor.self, forKey: "energy.anchor") == anchor)
         #expect(try store.decoded(EnergyAnchor.self, forKey: "missing") == nil)

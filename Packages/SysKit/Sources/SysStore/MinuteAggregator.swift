@@ -253,6 +253,12 @@ public struct MinuteAggregator: Sendable {
         apps = apps.filter { $0.key >= cutoff }
     }
 
+    /// 丢掉分钟号大于 `minute` 的数据（墙钟跳到未来时记下的分钟，D103）。
+    public mutating func discard(after minute: Int64) {
+        buckets = buckets.filter { $0.key.minute <= minute }
+        apps = apps.filter { $0.key <= minute }
+    }
+
     /// 各列前 `appsPerMinute` 名的并集，其余并成一行「其余合计」（D68）。全部为 0 的行不写。
     static func selectRows(minute: Int64, _ all: [AppMinuteRow]) -> [AppMinuteRow] {
         let candidates = all.filter { $0.app.key != AppIdentity.other.key }

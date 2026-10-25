@@ -18,9 +18,21 @@ public struct PMGRState: Codable, Hashable, Sendable {
     public var snapshot: [String: Double]
     public var agx: Double?
     public var at: Date
-    /// 那次开机的时刻（`kern.boottime`）：开机变了，计数器已复位，快照作废。
+    /// 那次开机的时刻（`kern.boottime`）与会话 UUID（D105）：开机变了，计数器已复位，快照作废。
     public var bootTime: Date
+    public var bootSessionUUID: String?
     public var latestBatch: PMGRBatch?
+
+    public init(snapshot: [String: Double], agx: Double?, at: Date, boot: BootSession, latestBatch: PMGRBatch?) {
+        self.snapshot = snapshot
+        self.agx = agx
+        self.at = at
+        self.bootTime = boot.time
+        self.bootSessionUUID = boot.uuid
+        self.latestBatch = latestBatch
+    }
+
+    public var boot: BootSession { BootSession(time: bootTime, uuid: bootSessionUUID) }
 }
 
 public final class PMGRBatchCollector: Collector {
@@ -54,20 +66,20 @@ public final class PMGRBatchCollector: Collector {
     private let state = Mutex(State())
     private let hub: IOReportHub
     private let resolveProfile: @Sendable () -> ResolvedChipProfile?
-    private let bootTime: @Sendable () -> Date?
+    private let boot: @Sendable () -> BootSession?
 
     public convenience init(ledger: PowerLedger) {
-        self.init(ledger: ledger, hub: .shared, resolveProfile: { PowerProfiles.resolve() }, bootTime: { SystemInfo.bootTime })
+        self.init(ledger: ledger, hub: .shared, resolveProfile: { PowerProfiles.resolve() }, boot: { SystemInfo.bootSession })
     }
 
     init(
         ledger: PowerLedger, hub: IOReportHub, resolveProfile: @escaping @Sendable () -> ResolvedChipProfile?,
-        bootTime: @escaping @Sendable () -> Date?
+        boot: @escaping @Sendable () -> BootSession?
     ) {
         self.ledger = ledger
         self.hub = hub
         self.resolveProfile = resolveProfile
-        self.bootTime = bootTime
+        self.boot = boot
     }
 
     /// 最近一个批次（可能是恢复来的上一次运行的数据）。
@@ -142,7 +154,7 @@ public final class PMGRBatchCollector: Collector {
     }
 
     public func sample(at time: SampleTime) -> CollectorOutput {
-        let boot = bootTime()
+        let boot = self.boot()
         let event = state.withLock { s -> (usable: Bool, batch: PMGRBatch?) in
             guard let subscription = s.subscription, let values = subscription.snapshot() else { return (false, nil) }
             var current: [String: Double] = [:]
@@ -156,11 +168,13 @@ public final class PMGRBatchCollector: Collector {
                     current[channel.normalized, default: 0] += joules
                 }
             }
-            let now = PMGRState(snapshot: current, agx: agx, at: time.wallClock, bootTime: boot ?? .distantPast, latestBatch: nil)
+            let now = PMGRState(
+                snapshot: current, agx: agx, at: time.wallClock, boot: boot ?? BootSession(time: .distantPast, uuid: nil),
+                latestBatch: nil)
             defer { s.lastSeen = current }
             guard let lastSeen = s.lastSeen else {
                 // 第一次：恢复的快照与当前一致（同一次开机、其间没有新批次）才接着用。
-                if let restored = s.restored, let boot, abs(restored.bootTime.timeIntervalSince(boot)) < 2,
+                if let restored = s.restored, let boot, restored.boot.isSameBoot(as: boot),
                     restored.snapshot == current
                 {
                     s.lastChange = restored

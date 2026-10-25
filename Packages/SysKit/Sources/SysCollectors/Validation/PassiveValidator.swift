@@ -59,6 +59,9 @@ public final class PassiveValidator {
     }
 
     private var lastTick: [Source: Int64] = [:]
+    /// 最近（tick 最大）一个结果的 tick 与不含睡眠的单调时钟。之后的结果与它的 tick 差、单调时钟差对不上时
+    /// （跨睡眠、墙钟调整），整体重来（审计 A33）。阻塞通道的结果晚到、tick 较小，两个差同为负，不算。
+    private var reference: (tick: Int64, monotonic: UInt64)?
     private var seenAtTick: [Int64: Set<Source>] = [:]
     private var spanStart: Int64?
     private var accumulator = Accumulator()
@@ -83,6 +86,14 @@ public final class PassiveValidator {
             }
         }
         guard !sources.isEmpty else { return [] }
+        if let reference,
+            Self.isDiscontinuous(
+                tickSeconds: tick - reference.tick,
+                monotonicNanos: Int64(clamping: result.time.monotonicNanos) - Int64(clamping: reference.monotonic))
+        {
+            reset()
+        }
+        if tick >= reference?.tick ?? .min { reference = (tick, result.time.monotonicNanos) }
         let byID = Dictionary(result.samples.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // 同一 tick 内先处理占用、再处理频率：频率窗口的权重要用到截至本 tick 的忙碌量。
         for source in [Source.load, .freq, .coalition] where sources.contains(source) {
@@ -115,6 +126,21 @@ public final class PassiveValidator {
         spanStart = tick
         accumulator = Accumulator()
         return findings.map { var f = $0; f.spanSeconds = Int(tick - start); return f }
+    }
+
+    /// tick 差（墙钟秒）与不含睡眠的单调时钟差相差 2 s 以上：中间睡过眠或墙钟被调整，按 tick 差算的窗口时长不再可信。
+    static func isDiscontinuous(tickSeconds: Int64, monotonicNanos: Int64) -> Bool {
+        abs(Double(tickSeconds) - Double(monotonicNanos) / 1e9) > 2
+    }
+
+    /// 丢掉所有窗口与区间，从下一个结果重新开始。
+    private func reset() {
+        reference = nil
+        lastTick = [:]
+        seenAtTick = [:]
+        spanStart = nil
+        accumulator = Accumulator()
+        busySinceFrequency = [:]
     }
 
     // MARK: - 累加

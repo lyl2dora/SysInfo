@@ -92,6 +92,12 @@ final class MetricStore {
         return series.points(inLast: UInt64(max(seconds, 0) * 1e9))
     }
 
+    /// 同 `recentPoints`，但不读 `revision`：视图 body 里用它不会每次发布都失效（审计 A40），何时重读由调用方决定。
+    func recentPointsUntracked(_ id: MetricID, seconds: Double) -> ArraySlice<TimeSeriesPoint> {
+        guard let series = historyStorage[id] else { return [] }
+        return series.points(inLast: UInt64(max(seconds, 0) * 1e9))
+    }
+
     /// 最近 `seconds` 秒内可用值的平均；没有可用值时为 nil。
     func mean(_ id: MetricID, seconds: Double) -> Double? {
         _ = revision

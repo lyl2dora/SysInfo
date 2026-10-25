@@ -67,6 +67,15 @@ import Testing
 }
 
 @Suite struct DiskInventoryParsingTests {
+    @Test func duplicateKeysFallBackToPathKeys() {
+        // 两块同款 USB 桥报同一个假序列号：两块都换成路径键；第三块不受影响（D104）。
+        let a = DiskKey(rawValue: "aaaaaaaaaaaa")
+        let b = DiskKey(rawValue: "bbbbbbbbbbbb")
+        let paths = (1...3).map { DiskKey(rawValue: "p\($0)") }
+        #expect(DiskInventory.disambiguatedKeys([a, b, a], pathKeys: paths) == [paths[0], b, paths[2]])
+        #expect(DiskInventory.disambiguatedKeys([a, b], pathKeys: Array(paths.prefix(2))) == [a, b])
+    }
+
     @Test func physicalInterconnectFiltersVirtualAndFile() {
         #expect(DiskInventory.physicalInterconnect(["Physical Interconnect": "Apple Fabric", "Physical Interconnect Location": "Internal"])?.location == .internal)
         #expect(DiskInventory.physicalInterconnect(["Physical Interconnect": "PCI-Express", "Physical Interconnect Location": "External"])?.location == .external)
