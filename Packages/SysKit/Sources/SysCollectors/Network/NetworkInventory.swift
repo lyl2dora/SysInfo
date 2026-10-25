@@ -152,6 +152,8 @@ public final class NetworkInventory: Sendable {
         var displayName: String?
         var hasIOKit: Bool
         var controllerClass: String?
+        /// 是某个 SC 网桥的成员口：由网桥代表，不算物理接口（D95）。
+        var isBridgeMember = false
     }
 
     /// 分类（纯函数，便于单测）：返回类型与是否物理；不进清单的接口返回 nil。
@@ -175,10 +177,10 @@ public final class NetworkInventory: Sendable {
                 return nil
             } else if raw.scType == "IEEE80211" {
                 kind = .wifi
-                physical = true
+                physical = !raw.isBridgeMember
             } else if raw.scType == "Ethernet" {
                 kind = .ethernet
-                physical = true
+                physical = !raw.isBridgeMember
             } else {
                 kind = .other
             }
@@ -203,6 +205,23 @@ public final class NetworkInventory: Sendable {
 
     static func isTunnelName(_ name: String) -> Bool {
         ["utun", "ipsec", "ppp", "tun", "gif"].contains { name.hasPrefix($0) }
+    }
+
+    /// 已配置网桥（含用户在系统设置里建的）到其成员口 BSD 名的映射（D95）。
+    /// 用公开的 `SCPreferencesGetValue` 读系统网络配置的 `VirtualNetworkInterfaces → Bridge → <网桥> → Interfaces`
+    /// （`SCBridgeInterface*` 是私有接口，不用）；只读、不需要授权。键不存在时返回空，即不识别成员。
+    static func configuredBridges() -> [String: [String]] {
+        guard let prefs = SCPreferencesCreate(nil, "SysInfo" as CFString, nil),
+            let virtual = SCPreferencesGetValue(prefs, "VirtualNetworkInterfaces" as CFString) as? [String: Any],
+            let bridges = virtual["Bridge"] as? [String: Any]
+        else { return [:] }
+        return bridges.compactMapValues { ($0 as? [String: Any])?["Interfaces"] as? [String] }
+    }
+
+    /// 由网桥代表的成员口：只算当前存在且已启用的网桥，配置了但没启用的网桥不影响成员（纯函数，便于单测）。
+    static func bridgeMembers(configured: [String: [String]], raws: [RawInterface]) -> Set<String> {
+        let upBridges = Set(raws.filter { $0.scType == "Bridge" && $0.flags & UInt32(IFF_UP) != 0 }.map(\.name))
+        return Set(configured.filter { upBridges.contains($0.key) }.values.joined())
     }
 
     /// 重建清单。`controllers` 是已知的控制器类缓存（键「名字#index」，值为 nil 表示没有 IOKit 接口）；返回更新后的缓存。
@@ -240,6 +259,8 @@ public final class NetworkInventory: Sendable {
                     ipv4: addresses[name]?.v4 ?? [], ipv6Global: addresses[name]?.v6 ?? [], scType: scInfo[name]?.type,
                     displayName: scInfo[name]?.name, hasIOKit: io != nil, controllerClass: io?.controller))
         }
+        let members = Self.bridgeMembers(configured: Self.configuredBridges(), raws: raws)
+        for i in raws.indices where members.contains(raws[i].name) { raws[i].isBridgeMember = true }
         var interfaces: [NetworkInterface] = []
         for raw in raws {
             guard let (kind, physical, active) = classify(raw) else { continue }

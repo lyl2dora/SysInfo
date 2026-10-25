@@ -156,9 +156,11 @@ public final class GPUDiagnosticsCollector: Collector {
             }
             let seconds = Double(time.monotonicNanos - previous) / 1e9
             for delta in stats ?? [] {
-                let total = Double(delta.stateResidencies.reduce(0) { $0 + max($1, 0) })
+                // 有负驻留增量（计数器复位）时这个通道这一段丢弃，不钳为 0。
+                guard delta.stateResidencies.allSatisfy({ $0 >= 0 }) else { continue }
+                let total = Double(delta.stateResidencies.reduce(0, +))
                 guard total > 0 else { continue }
-                let shares = delta.stateResidencies.map { Double(max($0, 0)) / total }
+                let shares = delta.stateResidencies.map { Double($0) / total }
                 switch delta.key.name {
                 case "PWRCTRL":
                     r.powerControl = zip(delta.stateNames, shares).filter { $0.1 >= 0.01 }.sorted { $0.1 > $1.1 }
@@ -179,9 +181,10 @@ public final class GPUDiagnosticsCollector: Collector {
             }
             r.bandwidth = Self.bandwidthParts.compactMap { part in byPart[part].map { GPUNamedValue(name: part, value: $0) } }
             if let ane {
-                let count = ane.filter { Self.isANEInterrupt($0.key) }.reduce(Int64(0)) { $0 + max($1.integerValue, 0) }
+                let counts = ane.filter { Self.isANEInterrupt($0.key) }.map(\.integerValue)
                 r.aneInterruptsMissing = ane.isEmpty
-                r.aneInterrupts = ane.isEmpty ? nil : Double(count) / seconds
+                // 负增量按复位处理：这一段不出数。
+                r.aneInterrupts = ane.isEmpty || counts.contains { $0 < 0 } ? nil : Double(counts.reduce(0, +)) / seconds
             } else {
                 r.aneInterruptsMissing = true
             }

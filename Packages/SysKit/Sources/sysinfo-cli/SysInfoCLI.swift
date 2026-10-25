@@ -553,6 +553,7 @@ struct SysInfoCLI {
                 case .active(let hz, let a)?: f = String(format: "%5.0f MHz 活跃 %5.1f%%", hz / 1e6, a * 100)
                 case .idle(let a)?: f = String(format: "   空闲   活跃 %5.1f%%", a * 100)
                 case .invalid(let why)?: f = "✗ \(why)"
+                case .counterReset?: f = "计数器复位"
                 case nil: f = "—"
                 }
                 print("  cpu\(c.cpu) \(c.cluster)  \(f)  忙碌 \(c.busy.map { String(format: "%5.1f%%", $0 * 100) } ?? "—")")

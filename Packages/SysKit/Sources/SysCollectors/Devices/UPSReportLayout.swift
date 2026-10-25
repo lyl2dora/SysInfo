@@ -87,12 +87,14 @@ public struct UPSReportLayout: Hashable, Sendable {
     }
 
     /// 某个 usage 的元素：先按 `collections` 的顺序找，找不到再取任意集合里的第一个。
-    public func element(_ usage: UInt32, in collections: [UInt32] = []) -> UPSElementInfo? {
+    /// `exact` 为 true 时不回退：同一个 usage 在不同集合里是不同的物理量（Input / Battery 的 Voltage），
+    /// 借用别的集合会把市电电压当成电池电压。
+    public func element(_ usage: UInt32, in collections: [UInt32] = [], exact: Bool = false) -> UPSElementInfo? {
         let candidates = elements.filter { $0.usage == usage }
         for collection in collections {
             if let hit = candidates.first(where: { $0.collection == collection }) { return hit }
         }
-        return candidates.first
+        return exact ? nil : candidates.first
     }
 
     /// 按逻辑范围改正有无符号：逻辑最小值 ≥ 0 的字段读成负数时按位宽当无符号；逻辑最小值 < 0 的字段按位宽做符号扩展。

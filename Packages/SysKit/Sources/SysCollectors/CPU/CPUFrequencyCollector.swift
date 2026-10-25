@@ -135,7 +135,12 @@ public final class CPUFrequencyCollector: Collector {
     public func sample(at time: SampleTime) -> CollectorOutput {
         state.withLock { state in
             guard state.usable != false, let plan = state.plan, let subscription = state.subscription else {
-                return CollectorOutput(samples: [], status: .unavailable, dataPath: Self.dataPath)
+                // 自检没过：已知的簇逐个给出原因，不只返回空样本。
+                let reason = UnavailableReason.selfTestFailed()
+                let samples = (state.plan?.clusters ?? []).map {
+                    Sample.unavailable(.cpuFrequencyCluster($0.cluster), reason: reason, at: time)
+                }
+                return CollectorOutput(samples: samples, status: .unavailable, dataPath: Self.dataPath)
             }
             // 拓扑变了（簇的组成不同）：旧方案作废，输出不可用；引擎连续收到不可用后会重新自检（K19）。
             guard state.planGeneration == topology.generation else {
@@ -182,6 +187,8 @@ public final class CPUFrequencyCollector: Collector {
                 case .invalid(let why)?:
                     samples.append(.unavailable(id, reason: .readFailed(why), at: time))
                     degraded = true
+                case .counterReset?:
+                    samples.append(.unavailable(id, reason: .counterReset("residency"), at: time))
                 case nil:
                     samples.append(.unavailable(id, reason: .readFailed("channel missing in sample"), at: time))
                     degraded = true

@@ -5,6 +5,14 @@ import Testing
 import SysModel
 
 @Suite struct SampleTests {
+    @Test func nonFiniteValueBecomesUnavailable() {
+        for value in [Double.nan, .infinity, -.infinity] {
+            let s = Sample(id: .memoryUsage, value: value, time: .now())
+            #expect(s.value == nil)
+            #expect(s.quality == .unavailable(.nonFinite()))
+        }
+    }
+
     let time = SampleTime(monotonicNanos: 123_456_789, wallClock: Date(timeIntervalSince1970: 1_790_000_000))
 
     @Test func measuredSampleCarriesValue() {

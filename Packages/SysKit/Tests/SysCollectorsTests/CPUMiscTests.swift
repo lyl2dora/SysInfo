@@ -54,6 +54,15 @@ import Testing
             ], elapsedNanos: 10_000_000_000)
         #expect(sources == [InterruptSource(device: "ans", perSecond: 5), InterruptSource(device: "smc", perSecond: 1)])
     }
+
+    @Test func deviceWithAnyResetChannelIsDroppedWhole() {
+        let first = "               First Level Interrupt Handler Count"
+        // ans 1 复位：不能只丢 ans 1、拿 ans 0 的 30 出一个偏低的部分和
+        let sources = InterruptDeviceCollector.sources(
+            [delta("ans 0", first, 30), delta("ans 1", first, -20), delta("smc 0", first, 10)],
+            elapsedNanos: 10_000_000_000)
+        #expect(sources == [InterruptSource(device: "smc", perSecond: 1)])
+    }
 }
 
 @Suite struct CoreCorrelationTests {

@@ -81,6 +81,7 @@ extension SysInfoCLI {
             case .active(let hz, let fraction)?: (hz, "active", fraction)
             case .idle(let fraction)?: (nil, "idle", fraction)
             case .invalid(let why)?: (nil, "invalid:\(why)", nil)
+            case .counterReset?: (nil, "counterReset", nil)
             case nil: (nil, "missing", nil)
             }
         }

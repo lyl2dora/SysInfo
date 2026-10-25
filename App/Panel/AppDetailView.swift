@@ -62,14 +62,16 @@ struct AppDetailView: View {
     private func values(_ detail: AppDetail) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("当前").font(.panelRow.weight(.semibold))
-            KeyValue(title: String(localized: "CPU"), value: PercentFormat.string(fromRatio: detail.cpu))
+            KeyValue(title: String(localized: "CPU"), value: detail.cpu.map { PercentFormat.string(fromRatio: $0) } ?? "—")
             KeyValue(title: String(localized: "内存"), value: detail.footprint.map { Formatting.memory(Double($0)) } ?? "—")
             KeyValue(title: String(localized: "能耗"), value: detail.energyWatts.map(Formatting.watts) ?? "—")
             KeyValue(
                 title: String(localized: "GPU 时间"),
-                value: "\(PercentFormat.string(fromRatio: min(detail.gpuShare, 1))) · \(Formatting.watts(detail.gpuWatts))")
-            KeyValue(title: String(localized: "ANE 能耗（估算）"), value: Formatting.watts(detail.aneWatts))
-            KeyValue(title: String(localized: "磁盘读写"), value: Formatting.diskRatePair(detail.diskRead, detail.diskWrite))
+                value: "\(detail.gpuShare.map { PercentFormat.string(fromRatio: min($0, 1)) } ?? "—") · \(detail.gpuWatts.map(Formatting.watts) ?? "—")")
+            KeyValue(title: String(localized: "ANE 能耗（估算）"), value: detail.aneWatts.map(Formatting.watts) ?? "—")
+            KeyValue(
+                title: String(localized: "磁盘读写"),
+                value: detail.diskRead.flatMap { r in detail.diskWrite.map { Formatting.diskRatePair(r, $0) } } ?? "—")
         }
         .monospacedDigit()
     }

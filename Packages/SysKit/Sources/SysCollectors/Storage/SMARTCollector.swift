@@ -142,8 +142,10 @@ public final class SMARTCollector: Collector {
         state.withLock { $0.focus = keys }
     }
 
-    /// 每块盘最近一次的 SMART 读数（详情页）。
-    public var latestRecords: [DiskKey: SMARTRecord] { state.withLock { $0.records } }
+    /// 每块盘最近一次的 SMART 读数（详情页）。自检判为读数不合理的盘不给出（D05：不显示可能错误的数值）。
+    public var latestRecords: [DiskKey: SMARTRecord] {
+        state.withLock { s in s.records.filter { !s.implausible.contains($0.key) } }
+    }
 
     /// 每块盘的连接状态（诊断页）。
     public var statuses: [DiskKey: DiskSMARTStatus] { state.withLock { $0.statuses } }
@@ -176,6 +178,7 @@ public final class SMARTCollector: Collector {
             if let problem {
                 state.withLock {
                     $0.implausible.insert(disk.key)
+                    $0.records[disk.key] = nil
                     $0.statuses[disk.key] = DiskSMARTStatus(state: .implausible(problem))
                 }
             }
@@ -322,7 +325,8 @@ public final class SMARTCollector: Collector {
 
     /// 读数是否合理；不合理时返回说明。
     static func implausibility(_ record: SMARTRecord) -> String? {
-        if record.temperatureCelsius < -20 || record.temperatureCelsius > 120 {
+        // -273 是「没有综合温度」的哨兵（0 K），只让温度标为不支持，不算整盘不合理。
+        if record.temperatureCelsius > -273, record.temperatureCelsius < -20 || record.temperatureCelsius > 120 {
             return "temperature \(Int(record.temperatureCelsius)) °C out of range"
         }
         if record.percentageUsed > 255 { return "percentage used \(record.percentageUsed)" }

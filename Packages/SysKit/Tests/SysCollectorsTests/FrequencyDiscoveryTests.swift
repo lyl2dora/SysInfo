@@ -156,6 +156,12 @@ private func table(_ freqs: [UInt32]) -> Data {
         #expect(FrequencyMath.frequency(stateNames: states(2), residencies: [0, 0, 0, 0], table: t) == .invalid("no residency"))
     }
 
+    @Test func negativeResidencyIsCounterReset() {
+        let t = DVFSTable(key: 1, frequencies: [1e9, 2e9], unit: "kHz")
+        // 不能把负值钳成 0 后照常加权（会得出 2 GHz 并标 measured）
+        #expect(FrequencyMath.frequency(stateNames: states(2), residencies: [0, 0, -500, 400], table: t) == .counterReset)
+    }
+
     @Test func stateBeyondTableIsInvalid() {
         let t = DVFSTable(key: 1, frequencies: [1e9], unit: "kHz")
         guard case .invalid = FrequencyMath.frequency(stateNames: states(2), residencies: [0, 0, 1, 1], table: t) else {

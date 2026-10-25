@@ -225,6 +225,7 @@ struct CPUDiagnosticsSection: View {
         case .active(let hz, _): Formatting.frequency(hz)
         case .idle: String(localized: "空闲")
         case .invalid(let why): "✗ \(why)"
+        case .counterReset: String(localized: "计数器复位")
         case nil: "—"
         }
     }

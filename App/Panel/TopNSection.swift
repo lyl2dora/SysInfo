@@ -181,9 +181,9 @@ private struct TopNRowView: View {
         switch metric {
         case .cpu: PercentFormat.string(fromRatio: row.cpu)
         case .memory: row.footprint.map { Formatting.memory(Double($0)) } ?? "—"
-        case .disk: Formatting.diskRatePair(row.diskRead ?? 0, row.diskWrite ?? 0)
+        case .disk: row.diskRead.flatMap { r in row.diskWrite.map { Formatting.diskRatePair(r, $0) } } ?? "—"
         // 多个命令缓冲同时在飞时 GPU 时间之和会超过墙钟（M5 实测 141%），钳到 100%。
-        case .gpu: PercentFormat.string(fromRatio: min(row.gpuShare ?? 0, 1))
+        case .gpu: row.gpuShare.map { PercentFormat.string(fromRatio: min($0, 1)) } ?? "—"
         }
     }
 

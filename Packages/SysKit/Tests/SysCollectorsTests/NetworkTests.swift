@@ -27,6 +27,20 @@ import Testing
         }
     }
 
+    @Test func userBridgeRepresentsItsMembers() {
+        // D95：用户网桥含 en0 时，网桥算物理、en0 不算，物理合计不重复计数
+        var en0 = raw("en0", scType: "Ethernet", controller: "AppleEthernetAquantiaAqtion113")
+        let bridge = raw("bridge1", ifType: IFT_BRIDGE, ipv4: ["192.0.2.10"], scType: "Bridge")
+        let members = NetworkInventory.bridgeMembers(configured: ["bridge1": ["en0"]], raws: [en0, bridge])
+        #expect(members == ["en0"])
+        en0.isBridgeMember = true
+        #expect(NetworkInventory.classify(en0)?.physical == false)
+        #expect(NetworkInventory.classify(bridge)?.physical == true)
+        // 配置了但没启用的网桥不影响成员
+        let down = raw("bridge1", ifType: IFT_BRIDGE, flags: 0, scType: "Bridge")
+        #expect(NetworkInventory.bridgeMembers(configured: ["bridge1": ["en0"]], raws: [en0, down]).isEmpty)
+    }
+
     @Test func wifiIsPhysical() {
         let r = NetworkInventory.classify(raw("en1", media: (true, true), scType: "IEEE80211", controller: "IO80211Controller"))
         #expect(r?.kind == .wifi)

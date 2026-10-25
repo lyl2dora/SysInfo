@@ -75,6 +75,14 @@ private let mhz: UInt32 = 1_000_000
         #expect(sample.quality == .measured)
     }
 
+    @Test func negativeResidencyIsCounterReset() {
+        let t = GPUFrequencyTable(key: 9, frequencies: [338e6, 486e6, 636e6], fromProfile: true)
+        let s = GPUResidencyMath.summarize(names: Self.names, residencies: residencies([0: -5, 1: 1, 3: 1]), table: t)
+        #expect(s.counterReset)
+        #expect(s.active == nil)
+        #expect(s.frequency == nil)
+    }
+
     @Test func offWholeIntervalIsDeviceIdle() {
         let t = GPUFrequencyTable(key: 9, frequencies: [338e6], fromProfile: false)
         let s = GPUResidencyMath.summarize(names: Self.names, residencies: residencies([0: 100]), table: t)

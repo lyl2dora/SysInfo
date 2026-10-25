@@ -166,7 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         applySettings()
         // 桌面小组件（D90）：有组件放置时才采样、写快照。
-        let widgets = WidgetSnapshotWriter(store: store, settings: settings, history: history, engine: engine)
+        let widgets = WidgetSnapshotWriter(
+            store: store, settings: settings, history: history, engine: engine, throttle: throttle)
         services.widgets = widgets
         widgets.start()
         throttle.start()

@@ -276,6 +276,8 @@ import Testing
         #expect(SMARTCollector.implausibility(try #require(SMARTParser.healthLog(Self.log()))) == nil)
         #expect(SMARTCollector.implausibility(try #require(SMARTParser.healthLog(Self.log(kelvin: 273 + 150)))) != nil)
         #expect(SMARTCollector.implausibility(try #require(SMARTParser.healthLog(Self.log(spare: 180)))) != nil)
+        // 没有综合温度（0 K → -273 哨兵）：只是温度不支持，整盘不算不合理
+        #expect(SMARTCollector.implausibility(try #require(SMARTParser.healthLog(Self.log(kelvin: 0)))) == nil)
     }
 
     @Test func samplesCarryKeyAndUnits() throws {

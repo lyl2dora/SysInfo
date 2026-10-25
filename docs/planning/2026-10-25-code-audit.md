@@ -1,4 +1,4 @@
-# 代码审计问题清单（A01–A64）
+# 代码审计问题清单（A01–A65）
 
 > 日期：2026-10-25，审计基线 main @ 77798a3。全仓只读审计，按 7 个范围分别审读（采样引擎与私有层；CPU、内存、GPU；功耗、传感器、网络；存储、应用活动与数据模型；历史库；App 核心、菜单栏与小组件；面板视图、设置、CLI 与脚本），抽查的条目已对照源码复核。
 > 结论只来自读代码，除标注外未在真机上复现。需要用户取舍的条目修复时先讨论，结论追加为 D95 起的新条目；本文件只记录问题与状态，**以决策档为准**。
@@ -19,17 +19,17 @@
 | A06 | GPU 功率：读失败报 ok 且不出样本；负差值或通道缺失时 `power.gpu` 静默缺失 | 中 | 已修 0b10325 |
 | A07 | SMCReader 连接失效后永不重连 | 中 | 已修 0b10325 |
 | A08 | 自检结果不更新 `health.status`，没有需求的采集器自检失败后仍显示正常 | 低 | 已修 0b10325 |
-| A09 | 驻留增量被钳为 0（CPU 簇频率、GPU 活跃与频率、GPU 诊断） | 中 | 待修 · 第一批 |
-| A10 | 媒体引擎、中断来源：只跳过负通道仍出部分和；媒体引擎空闲底数被永久拉低 | 中 | 待修 · 第一批 |
-| A11 | 小组件：陈旧阈值没算降频倍数，降频时 SoC 温度、GPU、磁盘容量每隔一次写成「—」 | 中高 | 待修 · 第一批 |
-| A12 | UPS：指定集合找不到时借用任意集合的同名元素，电池电压可能显示为市电值 | 中 | 待修 · 第一批 |
-| A13 | 网络：用户网桥含以太网成员时物理合计重复计数（违反 D60） | 中 | 待修 · 第一批 |
-| A14 | SMART：自检判为不合理的盘，坏读数仍留在 `latestRecords` 被面板显示 | 中高 | 待修 · 第一批 |
-| A15 | SMART：无综合温度的哨兵 -273 被判为不合理，整盘不可用 | 中低 | 待修 · 第一批 |
-| A16 | 散热卡片：无热状态时显示绿色「热状态正常」，缺风扇模式时显示「自动」 | 中 | 待修 · 第一批 |
-| A17 | Top N 与应用详情：缺失的磁盘、GPU 值显示为 0；辅助槽不可信时只屏蔽 CPU 能耗 | 中 | 待修 · 第一批 |
-| A18 | `cpu.freq` 自检失败只返回空样本，不逐簇给原因 | 低 | 待修 · 第一批 |
-| A19 | `Sample` 不拦非有限值；`memory.usage` 除以 `hw.memsize` 前不判零 | 低 | 待修 · 第一批 |
+| A09 | 驻留增量被钳为 0（CPU 簇频率、GPU 活跃与频率、GPU 诊断） | 中 | 已修 17a8a2e |
+| A10 | 媒体引擎、中断来源：只跳过负通道仍出部分和；媒体引擎空闲底数被永久拉低 | 中 | 已修 17a8a2e |
+| A11 | 小组件：陈旧阈值没算降频倍数，降频时 SoC 温度、GPU、磁盘容量每隔一次写成「—」 | 中高 | 已修 21c72fd（D97） |
+| A12 | UPS：指定集合找不到时借用任意集合的同名元素，电池电压可能显示为市电值 | 中 | 已修 9490d35 |
+| A13 | 网络：用户网桥含以太网成员时物理合计重复计数（违反 D60） | 中 | 已修 b3c9924（D95） |
+| A14 | SMART：自检判为不合理的盘，坏读数仍留在 `latestRecords` 被面板显示 | 中高 | 已修 d769b79 |
+| A15 | SMART：无综合温度的哨兵 -273 被判为不合理，整盘不可用 | 中低 | 已修 d769b79 |
+| A16 | 散热卡片：无热状态时显示绿色「热状态正常」，缺风扇模式时显示「自动」 | 中 | 已修 21c72fd |
+| A17 | Top N 与应用详情：缺失的磁盘、GPU 值显示为 0；辅助槽不可信时只屏蔽 CPU 能耗 | 中 | 已修 21c72fd（D96 显示部分；历史库部分见 A65） |
+| A18 | `cpu.freq` 自检失败只返回空样本，不逐簇给原因 | 低 | 已修 17a8a2e |
+| A19 | `Sample` 不拦非有限值；`memory.usage` 除以 `hw.memsize` 前不判零 | 低 | 已修 08a9cf7 |
 | A20 | Top N 悬停冻结残留：悬停时进详情或 Esc 关面板，再开一直空表 | 中高 | 待修 · 第二批 |
 | A21 | 网络 tab 的 CoreWLAN 需求不跟 Wi-Fi 开关变化，关掉 Wi-Fi 后仍每 5 s 读（违反 D10） | 中高 | 待修 · 第二批 |
 | A22 | `WiFiCollector.selfTest()` 在启动、唤醒时调用 CoreWLAN（违反 D10） | 低 | 待修 · 第二批 |
@@ -75,6 +75,7 @@
 | A62 | 阻塞采集器建基线期间引擎每秒空唤醒，`skippedBusyCount` 虚高 | 低 | 暂缓 |
 | A63 | 阻塞通道上的 sample 与 actor 上的 selfTest / resetBaseline 可并发，与协议注释不符 | 低 | 暂缓 |
 | A64 | 其他小项：`exclusiveAccess` 常量实为 `kIOReturnNoResources`；InstanceLock 的 errno 读取时机；`make stop` 无产物时静默失败；check-private-imports 不扫 .cpp / 符号链接、原始字符串解析有缺口；同 socID 只看第一个档案；build 号变化复检只记日志 | 低 | 暂缓 |
+| A65 | D96 历史库部分：S4 不过时 `app_minute` 的 GPU 时间、GPU 能耗、ANE 能耗列仍按数值写入；要改为空值，需同时调整列的 NULL 语义（v3 迁移前的旧行）与读取、汇总、界面 | 低 | 待修 · 第二批 |
 
 ## 位置与触发场景
 
@@ -103,6 +104,8 @@
 - **A18** `SysCollectors/CPU/CPUFrequencyCollector.swift:137`。
 - **A19** `SysModel/Sample.swift:60`、`SysCollectors/Memory/MemoryCollector.swift:274`。
 
+第一批（A09–A19）已在 `fix/audit-batch1` 分支修复：两台机器 `make test-hw` / `remote-test` 通过，自检全部通过；A13 的用户网桥两台都没有，只有单元测试覆盖。
+
 ### 第二批：需求生命周期
 
 - **A20** `App/Panel/TopNSection.swift:72`（`.onHover { model.isFrozen = $0 }`）；`App/Support/AppServices.swift:288`（`setActive` 不重置）。
@@ -113,6 +116,7 @@
 - **A25** `App/Panel/CPUPanelView.swift:128`、`App/Panel/PanelController.swift:611、633`。
 - **A26** `App/Support/AppServices.swift:417`。
 - **A27** `SysCollectors/Apps/TopNBuilder.swift:397、480、539、552`。
+- **A65** `SysStore/MinuteAggregator.swift:93`（GPU / ANE 照常累加）、`SysStore/HistoryStore.swift` 的 `app_minute` UPSERT（`COALESCE(gpu_ns, 0)` 把 NULL 当 0）、`SysStore/AppHistory.swift:99`（按非空整数读）。
 
 ### 第三批：策略与隐私
 

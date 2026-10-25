@@ -192,7 +192,14 @@ struct AppActivityHardwareTests {
         let detail = try #require(
             builder.detail(
                 coalitionID: mine, window: sampler.latestWindow, footprints: sampler.latestFootprints, slotsTrusted: true))
-        #expect(detail.cpu > 0.5, "自旋 300 ms 应计入本 coalition")
+        #expect((detail.cpu ?? 0) > 0.5, "自旋 300 ms 应计入本 coalition")
+        // 没有窗口时不给数（显示「—」），不是 0
+        let noWindow = try #require(builder.detail(coalitionID: mine, window: nil, footprints: nil, slotsTrusted: true))
+        #expect(noWindow.cpu == nil && noWindow.diskRead == nil && noWindow.gpuShare == nil)
+        // 辅助槽不可信时 GPU / ANE 也不给数（D96）
+        let untrusted = try #require(
+            builder.detail(coalitionID: mine, window: sampler.latestWindow, footprints: nil, slotsTrusted: false))
+        #expect(untrusted.energyWatts == nil && untrusted.gpuShare == nil && untrusted.gpuWatts == nil && untrusted.aneWatts == nil)
         let me = try #require(detail.members.first { $0.pid == getpid() })
         #expect((me.cpu ?? 0) > 0.5)
         #expect((me.footprint ?? 0) > 0)
