@@ -713,7 +713,7 @@ private struct PrivacySettingsView: View {
             }
             Section("系统授权") {
                 LabeledContent("申请的授权", value: String(localized: "无"))
-                Text("SysInfo 不申请定位、蓝牙、辅助功能、本地网络、通知等授权。延迟只测默认网关和你填写的地址，不向局域网内的其他设备发包，所以不需要「本地网络」授权。以后如果有功能需要授权，只会在你手动开启该功能时才申请。")
+                Text("SysInfo 不申请定位、蓝牙、辅助功能、本地网络、通知等授权。延迟只测默认网关和你填写的地址，不向与本机同网段的其他设备发包，所以不需要「本地网络」授权。以后如果有功能需要授权，只会在你手动开启该功能时才申请。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

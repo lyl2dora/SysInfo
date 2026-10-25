@@ -52,7 +52,7 @@ struct NetworkSettingsView: View {
                     Toggle("默认网关", isOn: $settings.latencyGateway)
                     Toggle("自定义地址", isOn: $settings.latencyCustom)
                     if settings.latencyCustom {
-                        TextField("地址", text: $settings.latencyHost, prompt: Text("IP 或主机名"))
+                        LatencyHostField(settings: settings)
                     }
                     Picker("发包间隔", selection: $settings.latencyInterval) {
                         ForEach(AppSettings.latencyIntervals, id: \.self) { seconds in
@@ -63,7 +63,7 @@ struct NetworkSettingsView: View {
             } header: {
                 Text("延迟")
             } footer: {
-                Text("开启后会向所选目标发送 ICMP 回显请求（ping），只在网络面板可见或「网络延迟」widget 打开时发包。测默认网关不需要任何授权，但只反映局域网；1.1.1.1、8.8.8.8 这类常见地址可能被路由器或代理就近代答，测不到真实外网延迟，默认填的 223.5.5.5 在本机网络里实测是真实的。同一局域网内的其他设备不在选项里：向它们发包需要「本地网络」授权。")
+                Text("开启后会向所选目标发送 ICMP 回显请求（ping），只在网络面板可见或「网络延迟」widget 打开时发包。测默认网关不需要任何授权，但只反映局域网；1.1.1.1、8.8.8.8 这类常见地址可能被路由器或代理就近代答，测不到真实外网延迟，默认填的 223.5.5.5 在本机网络里实测是真实的。地址按回车或离开输入框后才生效。与本机同网段的其他设备不发包（向它们发包需要「本地网络」授权），填了也只显示「同网段，不测」；经路由转发的其他网段可以测。")
                     .font(.callout)
             }
 
@@ -99,5 +99,48 @@ struct NetworkSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// 自定义延迟地址（D102）：按回车或离开输入框才生效，生效前校验格式；不合法时提示，保持上一个生效值。
+private struct LatencyHostField: View {
+    @Bindable var settings: AppSettings
+    @State private var draft = ""
+    @State private var rejected: String?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("地址", text: $draft, prompt: Text("IP 或主机名"))
+                .focused($focused)
+                .onSubmit(commit)
+            if let rejected {
+                Text("「\(rejected)」不是有效的 IP 地址或主机名，仍在测「\(settings.latencyHost)」。")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+        }
+        .onAppear { draft = settings.latencyHost }
+        .onChange(of: focused) { _, isFocused in
+            if !isFocused { commit() }
+        }
+        .onChange(of: settings.latencyHost) { _, host in
+            draft = host
+            rejected = nil
+        }
+    }
+
+    private func commit() {
+        let host = draft.trimmingCharacters(in: .whitespaces)
+        guard host != settings.latencyHost else {
+            rejected = nil
+            return
+        }
+        guard LatencyTargetPolicy.isValidHost(host) else {
+            rejected = host
+            return
+        }
+        rejected = nil
+        settings.latencyHost = host
     }
 }

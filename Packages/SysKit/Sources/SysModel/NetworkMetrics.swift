@@ -107,6 +107,8 @@ extension UnavailableReason {
     public static func timeout(_ detail: String? = nil) -> Self { Self(code: "timeout", detail: detail) }
     /// 目标未设置或解析不出地址。
     public static func noTarget(_ detail: String? = nil) -> Self { Self(code: "noTarget", detail: detail) }
+    /// 目标在本机直连网段内，不发包（D102）。
+    public static func localNetwork(_ detail: String? = nil) -> Self { Self(code: "localNetwork", detail: detail) }
 }
 
 /// 接口类型（D60：按控制器与 SC 类型在运行时判断，不按名字写死）。
