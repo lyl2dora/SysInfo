@@ -25,6 +25,7 @@ final class WidgetSnapshotWriter {
     @ObservationIgnored private let store: MetricStore
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let history: HistoryRecorder?
+    @ObservationIgnored private let throttle: ThrottleMonitor?
     @ObservationIgnored private let demand: DemandSlot
     @ObservationIgnored private let burst: DemandSlot
     @ObservationIgnored private var timer: Timer?
@@ -45,10 +46,14 @@ final class WidgetSnapshotWriter {
         GPUPowerCollector.collectorID, StorageCapacityCollector.collectorID,
     ]
 
-    init(store: MetricStore, settings: AppSettings, history: HistoryRecorder?, engine: SamplingEngine) {
+    init(
+        store: MetricStore, settings: AppSettings, history: HistoryRecorder?, engine: SamplingEngine,
+        throttle: ThrottleMonitor? = nil
+    ) {
         self.store = store
         self.settings = settings
         self.history = history
+        self.throttle = throttle
         demand = DemandSlot(engine: engine)
         burst = DemandSlot(engine: engine)
     }
@@ -255,10 +260,12 @@ final class WidgetSnapshotWriter {
     }
 
     /// 当前值：比一个写入周期还旧的样本按陈旧处理，写成不可用，不拿旧值冒充（规格 §4.2）。
+    /// 降频时只给小组件用的采集器间隔会乘以降频倍数，阈值跟着放宽（D97）。
     /// 功率类取与菜单栏相同的平滑值（K24）；只有小组件在采样时间隔远超时间常数，平滑值就等于原始值。
     private func current(_ metric: MetricID?, now: Date) -> (Double?, DataQuality) {
         guard let metric, let sample = store.latest[metric] else { return (nil, .unavailable(.readFailed("noSample"))) }
-        if now.timeIntervalSince(sample.time.wallClock) > interval + 30 {
+        let multiplier = Double(throttle?.applied.factor.multiplier ?? 1)
+        if now.timeIntervalSince(sample.time.wallClock) > interval * multiplier + 30 {
             return (nil, .unavailable(UnavailableReason(code: "stale")))
         }
         let value = MetricStore.smoothedIDs.contains(metric) ? store.smoothed[metric] ?? sample.value : sample.value

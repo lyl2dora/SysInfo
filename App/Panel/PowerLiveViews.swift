@@ -148,7 +148,7 @@ final class ThermalDrawView: LiveDrawView {
             let target = latest[.fanTarget(index)]?.value
             let low = latest[.fanMinimum(index)]?.value
             let high = latest[.fanMaximum(index)]?.value
-            let forced = (latest[.fanMode(index)]?.value ?? 0) != 0
+            let mode = latest[.fanMode(index)]?.value
             // 占范围百分比：(实际 − 最低) / (最高 − 最低)。
             if let rpm, let low, let high, high > low {
                 let bar = NSRect(x: 80, y: y + 5.5, width: bounds.width - 80 - 164, height: 5)
@@ -160,15 +160,21 @@ final class ThermalDrawView: LiveDrawView {
             }
             var text = rpm.map(Formatting.rpm) ?? "—"
             if let target { text += String(localized: " · 目标 \(String(format: "%.0f", target))") }
-            text += forced ? String(localized: " · 强制") : String(localized: " · 自动")
+            // 模式读不到时不显示，不当成「自动」。
+            if let mode { text += mode != 0 ? String(localized: " · 强制") : String(localized: " · 自动") }
             Self.drawRight(Self.text(text, Self.caption2Digits, .secondaryLabelColor), right: bounds.width, y: y + 1)
             y += Self.rowHeight
         }
         // 徽标：热状态（正常也显示）、低功耗模式。
         var x: CGFloat = 0
-        let state = latest[.cpuThermalState]?.value
-        let badge = state.flatMap(DisplayNames.thermalState).map { ($0.text, NSColor($0.color)) }
-            ?? (String(localized: "热状态正常"), NSColor.systemGreen)
+        // 没有读数（首次采样前或采集器不可用）时显示灰色「热状态 —」，不显示成「正常」。
+        let badge: (String, NSColor)
+        if let state = latest[.cpuThermalState]?.value {
+            badge = DisplayNames.thermalState(state).map { ($0.text, NSColor($0.color)) }
+                ?? (String(localized: "热状态正常"), NSColor.systemGreen)
+        } else {
+            badge = (String(localized: "热状态 —"), NSColor.systemGray)
+        }
         x += drawBadge(badge.0, color: badge.1, x: x, y: y + 2) + 6
         if latest[.powerLowPowerMode]?.value == 1 {
             _ = drawBadge(String(localized: "低功耗模式"), color: .systemYellow, x: x, y: y + 2)

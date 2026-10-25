@@ -423,7 +423,7 @@ public final class TopNBuilder: Sendable {
         var out: [TopNRow] = []
         for delta in sorted.prefix(rows) {
             let pids = CoalitionReader.members(of: delta.id, tasksHint: Int(delta.tasks)) ?? []
-            var row = gpuRow(delta, pids: pids, table: table, elapsed: elapsed)
+            var row = gpuRow(delta, pids: pids, table: table, elapsed: elapsed, trusted: window.slotsTrusted)
             if grouping == .byProcess, row.memberCount <= 1 {
                 row.kind = .process
                 row.id = "p\(row.representativePID)"
@@ -434,7 +434,9 @@ public final class TopNBuilder: Sendable {
         return out
     }
 
-    private func gpuRow(_ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double) -> TopNRow {
+    private func gpuRow(
+        _ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double, trusted: Bool
+    ) -> TopNRow {
         let ownUID = getuid()
         let entries = pids.compactMap { table[$0] }
         let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
@@ -453,8 +455,10 @@ public final class TopNBuilder: Sendable {
             memberCount: max(pids.count, Int(delta.tasks)), cpu: 0, perfLevel0Share: nil, energyWatts: nil, topMember: nil,
             members: members, residualCPU: nil, residualCount: entries.count - members.count,
             eligibility: entries.count == 1 ? ProcessControl.eligibility(uid: entries[0].uid, pid: entries[0].pid) : .group,
-            gpuShare: Double(delta.gpuNanos) / elapsed, gpuWatts: Double(delta.gpuEnergyNanojoules) / 1e9 / seconds,
-            aneWatts: Double(delta.aneEnergyNanojoules) / 1e9 / seconds)
+            // 辅助槽不可信时 GPU / ANE 都不给数（D96）。
+            gpuShare: trusted ? Double(delta.gpuNanos) / elapsed : nil,
+            gpuWatts: trusted ? Double(delta.gpuEnergyNanojoules) / 1e9 / seconds : nil,
+            aneWatts: trusted ? Double(delta.aneEnergyNanojoules) / 1e9 / seconds : nil)
     }
 
     // MARK: - 应用详情（D64）
@@ -489,17 +493,22 @@ public final class TopNBuilder: Sendable {
             (a.cpu ?? -1) != (b.cpu ?? -1) ? (a.cpu ?? -1) > (b.cpu ?? -1) : (a.footprint ?? 0) > (b.footprint ?? 0)
         }
         let elapsed = Double(window?.elapsedNanos ?? 0)
-        func rate(_ value: UInt64?) -> Double { elapsed > 0 ? Double(value ?? 0) / elapsed : 0 }
+        // 还没有窗口、或本窗口没有这个 coalition 的差分（新出现、计数回退）时为 nil，显示「—」而不是 0。
+        func rate(_ value: UInt64?) -> Double? {
+            guard elapsed > 0, delta != nil, let value else { return nil }
+            return Double(value) / elapsed
+        }
+        func auxiliary(_ value: UInt64?) -> Double? { slotsTrusted ? rate(value) : nil }  // D96
         let isKernel = pids.contains(0)
         pruneCaches(alive: Set(table.keys))
         return AppDetail(
             coalitionID: coalitionID, name: isKernel ? "kernel_task" : (representative?.1.name ?? "cid \(coalitionID)"),
             appPath: representative?.1.appPath, representativePID: representative?.0.pid ?? pids.first ?? 0,
             memberCount: max(pids.count, hint), cpu: rate(delta?.cpuNanos),
-            energyWatts: slotsTrusted && elapsed > 0 ? rate(delta?.energyNanojoules) : nil, footprint: footprint?.bytes,
-            diskRead: rate(delta?.diskReadBytes) * 1e9, diskWrite: rate(delta?.diskWrittenBytes) * 1e9,
-            gpuShare: rate(delta?.gpuNanos), gpuWatts: rate(delta?.gpuEnergyNanojoules),
-            aneWatts: rate(delta?.aneEnergyNanojoules), members: members, residualCount: entries.count - members.count,
+            energyWatts: auxiliary(delta?.energyNanojoules), footprint: footprint?.bytes,
+            diskRead: rate(delta?.diskReadBytes).map { $0 * 1e9 }, diskWrite: rate(delta?.diskWrittenBytes).map { $0 * 1e9 },
+            gpuShare: auxiliary(delta?.gpuNanos), gpuWatts: auxiliary(delta?.gpuEnergyNanojoules),
+            aneWatts: auxiliary(delta?.aneEnergyNanojoules), members: members, residualCount: entries.count - members.count,
             eligibility: entries.count == 1 ? ProcessControl.eligibility(uid: entries[0].uid, pid: entries[0].pid) : .group)
     }
 

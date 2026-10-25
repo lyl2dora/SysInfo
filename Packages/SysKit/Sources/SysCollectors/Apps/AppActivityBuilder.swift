@@ -52,8 +52,8 @@ public final class AppActivityBuilder: Sendable {
                     id: "c\(delta.id)", key: identity.key, name: identity.name, appPath: identity.appPath,
                     isApp: identity.appPath != nil, coalitionID: delta.id, representativePID: identity.representativePID,
                     memberCount: Int(delta.tasks), cpu: Double(delta.cpuNanos) / elapsed, cpuTimeNanos: delta.cpuTotalNanos,
-                    watts: trusted ? watts : nil, gpuShare: Double(delta.gpuNanos) / elapsed,
-                    aneWatts: Double(delta.aneEnergyNanojoules) / 1e9 / seconds,
+                    watts: trusted ? watts : nil, gpuShare: trusted ? Double(delta.gpuNanos) / elapsed : nil,
+                    aneWatts: trusted ? Double(delta.aneEnergyNanojoules) / 1e9 / seconds : nil,  // D96
                     diskRead: Double(delta.diskReadBytes) / seconds, diskWrite: Double(delta.diskWrittenBytes) / seconds,
                     wakeups: Double(delta.wakeups) / seconds, pageins: Double(delta.pageins) / seconds,
                     perfLevel0Share: trusted && delta.cpuNanos > 0 ? Double(delta.perfLevel0Nanos) / Double(delta.cpuNanos) : nil,
