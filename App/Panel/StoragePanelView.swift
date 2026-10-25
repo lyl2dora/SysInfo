@@ -3,7 +3,7 @@
 // - 主页（定高，D64）：按「内置 / RAID ‹名称›（每个阵列一组）/ 外置」分组。内置盘始终逐块列出；
 //   RAID 成员不超过 5 块时就地列出（组可以折叠，默认展开，状态记住），超过时折成汇总行；
 //   外置盘不超过 2 块时逐块列出，超过时折成汇总行「外置 n 块 · 最高温 · 读写」，点击进入外置盘列表页；
-//   每块盘一行（名称与「温度 · 寿命」或异常项；读写速率与最近 60 s 的小曲线），点击进入单盘详情页；
+//   每块盘一行（名称与「温度 · 健康度」或异常项；读写速率与最近 60 s 的小曲线），点击进入单盘详情页；
 //   容量挂在它的归属上：RAID 组标题，或拥有容量组的那块盘；最下面是按磁盘 IO 的 Top N；
 // - 列表页（二级页）：外置盘或 RAID 成员逐块列出，可「只看活跃」；
 // - 单盘详情页（二级页）：读写历史图、IO 统计、SMART 全部字段、身份信息、卷构成。
@@ -372,7 +372,7 @@ enum StorageText {
 
 // MARK: - 概览的盘行
 
-/// 一块盘的两行（可选第三行容量条）：名称与「温度 · 寿命」或异常项；读写速率与最近 60 s 小曲线。
+/// 一块盘的两行（可选第三行容量条）：名称与「温度 · 健康度」或异常项；读写速率与最近 60 s 小曲线。
 final class DiskRowDrawView: LiveDrawView {
     static let height: CGFloat = 34
     static let sparklineSeconds: Double = 60
@@ -399,7 +399,7 @@ final class DiskRowDrawView: LiveDrawView {
         let name = StorageText.diskName(disk, inventory: inventory)
         Self.draw(Self.text(name, Self.caption), x: 0, y: 0)
 
-        // 右侧：异常项（橙 / 红）或「温度 · 寿命」。
+        // 右侧：异常项（橙 / 红）或「温度 · 健康度」。
         let record = services.storage.smart?.latestRecords[key]
         let issues = record?.healthIssues ?? []
         let memberOffline = disk.raid.map { !$0.isOnline } ?? false
@@ -412,7 +412,10 @@ final class DiskRowDrawView: LiveDrawView {
                 right: bounds.width, y: 0)
         } else {
             let temp = latest[.storageDisk(key, .temp)]?.value.map(Formatting.temperature)
-            let life = latest[.storageDisk(key, .life)]?.value.map { String(localized: "寿命 \(PercentFormat.string(fromRatio: $0))") }
+            // 健康度 = 1 − 已用寿命（Percentage Used 可超过 100%，超出时健康度按 0% 显示）。
+            let life = latest[.storageDisk(key, .life)]?.value.map {
+                String(localized: "健康度 \(PercentFormat.string(fromRatio: 1 - $0))")
+            }
             let text: String =
                 if disk.smartCapable {
                     [temp ?? "—", life].compactMap { $0 }.joined(separator: " · ")
