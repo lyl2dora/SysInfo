@@ -141,7 +141,7 @@ struct HistorySettingsView: View {
                 Toggle("包含每应用数据（分钟粒度）", isOn: $includeApps)
                 Button("导出…", action: export)
                     .disabled(history == nil || busy)
-                Text("导出内容不含序列号、硬件 UUID、MAC 地址等设备唯一标识；机型标识和芯片名会写进元数据。")
+                Text("导出内容不含序列号、硬件 UUID、MAC 地址等设备唯一标识；程序路径里的用户名、卷名和 UUID 会换成占位符。机型标识和芯片名会写进元数据。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if let message {

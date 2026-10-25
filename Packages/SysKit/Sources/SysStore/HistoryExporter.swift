@@ -231,7 +231,8 @@ public enum HistoryExporter {
         for a in apps {
             lines.append(
                 [
-                    iso(a.minute), csvField(a.key), csvField(a.name), String(a.cpuNanos), number(Double(a.cpuNanos) / 60e9),
+                    iso(a.minute), csvField(redactingPaths(a.key)), csvField(a.name), String(a.cpuNanos),
+                    number(Double(a.cpuNanos) / 60e9),
                     joules(a.energy), int(a.gpuNanos), joules(a.gpuEnergy), joules(a.aneEnergy), int(a.diskRead), int(a.diskWrite),
                     int(a.wakeups), int(a.footprint),
                 ].joined(separator: ","))
@@ -244,8 +245,9 @@ public enum HistoryExporter {
         for span in spans {
             lines.append(
                 [
-                    iso(span.start), span.end.map(iso) ?? "", span.endEstimated ? "1" : "0", csvField(span.appKey),
-                    csvField(span.appName), csvField(span.type), csvField(redactingUUIDs(span.name)), csvField(span.holder),
+                    iso(span.start), span.end.map(iso) ?? "", span.endEstimated ? "1" : "0",
+                    csvField(redactingPaths(span.appKey)), csvField(span.appName), csvField(span.type),
+                    csvField(redactingPaths(span.name)), csvField(redactingPaths(span.holder)),
                 ].joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
@@ -257,6 +259,24 @@ public enum HistoryExporter {
         text.replacing(
             /[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/, with: "<uuid>")
     }
+
+    /// D101：应用键、断言名与持有者里的路径改写个人信息，保留路径结构。
+    /// 家目录 `/Users/<用户名>`（含 `/System/Volumes/Data` 前缀）→ `~`，`/Users/Shared` 不动；
+    /// `/Volumes/` 之后的卷名 → `<volume>`（卷名可含空格，取到下一个 `/` 或结尾）；UUID → `<uuid>`。
+    static func redactingPaths(_ text: String) -> String {
+        var out = redactingUUIDs(text)
+        for (pattern, template) in pathRules {
+            out = pattern.stringByReplacingMatches(
+                in: out, range: NSRange(out.startIndex..., in: out), withTemplate: template)
+        }
+        return out
+    }
+
+    private static let pathRules: [(NSRegularExpression, String)] = [
+        (#"(?<![\w.-])(?:/System/Volumes/Data)?/Users/(?!Shared(?:/|$))[^/\s]+"#, "~"),
+        // `\/` 即 `/`，这样写是为了不被 check-leaks 当成卷名（D77）。
+        (#"(?<![\w.-]|/System)/Volumes\/(?!<volume>(?:/|$))[^/]+"#, "/Volumes/<volume>"),
+    ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 
     typealias EnergyHour = (hour: Int64, source: Int64, joules: Double, covered: Double)
 
@@ -311,7 +331,7 @@ public enum HistoryExporter {
         }
         for a in apps {
             let line = AppLine(
-                t: iso(a.minute), key: a.key, name: a.name, cpu_ns: a.cpuNanos, energy_nj: a.energy, gpu_ns: a.gpuNanos,
+                t: iso(a.minute), key: redactingPaths(a.key), name: a.name, cpu_ns: a.cpuNanos, energy_nj: a.energy, gpu_ns: a.gpuNanos,
                 gpu_nj: a.gpuEnergy, ane_nj: a.aneEnergy, disk_read_bytes: a.diskRead, disk_write_bytes: a.diskWrite,
                 wakeups: a.wakeups, footprint_bytes: a.footprint)
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
@@ -340,8 +360,9 @@ public enum HistoryExporter {
         }
         for span in assertions {
             let line = AssertionLine(
-                start: iso(span.start), end: span.end.map(iso), end_estimated: span.endEstimated, key: span.appKey,
-                name: span.appName, assertion_type: span.type, assertion_name: redactingUUIDs(span.name), holder: span.holder)
+                start: iso(span.start), end: span.end.map(iso), end_estimated: span.endEstimated,
+                key: redactingPaths(span.appKey), name: span.appName, assertion_type: span.type,
+                assertion_name: redactingPaths(span.name), holder: redactingPaths(span.holder))
             lines.append(String(decoding: try encoder.encode(line), as: UTF8.self))
         }
         return lines.joined(separator: "\n") + "\n"
