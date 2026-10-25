@@ -42,6 +42,15 @@ traces=(
 
 remote() { "${ssh_cmd[@]}" "$@"; }
 
+# 记下启动前已存在的痕迹，清场时不动它们。清单只在上次清场之后的第一次启动时写：连跑两次 run 时，
+# 第二次不能把第一次留下的痕迹也记成「启动前就有」（D39，审计 A45）。clean 结束时删掉清单。
+record_preexisting() {
+    local list="" t
+    for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
+    remote "mkdir -p $dir; [ -e $dir/preexisting.txt ] && exit 0; \
+        for p in $list; do [ -e \"\$p\" ] && echo \"\$p\"; done > $dir/preexisting.txt; true"
+}
+
 case "${1:-}" in
 sync)
     remote "mkdir -p $dir/repo $dir/tmp $dir/home"
@@ -53,9 +62,8 @@ measure)
     "$0" sync
     commit="$(cd "$repo_root" && git rev-parse --short HEAD)$(cd "$repo_root" && git diff --quiet HEAD 2>/dev/null || echo -dirty)"
     number="$(cd "$repo_root" && git rev-list --count HEAD)"
-    list=""
-    for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
-    remote "for p in $list; do [ -e \"\$p\" ] && echo \"\$p\"; done > $dir/preexisting.txt; rm -f $dir/perf.md; true"
+    record_preexisting
+    remote "rm -f $dir/perf.md"
     remote "cd $dir/repo && $env_vars REMOTE_MODE=1 DERIVED_DATA=$dir/measure-dd OUTPUT=$dir/perf.md APP_TMPDIR=$dir/tmp \
         GIT_COMMIT=$commit BUILD_NUMBER=$number WARMUP=${WARMUP:-30} DURATION=${DURATION:-120} BASELINE=${BASELINE:-1} \
         TIERS='${TIERS:-default panel details}' scripts/measure-overhead.sh"
@@ -78,11 +86,11 @@ build)
     ;;
 run)
     shift
-    # 记下启动前已存在的痕迹，清场时不动它们。
-    list=""
-    for t in "${traces[@]}"; do list+="\"\$HOME/$t\" "; done
-    remote "for p in $list; do [ -e \"\$p\" ] && echo \"\$p\"; done > $dir/preexisting.txt; true"
-    remote "open -n --env TMPDIR=$dir/tmp '$app' --args --factory-defaults $*"
+    record_preexisting
+    # 参数逐个转义后再拼进远端命令，带空格的参数不会被远端 shell 拆开。
+    args=""
+    [ "$#" -gt 0 ] && args="$(printf ' %q' "$@")"
+    remote "open -n --env TMPDIR=$dir/tmp '$app' --args --factory-defaults$args"
     ;;
 shot)
     out="${2:?需要本地输出路径}"
@@ -104,7 +112,13 @@ clean)
     leftover="$(remote "touch $dir/preexisting.txt; for p in $list; do [ -e \"\$p\" ] || continue; \
         if grep -qxF \"\$p\" $dir/preexisting.txt; then echo \"[pre] \$p\"; continue; fi; \
         rm -rf \"\$p\" 2>/dev/null; if [ -e \"\$p\" ]; then echo \"[left] \$p\"; else echo \"删除 \$p\" >&2; fi; done; true")"
-    remote "defaults read zone.lyl.sysinfo.dev >/dev/null 2>&1 && ! grep -q Preferences $dir/preexisting.txt && defaults delete zone.lyl.sysinfo.dev && echo '删除偏好域 zone.lyl.sysinfo.dev'; true"
+    # 偏好域按对应 plist 的完整路径判断是否启动前就有（只查 Preferences 会被 .dev.measure 的 plist 误匹配）。
+    for domain in zone.lyl.sysinfo.dev zone.lyl.sysinfo.dev.measure; do
+        remote "defaults read $domain >/dev/null 2>&1 || exit 0; \
+            grep -qxF \"\$HOME/Library/Preferences/$domain.plist\" $dir/preexisting.txt && exit 0; \
+            defaults delete $domain && echo '删除偏好域 $domain'; true"
+    done
+    remote "rm -f $dir/preexisting.txt"
     if grep -q '^\[pre\] ' <<<"$leftover"; then
         echo "==> 启动前就存在、这次没动的痕迹（确认是旧残留后可手动删除）："
         sed -n 's/^\[pre\] /    /p' <<<"$leftover"

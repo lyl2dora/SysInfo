@@ -48,7 +48,9 @@ exe="${app}/Contents/MacOS/SysInfo"
 
 # ---------------------------------------------------------------- 前置检查
 
-if pgrep -x Stats >/dev/null 2>&1; then
+stats_running() { pgrep -x Stats >/dev/null 2>&1; }
+
+if stats_running; then
     echo "检测到 Stats 正在运行（pid $(pgrep -x Stats | tr '\n' ' ')）。" >&2
     echo "开销测量要求环境干净：请手动退出 Stats 后再运行 make measure。脚本不会去结束它（D18、K26）。" >&2
     exit 2
@@ -170,7 +172,8 @@ ws_pid="$(system_pid WindowServer)"
 results=()
 measure() {
     local label="$1"; shift
-    local note=""
+    local note="" opens_panel=0 stats_seen=0 arg
+    for arg in "$@"; do [ "${arg}" = "--open-panel" ] && opens_panel=1; done
     app_pid=""
     if [ "${label}" != "baseline" ]; then
         launch_app "$@"
@@ -182,6 +185,7 @@ measure() {
     fi
 
     local t0 a0="" m0 w0 t1 a1="" m1 w1 r0="" r1=""
+    stats_running && stats_seen=1
     t0="$(now)"
     [ -n "${app_pid}" ] && a0="$(cpu_seconds "${app_pid}")"
     [ -n "${app_pid}" ] && r0="$("${cli}" rusage --pid "${app_pid}" 2>/dev/null || true)"
@@ -194,6 +198,12 @@ measure() {
     [ -n "${app_pid}" ] && r1="$("${cli}" rusage --pid "${app_pid}" 2>/dev/null || true)"
     m1="$(cpu_seconds "${mba_pid}")"
     w1="$(cpu_seconds "${ws_pid}")"
+    # 开头只检查过一次 Stats：测量窗口两端再查，期间被打开的这一档作废，接着测下一档。
+    stats_running && stats_seen=1
+    if [ "${stats_seen}" = "1" ]; then
+        note="Stats 在测量期间运行，本档作废"
+        echo "    检测到 Stats 在运行：本档作废，请手动退出 Stats（脚本不结束它）" >&2
+    fi
 
     local elapsed app_pct="—" footprint="—" equiv="—" cyc="—" p0share="—" mw="—" mips="—" p0gips="—" score="—"
     elapsed="$(perl -e 'printf "%.3f", $ARGV[1] - $ARGV[0]' "${t0}" "${t1}")"
@@ -221,11 +231,12 @@ measure() {
         fi
         footprint="$(/usr/bin/footprint -p "${app_pid}" 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1)"
         [ -n "${footprint}" ] || footprint="?"
-        # 面板档：测量期间面板若被关闭（有人点了关闭按钮），这一档作废。
-        if [ "${label}" = "panel" ] || [ "${label}" = "details" ]; then
-            if /usr/bin/log show --last "$((WARMUP + DURATION + 30))s" --info --style compact \
+        # 凡是带 --open-panel 的档：测量期间面板若被关闭（有人点了关闭按钮），这一档作废。
+        # 「面板已隐藏」是 notice 级日志（会落盘；info 级默认不落盘，log show 查不到）。
+        if [ "${opens_panel}" = "1" ]; then
+            if /usr/bin/log show --last "$((WARMUP + DURATION + 30))s" --style compact \
                 --predicate "processID == ${app_pid} AND category == \"panel\"" 2>/dev/null | grep -q "面板已隐藏"; then
-                note="面板在测量期间被关闭，本档作废"
+                note="${note:+${note}；}面板在测量期间被关闭，本档作废"
             fi
         fi
         stop_app

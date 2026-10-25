@@ -634,7 +634,8 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         // 拆掉 SwiftUI 内容：面板关闭后不再随每个 tick 重算视图。
         glass?.contentView = nil
         updateDemands()
-        Log.panel.info("面板已隐藏")
+        // notice 级：会落盘，measure-overhead.sh 靠它判断面板档是否中途被关（审计 A44）。
+        Log.panel.notice("面板已隐藏")
     }
 
     private func preparePanel() -> PanelWindow {
