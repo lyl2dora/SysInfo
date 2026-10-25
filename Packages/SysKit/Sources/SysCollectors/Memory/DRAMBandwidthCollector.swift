@@ -52,7 +52,8 @@ public struct BandwidthHistogram: Hashable, Sendable {
 
     /// 按事件增量加权的平均带宽；没有事件时为 nil。
     public func mean(counts: [Int64]) -> Double? {
-        guard counts.count == upperBounds.count else { return nil }
+        // 有负增量（计数器复位）时这一段不出数，不只跳过那一档。
+        guard counts.count == upperBounds.count, counts.allSatisfy({ $0 >= 0 }) else { return nil }
         let mids = midpoints
         var weighted = 0.0
         var total = 0.0

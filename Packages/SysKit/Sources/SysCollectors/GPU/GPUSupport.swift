@@ -78,6 +78,8 @@ public struct GPUResidencySummary: Hashable, Sendable {
     public var states: [GPUStateResidency]
     /// 有驻留的 P 档超出了档位表：表与芯片不符，频率不可信。
     public var exceedsTable: Bool
+    /// 有状态的驻留增量为负（计数器复位）：这一段丢弃，活跃比例与频率都为 nil。
+    public var counterReset: Bool = false
 }
 
 public enum GPUResidencyMath {
@@ -90,7 +92,11 @@ public enum GPUResidencyMath {
 
     public static func summarize(names: [String], residencies: [Int64], table: GPUFrequencyTable?) -> GPUResidencySummary {
         let count = min(names.count, residencies.count)
-        let values = (0..<count).map { Double(max(residencies[$0], 0)) }
+        guard residencies.prefix(count).allSatisfy({ $0 >= 0 }) else {
+            return GPUResidencySummary(
+                active: nil, frequency: nil, averageState: nil, states: [], exceedsTable: false, counterReset: true)
+        }
+        let values = (0..<count).map { Double(residencies[$0]) }
         let total = values.reduce(0, +)
         guard total > 0 else {
             return GPUResidencySummary(active: nil, frequency: nil, averageState: nil, states: [], exceedsTable: false)

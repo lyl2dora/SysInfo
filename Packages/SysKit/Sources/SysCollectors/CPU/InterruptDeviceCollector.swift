@@ -96,15 +96,18 @@ public final class InterruptDeviceCollector: Collector {
         return String(trimmed[..<space])
     }
 
-    /// 按设备合并、换算成每秒次数并降序（纯函数，便于单测）。负的增量按复位处理，丢弃。
+    /// 按设备合并、换算成每秒次数并降序（纯函数，便于单测）。负的增量按复位处理：这个设备这一段整个丢弃，不出部分和。
     static func sources(_ deltas: [IOReportChannelDelta], elapsedNanos: UInt64) -> [InterruptSource] {
         let seconds = Double(elapsedNanos) / 1e9
         guard seconds > 0 else { return [] }
         var byDevice: [String: Int64] = [:]
-        for d in deltas where isFirstLevelCount(d.key) && d.integerValue >= 0 {
-            byDevice[device(d.key.subgroup), default: 0] += d.integerValue
+        var reset: Set<String> = []
+        for d in deltas where isFirstLevelCount(d.key) {
+            let name = device(d.key.subgroup)
+            if d.integerValue < 0 { reset.insert(name) }
+            byDevice[name, default: 0] += d.integerValue
         }
-        return byDevice.filter { $0.value > 0 }
+        return byDevice.filter { $0.value > 0 && !reset.contains($0.key) }
             .map { InterruptSource(device: $0.key, perSecond: Double($0.value) / seconds) }
             .sorted { $0.perSecond > $1.perSecond }
     }

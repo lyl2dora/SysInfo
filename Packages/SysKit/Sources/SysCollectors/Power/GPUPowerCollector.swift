@@ -220,8 +220,9 @@ public final class GPUPowerCollector: Collector {
                 samples.append(Sample(id: .gpuActive, value: active, time: time))
                 samples.append(Self.frequencySample(summary, table: output.table, at: time))
             } else {
-                samples.append(.unavailable(.gpuActive, reason: .noElapsedTicks(), at: time))
-                samples.append(.unavailable(.gpuFrequency, reason: .noElapsedTicks(), at: time))
+                let reason: UnavailableReason = summary.counterReset ? .counterReset("GPUPH") : .noElapsedTicks()
+                samples.append(.unavailable(.gpuActive, reason: reason, at: time))
+                samples.append(.unavailable(.gpuFrequency, reason: reason, at: time))
             }
         } else if !output.hasResidency, output.watts != nil || output.wattsProblem != nil {
             let reason = UnavailableReason.selfTestFailed("no GPUPH")

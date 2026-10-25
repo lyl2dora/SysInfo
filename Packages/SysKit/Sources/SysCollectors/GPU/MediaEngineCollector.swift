@@ -89,13 +89,21 @@ public final class MediaEngineCollector: Collector {
             }
             let seconds = Double(time.monotonicNanos - previous) / 1e9
             var counts: [MetricID: Double] = [:]
+            var reset: Set<MetricID> = []
             for delta in deltas {
-                guard let metric = Self.engine(of: delta.key.subgroup), delta.integerValue >= 0 else { continue }
+                guard let metric = Self.engine(of: delta.key.subgroup) else { continue }
+                if delta.integerValue < 0 { reset.insert(metric) }
                 counts[metric, default: 0] += Double(delta.integerValue)
             }
             var samples: [Sample] = []
             for (_, metric) in Self.engines {
                 guard let count = counts[metric] else { continue }
+                // 同一引擎的任何一个中断源复位：这一帧整个引擎不出数，也不喂给空闲底数（否则底数被永久拉低）。
+                guard !reset.contains(metric) else {
+                    s.raw[metric] = nil
+                    samples.append(.unavailable(metric, reason: .counterReset(), at: time))
+                    continue
+                }
                 let rate = count / seconds
                 s.raw[metric] = rate
                 var baseline = s.baselines[metric] ?? InterruptBaseline()

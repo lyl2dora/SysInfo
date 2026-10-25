@@ -168,6 +168,8 @@ public enum ClusterFrequencyReading: Hashable, Sendable {
     case idle(activeFraction: Double)
     /// 状态与表对不上，或驻留全为 0。
     case invalid(String)
+    /// 有状态的驻留增量为负：计数器复位，这一段丢弃（不钳为 0）。
+    case counterReset
 }
 
 public enum FrequencyMath {
@@ -190,11 +192,12 @@ public enum FrequencyMath {
     /// 频率 = Σ(V_i 驻留 × f_i) / Σ 活跃驻留。
     public static func frequency(stateNames: [String], residencies: [Int64], table: DVFSTable) -> ClusterFrequencyReading {
         guard stateNames.count == residencies.count else { return .invalid("states/residencies mismatch") }
+        guard residencies.allSatisfy({ $0 >= 0 }) else { return .counterReset }
         var weighted = 0.0
         var active = 0.0
         var total = 0.0
         for (name, residency) in zip(stateNames, residencies) {
-            let r = Double(max(residency, 0))
+            let r = Double(residency)
             total += r
             guard let i = vIndex(name) else { continue }
             guard i < table.frequencies.count else { return .invalid("V\(i) beyond table (\(table.frequencies.count))") }
