@@ -130,10 +130,17 @@ struct NetworkVirtualListView: View {
     let services: AppServices
     @Bindable var settings: AppSettings
     @Environment(\.panelLayoutChanged) private var layoutChanged
+    /// 活跃接口的名字：定期重算，变了才写，页面不跟着每个 tick 重建（审计 A40）。nil 表示还没算过。
+    @State private var activeNames: Set<String>?
+
+    private func currentActiveNames() -> Set<String> {
+        Set(services.networkModel.state.virtual.filter { NetworkActivity.isActive($0, store: store) }.map(\.name))
+    }
 
     var body: some View {
         let all = services.networkModel.state.virtual
-        let active = all.filter { NetworkActivity.isActive($0, store: store) }
+        let names = activeNames ?? currentActiveNames()
+        let active = all.filter { names.contains($0.name) }
         let activeOnly = settings.networkVirtualActiveOnly && !active.isEmpty
         let shown = activeOnly ? active : all
         let kinds = NetworkInterfaceKind.allCases.filter { kind in shown.contains { $0.kind == kind } }
@@ -158,6 +165,13 @@ struct NetworkVirtualListView: View {
         }
         .onChange(of: shown.map(\.name)) { layoutChanged() }
         .onChange(of: settings.networkVirtualActiveOnly) { layoutChanged() }
+        .task {
+            while !Task.isCancelled {
+                let names = currentActiveNames()
+                if names != activeNames { activeNames = names }
+                try? await Task.sleep(for: .seconds(NetworkActivity.refreshSeconds))
+            }
+        }
     }
 }
 
@@ -165,10 +179,13 @@ struct NetworkVirtualListView: View {
 enum NetworkActivity {
     static let threshold: Double = 1_000
     static let seconds: Double = 60
+    /// 列表页重算活跃集合的间隔。
+    static let refreshSeconds: Double = 2
 
+    /// 不被观察系统跟踪（`recentPointsUntracked`）：列表页定期重算，汇总行随 tick 重绘。
     static func isActive(_ interface: NetworkInterface, store: MetricStore) -> Bool {
         for direction in [MetricID.NetworkDirection.in, .out] {
-            if store.recentPoints(.network(interface, direction), seconds: seconds).contains(where: { ($0.value ?? 0) > threshold }) {
+            if store.recentPointsUntracked(.network(interface, direction), seconds: seconds).contains(where: { ($0.value ?? 0) > threshold }) {
                 return true
             }
         }

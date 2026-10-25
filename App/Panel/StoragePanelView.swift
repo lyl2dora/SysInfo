@@ -182,16 +182,25 @@ struct StorageDiskListView: View {
     /// nil 为外置盘；否则为这个阵列的成员。
     let raid: DiskKey?
     @Environment(\.panelLayoutChanged) private var layoutChanged
+    /// 活跃的盘：定期重算，变了才写，页面不跟着每个 tick 重建（审计 A40）。nil 表示还没算过。
+    @State private var activeKeys: Set<DiskKey>?
+
+    private var disks: [PhysicalDisk] {
+        let inventory = services.storageModel.inventory
+        if let raid, let set = inventory.raidSet(raid) {
+            return set.members.compactMap { inventory.disk($0) }.sorted { ($0.raid?.index ?? .max) < ($1.raid?.index ?? .max) }
+        }
+        return inventory.disks.filter { $0.location == .external && $0.raid == nil }
+    }
+
+    private func currentActiveKeys() -> Set<DiskKey> {
+        Set(disks.map(\.key).filter { StorageActivity.isActive($0, store: store) })
+    }
 
     var body: some View {
-        let inventory = services.storageModel.inventory
-        let disks: [PhysicalDisk] =
-            if let raid, let set = inventory.raidSet(raid) {
-                set.members.compactMap { inventory.disk($0) }.sorted { ($0.raid?.index ?? .max) < ($1.raid?.index ?? .max) }
-            } else {
-                inventory.disks.filter { $0.location == .external && $0.raid == nil }
-            }
-        let active = disks.filter { StorageActivity.isActive($0.key, store: store) }
+        let disks = disks
+        let keys = activeKeys ?? currentActiveKeys()
+        let active = disks.filter { keys.contains($0.key) }
         let activeOnly = settings.storageListActiveOnly && !active.isEmpty
         let shown = activeOnly ? active : disks
         PanelSubpage {
@@ -207,6 +216,13 @@ struct StorageDiskListView: View {
         }
         .onChange(of: shown.map(\.key)) { layoutChanged() }
         .onChange(of: settings.storageListActiveOnly) { layoutChanged() }
+        .task {
+            while !Task.isCancelled {
+                let keys = currentActiveKeys()
+                if keys != activeKeys { activeKeys = keys }
+                try? await Task.sleep(for: .seconds(StorageActivity.refreshSeconds))
+            }
+        }
     }
 }
 
@@ -214,10 +230,13 @@ struct StorageDiskListView: View {
 enum StorageActivity {
     static let threshold: Double = 1_000
     static let seconds: Double = 60
+    /// 列表页重算活跃集合的间隔。
+    static let refreshSeconds: Double = 2
 
+    /// 不被观察系统跟踪（`recentPointsUntracked`）：调用方自己定期重算。
     static func isActive(_ key: DiskKey, store: MetricStore) -> Bool {
         for direction in [MetricID.DiskMetric.read, .write] {
-            if store.recentPoints(.storageDisk(key, direction), seconds: seconds).contains(where: { ($0.value ?? 0) > threshold }) {
+            if store.recentPointsUntracked(.storageDisk(key, direction), seconds: seconds).contains(where: { ($0.value ?? 0) > threshold }) {
                 return true
             }
         }
