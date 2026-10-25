@@ -125,8 +125,8 @@ private struct CPUDetailsSection: View {
             }
         }
         .onChange(of: min(sources.count, 8)) { layoutChanged() }
-        .onAppear { services.setInterruptSourcesVisible(true) }
-        .onDisappear { services.setInterruptSourcesVisible(false) }
+        .onAppear { services.interruptSourcesAppeared() }
+        .onDisappear { services.interruptSourcesDisappeared() }
     }
 
     private var loadAverage: String {
