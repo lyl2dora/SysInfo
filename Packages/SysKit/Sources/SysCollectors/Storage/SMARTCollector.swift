@@ -12,6 +12,7 @@
 //
 // 自检（K19、D24 逐盘判定）：有 SMART 盘时至少一块读得到（必需）；每块盘的综合温度在 −20–120 °C、
 // 已用寿命 ≤ 255、备用块 ≤ 100（提示）。不合理的盘标为不可用，不显示可能错误的数值（D05）。
+// 自检时被独占的盘不算读不到，读数核对推迟到之后第一次读到时（D106）。
 
 import CSysStorage
 import Foundation
@@ -126,6 +127,8 @@ public final class SMARTCollector: Collector {
         var lastReadNanos: [DiskKey: UInt64] = [:]
         /// 自检判定读数不合理的盘。
         var implausible: Set<DiskKey> = []
+        /// 自检时被独占、还没核对过读数的盘：第一次读到时先核对再出样本（D106）。
+        var unverified: Set<DiskKey> = []
         var focus: Set<DiskKey>?
         var generation: UInt64?
     }
@@ -142,9 +145,9 @@ public final class SMARTCollector: Collector {
         state.withLock { $0.focus = keys }
     }
 
-    /// 每块盘最近一次的 SMART 读数（详情页）。自检判为读数不合理的盘不给出（D05：不显示可能错误的数值）。
+    /// 每块盘最近一次的 SMART 读数（详情页）。自检判为读数不合理、或还没核对过的盘不给出（D05：不显示可能错误的数值）。
     public var latestRecords: [DiskKey: SMARTRecord] {
-        state.withLock { s in s.records.filter { !s.implausible.contains($0.key) } }
+        state.withLock { s in s.records.filter { !s.implausible.contains($0.key) && !s.unverified.contains($0.key) } }
     }
 
     /// 每块盘的连接状态（诊断页）。
@@ -159,34 +162,38 @@ public final class SMARTCollector: Collector {
             $0.identify = [:]
             $0.busyCounts = [:]
             $0.implausible = []
+            $0.unverified = []
             $0.generation = snapshot.inventory.generation
         }
         let capable = snapshot.inventory.disks.filter(\.smartCapable)
         var checks: [SelfTestCheck] = []
         var readable = 0
+        var busy = 0
         for disk in capable {
             guard let entry = snapshot.entries[disk.key] else { continue }
             let outcome = read(disk, entry: entry, at: Date())
-            guard let record = outcome else { continue }
+            guard let record = outcome else {
+                // 被独占只算这次没读到：读数核对推迟到第一次读到时（D106）。
+                if state.withLock({ $0.busyCounts[disk.key] != nil }) {
+                    busy += 1
+                    state.withLock { _ = $0.unverified.insert(disk.key) }
+                }
+                continue
+            }
             readable += 1
-            let problem = Self.implausibility(record)
+            let problem = verify(record, disk: disk)
             checks.append(
                 SelfTestCheck(
                     name: "storage.smart.plausible", passed: problem == nil,
                     detail: "\(disk.bsdName ?? "?"): \(problem ?? "temp=\(Int(record.temperatureCelsius)) used=\(record.percentageUsed)% spare=\(record.availableSpare)%")",
                     severity: .advisory))
-            if let problem {
-                state.withLock {
-                    $0.implausible.insert(disk.key)
-                    $0.records[disk.key] = nil
-                    $0.statuses[disk.key] = DiskSMARTStatus(state: .implausible(problem))
-                }
-            }
         }
+        let unreadable = capable.count - readable
         checks.insert(
             SelfTestCheck(
-                name: "storage.smart.read", passed: capable.isEmpty || readable > 0,
-                detail: capable.isEmpty ? "no NVMe disks" : "\(readable)/\(capable.count) readable"),
+                name: "storage.smart.read", passed: capable.isEmpty || readable > 0 || (unreadable > 0 && busy == unreadable),
+                detail: capable.isEmpty
+                    ? "no NVMe disks" : "\(readable)/\(capable.count) readable" + (busy > 0 ? ", \(busy) busy (check deferred)" : "")),
             at: 0)
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
         state.withLock {
@@ -206,6 +213,7 @@ public final class SMARTCollector: Collector {
                 let keys = Set(snapshot.inventory.disks.map(\.key))
                 s.identify = s.identify.filter { keys.contains($0.key) }
                 s.busyCounts = s.busyCounts.filter { keys.contains($0.key) }
+                s.unverified = s.unverified.filter { keys.contains($0) }
                 s.records = s.records.filter { keys.contains($0.key) }
                 s.statuses = s.statuses.filter { keys.contains($0.key) }
                 s.lastReadNanos = s.lastReadNanos.filter { keys.contains($0.key) }
@@ -251,6 +259,13 @@ public final class SMARTCollector: Collector {
                 degraded = true
                 samples += Self.sampleMetrics.map {
                     .unavailable(.storageDisk(disk.key, $0), reason: .readFailed("SMARTReadData"), at: time)
+                }
+                continue
+            }
+            if state.withLock({ $0.unverified.contains(disk.key) }), verify(record, disk: disk) != nil {
+                degraded = true
+                samples += Self.sampleMetrics.map {
+                    .unavailable(.storageDisk(disk.key, $0), reason: .selfTestFailed("implausible SMART"), at: time)
                 }
                 continue
             }
@@ -305,6 +320,20 @@ public final class SMARTCollector: Collector {
             }
         }
         return record
+    }
+
+    /// 核对一块盘的读数：不合理时标为不可用、丢掉读数并返回说明；合理时移出待核对集合。
+    private func verify(_ record: SMARTRecord, disk: PhysicalDisk) -> String? {
+        let problem = Self.implausibility(record)
+        state.withLock {
+            $0.unverified.remove(disk.key)
+            if let problem {
+                $0.implausible.insert(disk.key)
+                $0.records[disk.key] = nil
+                $0.statuses[disk.key] = DiskSMARTStatus(state: .implausible(problem))
+            }
+        }
+        return problem
     }
 
     static func samples(_ record: SMARTRecord, key: DiskKey, at time: SampleTime) -> [Sample] {

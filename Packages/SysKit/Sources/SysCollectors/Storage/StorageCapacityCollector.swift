@@ -31,7 +31,8 @@ public final class StorageCapacityCollector: Collector {
     private struct State {
         var usable: Bool?
         var groups: [CapacityGroup] = []
-        var purgeable: (bytes: UInt64, nanos: UInt64)?
+        /// 上一次读到的可清除空间与读取时刻；`bytes` 为 nil（没有可清除空间或读不到）同样缓存（审计 A39）。
+        var purgeable: (bytes: UInt64?, nanos: UInt64)?
     }
 
     private let inventory: DiskInventory
@@ -69,12 +70,17 @@ public final class StorageCapacityCollector: Collector {
         guard !mounts.isEmpty else {
             return CollectorOutput(samples: [], status: .degraded, dataPath: Self.dataPath)
         }
-        let cached = state.withLock { s -> UInt64? in
+        let cached = state.withLock { s -> UInt64?? in
             guard let p = s.purgeable, Double(time.continuousNanos &- p.nanos) / 1e9 < Self.purgeableCacheSeconds else { return nil }
-            return p.bytes
+            return .some(p.bytes)
         }
-        let purgeable = cached ?? Self.readPurgeable()
-        if cached == nil, let purgeable { state.withLock { $0.purgeable = (purgeable, time.continuousNanos) } }
+        let purgeable: UInt64?
+        if let cached {
+            purgeable = cached
+        } else {
+            purgeable = Self.readPurgeable()
+            state.withLock { $0.purgeable = (purgeable, time.continuousNanos) }
+        }
         let groups = Self.groups(snapshot: snapshot, mounts: mounts, purgeable: purgeable)
         state.withLock { $0.groups = groups }
         var samples: [Sample] = []
