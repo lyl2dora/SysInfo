@@ -22,6 +22,7 @@ struct PanelRootView: View {
     var body: some View {
         VStack(spacing: 12) {
             topBar
+                .padding(.horizontal, Self.margin)
 
             if state.isMerged, state.path.isEmpty {
                 // D65 MG4：合并模式的切换器，只在模块主页与总览出现。
@@ -29,6 +30,7 @@ struct PanelRootView: View {
                     selection: Binding(get: { state.selectedTab }, set: { actions.selectTab($0) }),
                     options: state.switcherTabs.map { ($0, $0.shortTitle) })
                     .help("切换模块（⌘1–⌘\(state.switcherTabs.count)）")
+                    .padding(.horizontal, Self.margin)
             }
 
             ScrollView {
@@ -40,6 +42,7 @@ struct PanelRootView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Self.margin)
             }
             .scrollBounceBehavior(.basedOnSize)
             // 换页时回到顶部（D66）。
@@ -48,7 +51,8 @@ struct PanelRootView: View {
         .onChange(of: state.selectedTab) { onTabChange() }
         .onChange(of: state.path) { onTabChange() }
         .onChange(of: state.isMerged) { onTabChange() }
-        .padding(14)
+        // 水平边距放在各行内部：滚动区域延伸到面板左右边缘，滚动条（含悬停展开的轨道）落在右侧边距里，不压住卡片。
+        .padding(.vertical, Self.margin)
         // D81：按住面板的空白处（含顶栏、卡片之间与边距）可以拖动；锚定时一拖就转为浮窗（PanelController 监听窗口移动）。
         .contentShape(.rect)
         .gesture(WindowDragGesture())
@@ -61,6 +65,9 @@ struct PanelRootView: View {
         .environment(\.panelNavigate, PanelNavigateAction(action: actions.navigate))
         .environment(\.openAppActivity, OpenAppActivityAction { [services] in services.openAppActivity($0, .now) })
     }
+
+    /// 面板四周的边距。
+    private static let margin: CGFloat = 14
 
     /// 当前页的标识：模块 + 二级页路径。变化时内容区重建、滚动回到顶部。
     private var pageIdentity: String {
