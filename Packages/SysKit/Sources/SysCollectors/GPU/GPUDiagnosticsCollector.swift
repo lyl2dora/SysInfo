@@ -139,6 +139,14 @@ public final class GPUDiagnosticsCollector: Collector {
             let stats = s.stats?.sampleDelta()
             let pmp = s.pmp?.sampleDelta()
             let ane = s.ane?.sampleDelta()
+            if (s.stats != nil && stats == nil) || (s.pmp != nil && pmp == nil) || (s.ane != nil && ane == nil) {
+                // 某个订阅读失败时它保留原基线，而另几个已前移；三者共用一个时间戳，全部重建基线才能对齐。
+                s.stats?.resetBaseline()
+                s.pmp?.resetBaseline()
+                s.ane?.resetBaseline()
+                s.previousNanos = nil
+                return CollectorOutput(samples: [], status: .ok, dataPath: Self.dataPath)
+            }
             defer { s.previousNanos = time.monotonicNanos }
             var r = GPUDiagnosticReadings()
             r.bandwidthGroup = s.pmpGroup

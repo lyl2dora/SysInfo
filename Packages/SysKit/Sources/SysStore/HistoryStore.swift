@@ -263,51 +263,64 @@ public final class HistoryStore {
         try appRowID(app)
     }
 
-    /// 在一个事务里写入分钟数据与每应用数据。
-    public func write(rows: [MinuteRow], apps: [AppMinuteRow]) throws {
-        guard !rows.isEmpty || !apps.isEmpty else { return }
-        try db.transaction { () throws(SQLiteError) in
-            let upsert = try db.statement(
-                """
-                INSERT INTO sample_minute(t, metric, avg, max, n, q) VALUES(?, ?, ?, ?, ?, ?)
-                ON CONFLICT(t, metric) DO UPDATE SET
-                    avg = (avg * n + excluded.avg * excluded.n) / (n + excluded.n),
-                    max = CASE WHEN max IS NULL OR excluded.max IS NULL THEN NULL ELSE MAX(max, excluded.max) END,
-                    n = n + excluded.n,
-                    q = MAX(q, excluded.q)
-                """)
-            for row in rows {
-                let metric = try metricRowID(row.metric)
-                try upsert.run([
-                    .int(row.minute), .int(metric), .double(row.avg), .optional(row.max), .int(row.n),
-                    .int(row.quality.rawValue),
-                ])
+    /// 在一个事务里写入分钟数据、每应用数据与能耗分钟：要么全部写入，要么全部不写。
+    public func write(rows: [MinuteRow], apps: [AppMinuteRow], energy: [EnergyMinuteRow] = []) throws {
+        guard !rows.isEmpty || !apps.isEmpty || !energy.isEmpty else { return }
+        let (savedMetricIDs, savedAppIDs) = (metricIDs, appIDs)
+        do {
+            try db.transaction { () throws(SQLiteError) in
+                try upsertMinutes(rows: rows, apps: apps)
+                try upsertEnergy(energy)
             }
-            let upsertApp = try db.statement(
-                """
-                INSERT INTO app_minute(t, app, cpu_ns, energy_nj, gpu_ns, gpu_nj, ane_nj, disk_r, disk_w, wakeups, footprint)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(t, app) DO UPDATE SET
-                    cpu_ns = cpu_ns + excluded.cpu_ns,
-                    energy_nj = CASE WHEN energy_nj IS NULL OR excluded.energy_nj IS NULL THEN NULL
-                                     ELSE energy_nj + excluded.energy_nj END,
-                    gpu_ns = COALESCE(gpu_ns, 0) + excluded.gpu_ns,
-                    gpu_nj = COALESCE(gpu_nj, 0) + excluded.gpu_nj,
-                    ane_nj = COALESCE(ane_nj, 0) + excluded.ane_nj,
-                    disk_r = COALESCE(disk_r, 0) + excluded.disk_r,
-                    disk_w = COALESCE(disk_w, 0) + excluded.disk_w,
-                    wakeups = COALESCE(wakeups, 0) + excluded.wakeups,
-                    footprint = MAX(COALESCE(footprint, 0), excluded.footprint)
-                """)
-            for row in apps {
-                let app = try appRowID(row.app)
-                func v(_ x: UInt64) -> SQLiteValue { .int(Int64(clamping: x)) }
-                try upsertApp.run([
-                    .int(row.minute), .int(app), v(row.cpuNanos), .optional(row.energyNanojoules.map { Int64(clamping: $0) }),
-                    v(row.gpuNanos), v(row.gpuEnergyNanojoules), v(row.aneEnergyNanojoules), v(row.diskReadBytes),
-                    v(row.diskWrittenBytes), v(row.wakeups), v(row.footprintBytes),
-                ])
-            }
+        } catch {
+            // 回滚后，事务里新插入的 metric / app 行已不存在；缓存一起退回，否则 rowid 被复用时两个名字会共用一行。
+            metricIDs = savedMetricIDs
+            appIDs = savedAppIDs
+            throw error
+        }
+    }
+
+    private func upsertMinutes(rows: [MinuteRow], apps: [AppMinuteRow]) throws(SQLiteError) {
+        let upsert = try db.statement(
+            """
+            INSERT INTO sample_minute(t, metric, avg, max, n, q) VALUES(?, ?, ?, ?, ?, ?)
+            ON CONFLICT(t, metric) DO UPDATE SET
+                avg = (avg * n + excluded.avg * excluded.n) / (n + excluded.n),
+                max = CASE WHEN max IS NULL OR excluded.max IS NULL THEN NULL ELSE MAX(max, excluded.max) END,
+                n = n + excluded.n,
+                q = MAX(q, excluded.q)
+            """)
+        for row in rows {
+            let metric = try metricRowID(row.metric)
+            try upsert.run([
+                .int(row.minute), .int(metric), .double(row.avg), .optional(row.max), .int(row.n),
+                .int(row.quality.rawValue),
+            ])
+        }
+        let upsertApp = try db.statement(
+            """
+            INSERT INTO app_minute(t, app, cpu_ns, energy_nj, gpu_ns, gpu_nj, ane_nj, disk_r, disk_w, wakeups, footprint)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(t, app) DO UPDATE SET
+                cpu_ns = cpu_ns + excluded.cpu_ns,
+                energy_nj = CASE WHEN energy_nj IS NULL OR excluded.energy_nj IS NULL THEN NULL
+                                 ELSE energy_nj + excluded.energy_nj END,
+                gpu_ns = COALESCE(gpu_ns, 0) + excluded.gpu_ns,
+                gpu_nj = COALESCE(gpu_nj, 0) + excluded.gpu_nj,
+                ane_nj = COALESCE(ane_nj, 0) + excluded.ane_nj,
+                disk_r = COALESCE(disk_r, 0) + excluded.disk_r,
+                disk_w = COALESCE(disk_w, 0) + excluded.disk_w,
+                wakeups = COALESCE(wakeups, 0) + excluded.wakeups,
+                footprint = MAX(COALESCE(footprint, 0), excluded.footprint)
+            """)
+        for row in apps {
+            let app = try appRowID(row.app)
+            func v(_ x: UInt64) -> SQLiteValue { .int(Int64(clamping: x)) }
+            try upsertApp.run([
+                .int(row.minute), .int(app), v(row.cpuNanos), .optional(row.energyNanojoules.map { Int64(clamping: $0) }),
+                v(row.gpuNanos), v(row.gpuEnergyNanojoules), v(row.aneEnergyNanojoules), v(row.diskReadBytes),
+                v(row.diskWrittenBytes), v(row.wakeups), v(row.footprintBytes),
+            ])
         }
     }
 

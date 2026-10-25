@@ -33,6 +33,12 @@ public enum CollectorStatus: String, Sendable, Hashable, Codable, CaseIterable {
     case degraded
     /// 不可用：读取失败或自检未通过，不输出数值。
     case unavailable
+
+    /// 按一轮读取的成败定状态：一项都没读到为不可用（计入引擎的连续越界复检，K19），部分失败为降级。
+    public static func reads(attempted: Int, failed: Int) -> CollectorStatus {
+        guard failed > 0 else { return .ok }
+        return failed >= attempted ? .unavailable : .degraded
+    }
 }
 
 /// 自检中的一项检查。

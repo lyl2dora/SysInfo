@@ -214,9 +214,14 @@ public struct MinuteAggregator: Sendable {
 
     /// 取走分钟号小于 `cutoff` 的全部数据；`cutoff` 为 nil 时全部取走（睡眠、退出、导出前）。
     public mutating func take(before cutoff: Int64?) -> (rows: [MinuteRow], apps: [AppMinuteRow]) {
+        defer { discard(before: cutoff) }
+        return pending(before: cutoff)
+    }
+
+    /// 分钟号小于 `cutoff` 的数据（不取走）。写库成功后再 `discard(before:)`，失败时数据留在内存里，下次提交重试。
+    public func pending(before cutoff: Int64?) -> (rows: [MinuteRow], apps: [AppMinuteRow]) {
         var rows: [MinuteRow] = []
         for (key, bucket) in buckets where cutoff.map({ key.minute < $0 }) ?? true {
-            buckets[key] = nil
             guard bucket.weight > 0 else { continue }
             rows.append(
                 MinuteRow(
@@ -228,11 +233,21 @@ public struct MinuteAggregator: Sendable {
 
         var appRows: [AppMinuteRow] = []
         for (minute, perMinute) in apps where cutoff.map({ minute < $0 }) ?? true {
-            apps[minute] = nil
             appRows.append(contentsOf: Self.selectRows(minute: minute, perMinute.map { $0.value.row(minute: minute, app: AppIdentity(key: $0.key, name: $0.value.name)) }))
         }
         appRows.sort { ($0.minute, $1.cpuNanos, $0.app.key) < ($1.minute, $0.cpuNanos, $1.app.key) }
         return (rows, appRows)
+    }
+
+    /// 丢掉分钟号小于 `cutoff` 的数据；`cutoff` 为 nil 时全部丢掉。
+    public mutating func discard(before cutoff: Int64?) {
+        guard let cutoff else {
+            buckets = [:]
+            apps = [:]
+            return
+        }
+        buckets = buckets.filter { $0.key.minute >= cutoff }
+        apps = apps.filter { $0.key >= cutoff }
     }
 
     /// 各列前 `appsPerMinute` 名的并集，其余并成一行「其余合计」（D68）。全部为 0 的行不写。

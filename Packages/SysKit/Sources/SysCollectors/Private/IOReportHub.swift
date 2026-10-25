@@ -231,12 +231,15 @@ public final class IOReportSubscription {
     }
 
     /// 取一次样本，并返回与上一次样本之间的增量；第一次调用（或 `resetBaseline()` 之后）只建立基线，返回空数组。
-    /// 读取失败时返回 nil，并保留原基线。
+    /// 读取失败时返回 nil，并保留原基线：下一次的增量覆盖失败前到那时的整段，调用方的时间戳同样不前移。
     public func sampleDelta() -> [IOReportChannelDelta]? {
         guard let current = csp_ior_subscription_sample(handle) else { return nil }
-        defer { previous = current }
-        guard let previous else { return [] }
+        guard let previous else {
+            previous = current
+            return []
+        }
         guard let delta = csp_ior_samples_delta(previous, current) else { return nil }
+        self.previous = current
         return Self.values(of: delta)
     }
 

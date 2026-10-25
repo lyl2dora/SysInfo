@@ -409,6 +409,7 @@ struct HealthRecord: Sendable {
 
     mutating func applySelfTest(_ result: SelfTestResult) {
         health.selfTest = result
+        if !result.isUsable { health.status = .unavailable }  // 没有需求、不再采样时也如实显示
         if health.sampleCount == 0 {
             health.dataPath = result.dataPath
         }

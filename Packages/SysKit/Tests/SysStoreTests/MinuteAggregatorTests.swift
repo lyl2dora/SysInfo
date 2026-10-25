@@ -116,6 +116,20 @@ let sensors = SensorCollector.collectorID
         #expect(rest.rows[0].n == 10)
     }
 
+    @Test func pendingDoesNotRemoveUntilDiscarded() {
+        var agg = MinuteAggregator()
+        agg.ingest(tick(base, [load], []))
+        agg.ingest(tick(base + 50, [load], [(.cpuUsageTotal, 0.3)]))
+        agg.ingest(tick(base + 70, [load], [(.cpuUsageTotal, 0.6)]))
+        // 写库失败时什么都不丢：再看一次还是同样的数据
+        #expect(agg.pending(before: nil).rows.map(\.minute) == [29_000_000, 29_000_001])
+        #expect(agg.pending(before: nil).rows.map(\.minute) == [29_000_000, 29_000_001])
+        agg.discard(before: 29_000_001)
+        #expect(agg.pending(before: nil).rows.map(\.minute) == [29_000_001])
+        agg.discard(before: nil)
+        #expect(agg.pending(before: nil).rows.isEmpty)
+    }
+
     @Test func qualityIsTheWorstInTheMinute() {
         var agg = MinuteAggregator()
         agg.add(.cpuUsageTotal, value: 0.1, quality: .measured, seconds: 1, end: Date(timeIntervalSince1970: base + 1), .interval)

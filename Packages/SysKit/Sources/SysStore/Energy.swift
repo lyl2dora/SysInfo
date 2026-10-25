@@ -67,9 +67,23 @@ public struct EnergyIntegrator: Sendable {
 
     /// 取出 `cutoff` 之前（不含）的分钟；cutoff 为 nil 时全部取出。
     public mutating func take(before cutoff: Int64?) -> [EnergyMinuteRow] {
-        let keys = buckets.keys.filter { cutoff == nil || $0 < cutoff! }.sorted()
-        defer { keys.forEach { buckets[$0] = nil } }
-        return keys.map { EnergyMinuteRow(minute: $0, joules: buckets[$0]!.joules, covered: buckets[$0]!.covered) }
+        defer { discard(before: cutoff) }
+        return pending(before: cutoff)
+    }
+
+    /// `cutoff` 之前（不含）的分钟（不取出）；写库成功后再 `discard(before:)`。
+    public func pending(before cutoff: Int64?) -> [EnergyMinuteRow] {
+        buckets.filter { entry in cutoff.map { entry.key < $0 } ?? true }.sorted { $0.key < $1.key }
+            .map { EnergyMinuteRow(minute: $0.key, joules: $0.value.joules, covered: $0.value.covered) }
+    }
+
+    /// 丢掉 `cutoff` 之前（不含）的分钟；cutoff 为 nil 时全部丢掉。
+    public mutating func discard(before cutoff: Int64?) {
+        guard let cutoff else {
+            buckets = [:]
+            return
+        }
+        buckets = buckets.filter { $0.key >= cutoff }
     }
 }
 
@@ -119,15 +133,18 @@ public enum EnergyGap {
 extension HistoryStore {
     /// 写入能耗分钟（UPSERT 累加：同一分钟的数据可能分两次提交）。
     public func writeEnergy(_ rows: [EnergyMinuteRow]) throws {
+        try write(rows: [], apps: [], energy: rows)
+    }
+
+    /// 能耗分钟的 UPSERT，由调用方开事务。
+    func upsertEnergy(_ rows: [EnergyMinuteRow]) throws(SQLiteError) {
         guard !rows.isEmpty else { return }
-        try db.transaction { () throws(SQLiteError) in
-            let upsert = try db.statement(
-                """
-                INSERT INTO energy_minute(t, joules, covered_s) VALUES(?, ?, ?)
-                ON CONFLICT(t) DO UPDATE SET joules = joules + excluded.joules, covered_s = covered_s + excluded.covered_s
-                """)
-            for row in rows { try upsert.run([.int(row.minute), .double(row.joules), .double(row.covered)]) }
-        }
+        let upsert = try db.statement(
+            """
+            INSERT INTO energy_minute(t, joules, covered_s) VALUES(?, ?, ?)
+            ON CONFLICT(t) DO UPDATE SET joules = joules + excluded.joules, covered_s = covered_s + excluded.covered_s
+            """)
+        for row in rows { try upsert.run([.int(row.minute), .double(row.joules), .double(row.covered)]) }
     }
 
     /// 写入补数分钟（UPSERT 累加）。

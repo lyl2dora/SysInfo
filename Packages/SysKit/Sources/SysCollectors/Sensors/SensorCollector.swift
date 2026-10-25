@@ -265,9 +265,9 @@ public final class SensorCollector: Collector {
         let (samples, readings) = SensorMath.evaluate(
             profile: profile.profile, values: values, clusters: clusters, at: time)
         state.withLock { $0.readings = readings }
-        let failed = values.count < infos.count
-        return CollectorOutput(
-            samples: samples, status: failed || warnings ? .degraded : .ok, dataPath: Self.dataPath)
+        var status = CollectorStatus.reads(attempted: infos.count, failed: infos.count - values.count)
+        if status == .ok, warnings { status = .degraded }
+        return CollectorOutput(samples: samples, status: status, dataPath: Self.dataPath)
     }
 
     public func resetBaseline() {}

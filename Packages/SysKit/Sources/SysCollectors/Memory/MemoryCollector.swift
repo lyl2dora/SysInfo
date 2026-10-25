@@ -190,6 +190,8 @@ public final class MemoryCollector: Collector {
         if var counts {
             if statisticsOK, let statistics {
                 counts.compressorPages = UInt64(statistics.raw.compressor_page_count)
+            } else {
+                counts.compressedBytesFallback = Self.sysctlUInt64("vm.compressor_bytes_used")
             }
             if let usable = counts.usableBytes, usable > 0 {
                 ratio = counts.queueSumBytes / Double(usable)
@@ -261,8 +263,9 @@ public final class MemoryCollector: Collector {
             }
             return (peak, s.staleCount)
         }
-        if statisticsOK, statistics == nil {
-            degraded = true
+        if statistics == nil {
+            // 自检判定不是 rev6（回退路径），或这一次读失败：被压缩改用 `vm.compressor_bytes_used` 估算。
+            if statisticsOK { degraded = true }
             counts.compressedBytesFallback = Self.sysctlUInt64("vm.compressor_bytes_used")
         }
 

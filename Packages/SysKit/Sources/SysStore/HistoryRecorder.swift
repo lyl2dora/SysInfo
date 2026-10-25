@@ -551,10 +551,16 @@ public actor HistoryRecorder {
         commit(includeCurrent: true)
     }
 
+    /// 写库持续失败时，内存里最多留这么多分钟的待写数据，更早的丢掉。
+    static let maxPendingMinutes: Int64 = 60
+
     private func commit(includeCurrent: Bool) {
         let now = Date()
         let current = MinuteAggregator.minute(of: now)
-        let taken = aggregator.take(before: includeCurrent ? nil : current)
+        let cutoff = includeCurrent ? nil : current
+        // 先看后取：写库成功后才出队，失败时数据留在内存里，下次提交重试。
+        let taken = aggregator.pending(before: cutoff)
+        let energyRows = energy.pending(before: cutoff)
         do {
             let start = min(taken.rows.first?.minute ?? current, taken.apps.first?.minute ?? current)
             if let epoch = epoch(start) {
@@ -562,8 +568,9 @@ public actor HistoryRecorder {
                     logger.info("新开一段 epoch：\(epoch.model, privacy: .public) \(epoch.chip, privacy: .public) \(epoch.osBuild, privacy: .public)")
                 }
             }
-            try store.write(rows: taken.rows, apps: taken.apps)
-            try store.writeEnergy(energy.take(before: includeCurrent ? nil : current))
+            try store.write(rows: taken.rows, apps: taken.apps, energy: energyRows)
+            aggregator.discard(before: cutoff)
+            energy.discard(before: cutoff)
             try store.rollUpHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try store.rollUpEnergyHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try saveAnchorAndPMGR()
@@ -585,6 +592,8 @@ public actor HistoryRecorder {
         } catch {
             lastError = "\(error)"
             logger.error("历史提交失败：\(String(describing: error), privacy: .public)")
+            aggregator.discard(before: current - Self.maxPendingMinutes)
+            energy.discard(before: current - Self.maxPendingMinutes)
         }
     }
 
