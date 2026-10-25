@@ -96,6 +96,16 @@ public struct EnergyIntegrator: Sendable {
 public struct EnergyAnchor: Codable, Hashable, Sendable {
     public var telemetry: PowerTelemetryReading
     public var bootTime: Date
+    /// 那次开机的会话 UUID（D105）；旧版本写下的锚点没有。
+    public var bootSessionUUID: String?
+
+    public init(telemetry: PowerTelemetryReading, boot: BootSession) {
+        self.telemetry = telemetry
+        self.bootTime = boot.time
+        self.bootSessionUUID = boot.uuid
+    }
+
+    public var boot: BootSession { BootSession(time: bootTime, uuid: bootSessionUUID) }
 }
 
 public enum EnergyGap {
@@ -104,9 +114,10 @@ public enum EnergyGap {
 
     /// 由锚点与当前读数算出要补的能量：返回缺口的起止与焦耳数；不需要补或无法补时为 nil。
     public static func fill(
-        anchor: EnergyAnchor?, now: PowerTelemetryReading, bootTime: Date
+        anchor: EnergyAnchor?, now: PowerTelemetryReading, boot: BootSession
     ) -> (start: Date, end: Date, joules: Double)? {
-        if let anchor, abs(anchor.bootTime.timeIntervalSince(bootTime)) < 2 {
+        let bootTime = boot.time
+        if let anchor, anchor.boot.isSameBoot(as: boot) {
             // 同一次开机：累加器差值。倒退（不应发生）时不补。
             let delta = now.accumulatedSystemPowerIn - anchor.telemetry.accumulatedSystemPowerIn
             let seconds = now.wallClock.timeIntervalSince(anchor.telemetry.wallClock)

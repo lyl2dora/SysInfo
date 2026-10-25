@@ -35,6 +35,16 @@ public enum SystemInfo: Sendable {
         return Date(timeIntervalSince1970: Double(boot.tv_sec) + Double(boot.tv_usec) / 1e6)
     }
 
+    /// 本次开机的会话 UUID（`kern.bootsessionuuid`，每次开机重新生成，不是设备标识）；读不到时为 nil。
+    public static var bootSessionUUID: String? {
+        sysctlString("kern.bootsessionuuid").flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// 本次开机（D105）。读不到开机时刻时为 nil。
+    public static var bootSession: BootSession? {
+        bootTime.map { BootSession(time: $0, uuid: bootSessionUUID) }
+    }
+
     static func sysctlInt32(_ name: String) -> Int32? {
         var value: Int32 = 0
         var size = MemoryLayout<Int32>.size
@@ -50,5 +60,24 @@ public enum SystemInfo: Sendable {
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
         return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+}
+
+/// 一次开机的标识（D105）：开机时刻加会话 UUID。
+public struct BootSession: Codable, Hashable, Sendable {
+    /// `kern.boottime`。校时会让它跟着变。
+    public var time: Date
+    /// `kern.bootsessionuuid`；旧版本存下的记录、或读不到时为 nil。
+    public var uuid: String?
+
+    public init(time: Date, uuid: String?) {
+        self.time = time
+        self.uuid = uuid
+    }
+
+    /// 是否同一次开机：两边都有会话 UUID 时只比 UUID；任一边没有时退回开机时刻相差 < 2 s。
+    public func isSameBoot(as other: BootSession) -> Bool {
+        if let uuid, let otherUUID = other.uuid { return uuid == otherUUID }
+        return abs(time.timeIntervalSince(other.time)) < 2
     }
 }

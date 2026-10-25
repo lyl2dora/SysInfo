@@ -641,10 +641,10 @@ public actor HistoryRecorder {
 
     /// app 没运行的时段用累加器补上（D46）。只在本次运行拿到第一个遥测读数后做一次。
     private func fillGapIfNeeded() {
-        guard !gapHandled, let reading = power.ledger?.latestTelemetry, let boot = SystemInfo.bootTime else { return }
+        guard !gapHandled, let reading = power.ledger?.latestTelemetry, let boot = SystemInfo.bootSession else { return }
         gapHandled = true
         let anchor = try? store.decoded(EnergyAnchor.self, forKey: Self.anchorKey)
-        guard let gap = EnergyGap.fill(anchor: anchor, now: reading, bootTime: boot) else { return }
+        guard let gap = EnergyGap.fill(anchor: anchor, now: reading, boot: boot) else { return }
         do {
             try store.writeEnergyFill(EnergyGap.perMinute(start: gap.start, end: gap.end, joules: gap.joules))
             logger.info(
@@ -656,8 +656,8 @@ public actor HistoryRecorder {
 
     /// 提交时更新能耗锚点与 PMGR 批次状态。
     private func saveAnchorAndPMGR() throws {
-        if configuration.recordEnergy, gapHandled, let reading = power.ledger?.latestTelemetry, let boot = SystemInfo.bootTime {
-            try store.setEncoded(EnergyAnchor(telemetry: reading, bootTime: boot), forKey: Self.anchorKey)
+        if configuration.recordEnergy, gapHandled, let reading = power.ledger?.latestTelemetry, let boot = SystemInfo.bootSession {
+            try store.setEncoded(EnergyAnchor(telemetry: reading, boot: boot), forKey: Self.anchorKey)
         }
         if let state = power.pmgr?.persistentState, state != savedPMGR {
             try store.setEncoded(state, forKey: Self.pmgrKey)
