@@ -159,6 +159,9 @@ public final class GPUPowerCollector: Collector {
     public func sample(at time: SampleTime) -> CollectorOutput {
         struct Output {
             var watts: Double?
+            /// 本帧没有功率时的原因；只建立基线时两者都是 nil。
+            var wattsProblem: UnavailableReason?
+            var readFailed = false
             var summary: GPUResidencySummary?
             var table: GPUFrequencyTable?
             var hasResidency: Bool
@@ -166,15 +169,23 @@ public final class GPUPowerCollector: Collector {
         }
         let output = state.withLock { s -> Output in
             guard let subscription = s.subscription else { return Output(hasResidency: false, usable: false) }
-            guard let deltas = subscription.sampleDelta() else { return Output(hasResidency: s.hasResidency, usable: true) }
+            guard let deltas = subscription.sampleDelta() else {
+                return Output(readFailed: true, hasResidency: s.hasResidency, usable: true)  // 基线保留，lastTime 也不前移
+            }
             defer { s.lastTime = time }
             guard let last = s.lastTime, time.monotonicNanos > last.monotonicNanos, !deltas.isEmpty else {
                 return Output(hasResidency: s.hasResidency, usable: true)  // 只建立了基线
             }
             var out = Output(table: s.table, hasResidency: s.hasResidency, usable: true)
-            if let energy = deltas.first(where: { $0.key.name == "GPU Energy" })?.integerValue, energy >= 0 {
-                let seconds = Double(time.monotonicNanos - last.monotonicNanos) / 1e9
-                out.watts = Double(energy) * s.joulesPerUnit / seconds
+            if let energy = deltas.first(where: { $0.key.name == "GPU Energy" })?.integerValue {
+                if energy >= 0 {
+                    let seconds = Double(time.monotonicNanos - last.monotonicNanos) / 1e9
+                    out.watts = Double(energy) * s.joulesPerUnit / seconds
+                } else {
+                    out.wattsProblem = .counterReset()  // 负差值按复位处理，不钳为 0
+                }
+            } else {
+                out.wattsProblem = .readFailed("GPU Energy")
             }
             if s.hasResidency, let residency = deltas.first(where: Self.isGPUPH) {
                 let summary = GPUResidencyMath.summarize(
@@ -187,12 +198,22 @@ public final class GPUPowerCollector: Collector {
         guard output.usable else {
             return CollectorOutput(samples: [], status: .unavailable, dataPath: Self.dataPath)
         }
+        if output.readFailed {
+            // 显式给出不可用，并报 unavailable：连续多次时引擎会重新自检（K19）。
+            let reason = UnavailableReason.readFailed("IOReportCreateSamples")
+            var ids: [MetricID] = [.powerGPU]
+            if output.hasResidency { ids += [.gpuActive, .gpuFrequency] }
+            return CollectorOutput(
+                samples: ids.map { .unavailable($0, reason: reason, at: time) }, status: .unavailable, dataPath: Self.dataPath)
+        }
         var samples: [Sample] = []
         if let watts = output.watts {
             samples.append(
                 ledger.isDisabled(.gpu)
                     ? Sample.unavailable(.powerGPU, reason: .selfTestFailed("cross-check"), at: time)
                     : Sample(id: .powerGPU, value: watts, time: time))
+        } else if let problem = output.wattsProblem {
+            samples.append(.unavailable(.powerGPU, reason: problem, at: time))
         }
         if output.hasResidency, let summary = output.summary {
             if let active = summary.active {
@@ -202,12 +223,13 @@ public final class GPUPowerCollector: Collector {
                 samples.append(.unavailable(.gpuActive, reason: .noElapsedTicks(), at: time))
                 samples.append(.unavailable(.gpuFrequency, reason: .noElapsedTicks(), at: time))
             }
-        } else if !output.hasResidency, output.watts != nil {
+        } else if !output.hasResidency, output.watts != nil || output.wattsProblem != nil {
             let reason = UnavailableReason.selfTestFailed("no GPUPH")
             samples.append(.unavailable(.gpuActive, reason: reason, at: time))
             samples.append(.unavailable(.gpuFrequency, reason: reason, at: time))
         }
-        return CollectorOutput(samples: samples, status: .ok, dataPath: Self.dataPath)
+        return CollectorOutput(
+            samples: samples, status: output.wattsProblem == nil ? .ok : .degraded, dataPath: Self.dataPath)
     }
 
     static func frequencySample(_ summary: GPUResidencySummary, table: GPUFrequencyTable?, at time: SampleTime) -> Sample {

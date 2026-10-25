@@ -109,7 +109,8 @@ public final class GPUTemperatureCollector: Collector {
             sample = .unavailable(.gpuTemperature, reason: .sensorPowerGated("gpu off"), at: time)
         }
         return CollectorOutput(
-            samples: [sample], status: readings.count < keys.count ? .degraded : .ok, dataPath: Self.dataPath)
+            samples: [sample], status: .reads(attempted: keys.count, failed: keys.count - readings.count),
+            dataPath: Self.dataPath)
     }
 
     public func resetBaseline() {}

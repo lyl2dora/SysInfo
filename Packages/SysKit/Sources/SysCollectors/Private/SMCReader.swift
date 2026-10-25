@@ -181,7 +181,10 @@ public final class SMCReader: Sendable {
             try Self.ensureOpen(&s)
             var raw = csp_smc_key_info()
             let kr = csp_smc_get_key_info(s.connection, key.code, &raw)
-            guard kr == 0 else { throw .callFailed(kr) }
+            guard kr == 0 else {
+                Self.dropConnection(&s)  // IPC 层失败（服务重启、连接失效）：下次调用重新打开
+                throw .callFailed(kr)
+            }
             guard raw.result == 0 else { throw .smcResult(raw.result) }
             let info = SMCKeyInfo(
                 key: key, dataType: SMCKey.fourCC(raw.data_type), dataSize: raw.data_size,
@@ -208,7 +211,10 @@ public final class SMCReader: Sendable {
             let kr = bytes.withUnsafeMutableBufferPointer { buffer in
                 csp_smc_read_key(s.connection, info.key.code, info.dataSize, buffer.baseAddress!, &result)
             }
-            guard kr == 0 else { throw .callFailed(kr) }
+            guard kr == 0 else {
+                Self.dropConnection(&s)  // IPC 层失败（服务重启、连接失效）：下次调用重新打开
+                throw .callFailed(kr)
+            }
             guard result == 0 else { throw .smcResult(result) }
             return Array(bytes.prefix(Int(info.dataSize)))
         }
@@ -233,6 +239,12 @@ public final class SMCReader: Sendable {
     /// 私有层的命令白名单是否放行 `command`（单测核对写命令被拒绝）。
     static func isCommandAllowed(_ command: UInt8) -> Bool {
         csp_smc_command_allowed(command) != 0
+    }
+
+    private static func dropConnection(_ s: inout State) {
+        guard s.connection != 0 else { return }
+        csp_smc_close(s.connection)
+        s.connection = 0
     }
 
     private static func ensureOpen(_ s: inout State) throws(SMCError) {

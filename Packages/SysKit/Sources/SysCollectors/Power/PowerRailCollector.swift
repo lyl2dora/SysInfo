@@ -153,7 +153,8 @@ public final class PowerRailCollector: Collector {
         if let wall {
             samples.append(Sample(id: .powerWall, value: wall, quality: .estimated, time: time))
         }
-        return CollectorOutput(samples: samples, status: watts == nil ? .degraded : .ok, dataPath: Self.dataPath)
+        // 系统总功率是本采集器唯一的直读量：读不到或越界即不可用，连续多次时引擎会重新自检（K19）。
+        return CollectorOutput(samples: samples, status: watts == nil ? .unavailable : .ok, dataPath: Self.dataPath)
     }
 
     public func resetBaseline() {

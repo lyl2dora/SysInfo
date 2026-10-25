@@ -176,16 +176,19 @@ public final class PowerSensorCollector: Collector {
         }
         var samples: [Sample] = []
         let quality: DataQuality = s.fromProfile ? .measured : .inferred
-        var failed = false
+        // 本轮直读的 SMC 键数与失败数：全部失败时为不可用，计入引擎的连续越界复检（K19）。
+        var attempted = 0
+        var failed = 0
 
         func power(_ id: MetricID, _ key: String?) -> Double? {
             guard let key else {
                 samples.append(.unavailable(id, reason: .readFailed("no key"), at: time))
                 return nil
             }
+            attempted += 1
             guard let value = smc.value(key), value >= 0, value < 1000 else {
                 samples.append(.unavailable(id, reason: .readFailed(key), at: time))
-                failed = true
+                failed += 1
                 return nil
             }
             return value
@@ -207,6 +210,7 @@ public final class PowerSensorCollector: Collector {
         var learnedKey: String?
         var learnerSamples = 0
         if let key = s.hotspotKey {
+            attempted += 1
             if let value = smc.value(key) {
                 if Self.hotspotRange.contains(value), !isPlaceholder(value, in: s.placeholders) {
                     samples.append(Sample(id: .thermalSoCHotspot, value: value, time: time))
@@ -215,6 +219,7 @@ public final class PowerSensorCollector: Collector {
                 }
             } else {
                 samples.append(.unavailable(.thermalSoCHotspot, reason: .readFailed(key), at: time))
+                failed += 1
             }
         } else if !s.temperatureKeys.isEmpty, !s.learner.gaveUp {
             var readings: [String: Double] = [:]
@@ -247,10 +252,12 @@ public final class PowerSensorCollector: Collector {
             ]
             for (id, key) in pairs {
                 guard let key else { continue }
+                attempted += 1
                 if let v = smc.value(key), v >= 0, v < 100_000 {
                     samples.append(Sample(id: id, value: v, time: time))
                 } else {
                     samples.append(.unavailable(id, reason: .readFailed(key), at: time))
+                    failed += 1
                 }
             }
         }
@@ -270,7 +277,7 @@ public final class PowerSensorCollector: Collector {
             }
         }
         state.withLock { $0.lastTime = time }
-        return CollectorOutput(samples: samples, status: failed ? .degraded : .ok, dataPath: Self.dataPath)
+        return CollectorOutput(samples: samples, status: .reads(attempted: attempted, failed: failed), dataPath: Self.dataPath)
     }
 
     public func resetBaseline() {
