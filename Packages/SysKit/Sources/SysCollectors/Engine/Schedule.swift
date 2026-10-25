@@ -104,8 +104,23 @@ struct TickGrid: Hashable, Sendable {
     /// 通常就是「现在」所在的 tick；但如果上一次执行的 tick 比现在还晚一点（墙钟与单调时钟之间的微小偏差、
     /// 定时器按单调时钟提前了几毫秒），从上一次执行的 tick 之后找，避免同一个 tick 跑两次。
     /// 墙钟被往回大幅调整（超过 2 个 tick）时以现在为准，否则会长时间不唤醒。
-    static func searchStart(current: Int64, lastRun: Int64?) -> Int64 {
-        guard let lastRun, lastRun > current, lastRun - current <= 2 else { return current }
-        return lastRun
+    ///
+    /// `pending` 是已排定、还没执行的 tick。它已经到时间但定时器还没触发（事件在队列里、或在 leeway 之内）时，
+    /// 改排要从它之前找，否则会被下一个 tick 覆盖、整个 tick 被跳过（审计 A32）。过期太久的（见 `isStale`）不保留。
+    static func searchStart(current: Int64, lastRun: Int64?, pending: Int64? = nil) -> Int64 {
+        var start = current
+        if let lastRun, lastRun > current, lastRun - current <= 2 { start = lastRun }
+        if let pending, pending <= current, !isStale(pending, current: current), pending > (lastRun ?? .min) {
+            start = min(start, pending - 1)
+        }
+        return start
+    }
+
+    /// 要执行的 tick 比现在所在的 tick 早超过 2 个，视为过期，不再执行。
+    ///
+    /// 定时器按不含睡眠的单调时钟计时：睡眠前排定的 tick 在唤醒后才触发，序号仍是睡眠前的（审计 A33）。
+    /// 墙钟往前大幅调整时也一样。这时按过期处理、从现在重新排，样本的 tick 序号才和墙钟一致。
+    static func isStale(_ tick: Int64, current: Int64) -> Bool {
+        current - tick > 2
     }
 }

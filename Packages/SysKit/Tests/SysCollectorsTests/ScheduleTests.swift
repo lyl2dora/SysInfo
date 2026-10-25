@@ -170,6 +170,25 @@ import Testing
         // 墙钟被往回大幅调整：以现在为准，不等上一次执行的 tick
         #expect(TickGrid.searchStart(current: 10, lastRun: 3600) == 10)
     }
+
+    @Test func searchStartKeepsADueTickThatHasNotFiredYet() {
+        // 排定的 100 已到时间、定时器还没触发：改排仍从 100 之前找（A32）。
+        #expect(TickGrid.searchStart(current: 100, lastRun: 99, pending: 100) == 99)
+        #expect(TickGrid.searchStart(current: 101, lastRun: 99, pending: 100) == 99)
+        // 还没到时间的排定不影响起点。
+        #expect(TickGrid.searchStart(current: 100, lastRun: 99, pending: 102) == 100)
+        // 已经执行过的不再保留。
+        #expect(TickGrid.searchStart(current: 100, lastRun: 100, pending: 100) == 100)
+        // 过期的（睡眠前排定的）不保留。
+        #expect(TickGrid.searchStart(current: 3700, lastRun: 99, pending: 100) == 3700)
+    }
+
+    @Test func ticksMoreThanTwoBehindAreStale() {
+        #expect(!TickGrid.isStale(100, current: 100))
+        #expect(!TickGrid.isStale(100, current: 102))
+        #expect(TickGrid.isStale(100, current: 103))
+        #expect(!TickGrid.isStale(100, current: 50))
+    }
 }
 
 @Suite struct HealthRecordTests {

@@ -254,7 +254,7 @@ public actor SamplingEngine {
 
     private func rearm() {
         let nowWall = Self.wallClockNanos()
-        let start = TickGrid.searchStart(current: grid.tick(atOrBefore: nowWall), lastRun: lastRunTick)
+        let start = TickGrid.searchStart(current: grid.tick(atOrBefore: nowWall), lastRun: lastRunTick, pending: scheduledTick)
         guard let next = Schedule.nextTick(after: start, intervals: intervals, pendingBaseline: pendingBaseline)
         else {
             if timer != nil {
@@ -296,6 +296,11 @@ public actor SamplingEngine {
         else { return }
         scheduledTick = nil
         scheduledDeadline = nil
+        if TickGrid.isStale(tick, current: grid.tick(atOrBefore: Self.wallClockNanos())) {
+            logger.info("tick \(tick) 已过期（睡眠或墙钟调整），从现在重新排")
+            rearm()
+            return
+        }
         let result = runTick(tick)
         rearm()
         if var result {

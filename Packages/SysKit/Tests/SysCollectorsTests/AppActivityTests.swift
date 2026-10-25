@@ -118,28 +118,38 @@ private func time(_ seconds: Int64) -> SampleTime {
             throttleReasons: [], health: [])
     }
 
-    private func result(_ tick: Int64, _ collector: CollectorID, _ samples: [(MetricID, Double)]) -> TickResult {
-        TickResult(
-            tick: tick, time: time(tick), collectors: [collector],
-            samples: samples.map { Sample(id: $0.0, value: $0.1, time: time(tick)) }, cost: SampleCost(wallNanos: 0, cpuNanos: 0),
+    /// `slept`：在此之前系统睡了这么多秒（tick 前进，不含睡眠的单调时钟不走）。
+    private func result(_ tick: Int64, _ collector: CollectorID, _ samples: [(MetricID, Double)], slept: Int64 = 0) -> TickResult {
+        let t = SampleTime(
+            monotonicNanos: UInt64(tick - slept) * 1_000_000_000, wallClock: Date(timeIntervalSince1970: Double(tick)))
+        return TickResult(
+            tick: tick, time: t, collectors: [collector],
+            samples: samples.map { Sample(id: $0.0, value: $0.1, time: t) }, cost: SampleCost(wallNanos: 0, cpuNanos: 0),
             status: status())
     }
 
     /// 喂一段稳定负载：P 档 75% 忙、E 档 25% 忙，P 簇 3.0 GHz、E 簇 2.0 GHz；coalition 端给出 `kernelP0Hz`。
-    private func run(kernelP0Hz: Double, frequencyEvery: Int64 = 5, until last: Int64 = 130) -> [PassiveFinding] {
+    /// `sleep`：在这个 tick 之后睡眠若干秒（之后的 tick 加上睡眠时长，单调时钟不加）。
+    private func run(
+        kernelP0Hz: Double, frequencyEvery: Int64 = 5, until last: Int64 = 130, sleep: (after: Int64, seconds: Int64)? = nil
+    ) -> [PassiveFinding] {
         let v = PassiveValidator(topology: topology)
         let p = ClusterKey(die: 0, cluster: 1)
         let e = ClusterKey(die: 0, cluster: 0)
         var findings: [PassiveFinding] = []
-        for tick in Int64(100)...last {
+        for step in Int64(100)...last {
+            let slept = sleep.map { step > $0.after ? $0.seconds : 0 } ?? 0
+            let tick = step + slept
             findings += v.ingest(
                 result(tick, CPULoadCollector.collectorID, [
                     (.cpuUsagePerfLevel(0), 0.75), (.cpuUsagePerfLevel(1), 0.25), (.cpuUsageCluster(p), 0.75),
                     (.cpuUsageCluster(e), 0.25),
-                ]))
+                ], slept: slept))
             if tick % frequencyEvery == 0 {
                 findings += v.ingest(
-                    result(tick, CPUFrequencyCollector.collectorID, [(.cpuFrequencyCluster(p), 3e9), (.cpuFrequencyCluster(e), 2e9)]))
+                    result(
+                        tick, CPUFrequencyCollector.collectorID, [(.cpuFrequencyCluster(p), 3e9), (.cpuFrequencyCluster(e), 2e9)],
+                        slept: slept))
             }
             if tick % 2 == 0 {
                 // 全体进程 4 核：其中 3 核在 perflevel0 上
@@ -147,10 +157,19 @@ private func time(_ seconds: Int64) -> SampleTime {
                     result(tick, AppSampler.collectorID, [
                         (.appCoalitionCPU, 4.0), (.appCoalitionPerfLevel0Share, 0.75),
                         (.appCoalitionPerfLevel0Frequency, kernelP0Hz), (.appCoalitionOtherLevelFrequency, 2e9),
-                    ]))
+                    ], slept: slept))
             }
         }
         return findings
+    }
+
+    @Test func sleepStartsANewSpanInsteadOfCountingTheSleepAsAWindow() {
+        // tick 115 之后睡 3600 s：睡眠前只有 100–110 一个完整区间；醒来后从 3716 起重新累加，
+        // 3720 是新起点，3730、3740 各出一个 10 s 区间。没有任何区间把睡眠算进去。
+        let findings = run(kernelP0Hz: 3e9, until: 140, sleep: (after: 115, seconds: 3600))
+        let topology = findings.filter { $0.check == "cpu.topology.passive" }
+        #expect(topology.count == 3, "\(topology)")
+        #expect(topology.allSatisfy { $0.spanSeconds == 10 && $0.passed }, "\(topology)")
     }
 
     @Test func agreesOnAlignedSpans() {
