@@ -42,6 +42,17 @@ private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReadi
         #expect(integrator.take(before: 101).map(\.minute) == [100])
         #expect(integrator.take(before: nil).map(\.minute) == [101])
     }
+
+    @Test func pendingKeepsRowsUntilDiscarded() {
+        var integrator = EnergyIntegrator()
+        integrator.ingest(watts: 5, at: t(0, wall: 6000))
+        integrator.ingest(watts: 5, at: t(1, wall: 6001))  // 分钟 100
+        integrator.ingest(watts: 5, at: t(2, wall: 6062))  // 分钟 101
+        #expect(integrator.pending(before: nil).map(\.minute) == [100, 101])
+        #expect(integrator.pending(before: nil).map(\.minute) == [100, 101])
+        integrator.discard(before: 101)
+        #expect(integrator.pending(before: nil).map(\.minute) == [101])
+    }
 }
 
 @Suite struct EnergyGapTests {

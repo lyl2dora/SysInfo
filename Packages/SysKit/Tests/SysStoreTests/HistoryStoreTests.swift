@@ -213,6 +213,24 @@ import SysModel
         #expect(!lines[1].contains("\"max\""))
     }
 
+    @Test func failedWriteRollsBackEverythingIncludingIDCache() throws {
+        let store = try HistoryStore.inMemory()
+        try store.db.execute("DROP TABLE energy_minute")  // 让同一事务后半段的能耗写入失败
+        #expect(throws: (any Error).self) {
+            try store.write(
+                rows: [row(10, .cpuUsageTotal, avg: 0.1, max: nil)], apps: [],
+                energy: [EnergyMinuteRow(minute: 10, joules: 1, covered: 1)])
+        }
+        #expect(try store.stats().minuteRows == 0)  // 分钟数据随事务一起回滚
+        // 回滚后 rowid 会被下一个新指标复用；缓存若没退回，两个指标会共用一行。
+        try store.write(rows: [row(20, .cpuUsageUser, avg: 0.7, max: nil)], apps: [])
+        try store.write(rows: [row(30, .cpuUsageTotal, avg: 0.3, max: nil)], apps: [])
+        let total = try store.series(.cpuUsageTotal, from: 0, to: 100, granularity: .minute)
+        let user = try store.series(.cpuUsageUser, from: 0, to: 100, granularity: .minute)
+        #expect(total.map(\.avg) == [0.3])
+        #expect(user.map(\.avg) == [0.7])
+    }
+
     @Test func checkpointWorksAfterStatsOnDisk() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sysstore-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
