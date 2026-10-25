@@ -85,6 +85,11 @@ public struct EnergyIntegrator: Sendable {
         }
         buckets = buckets.filter { $0.key >= cutoff }
     }
+
+    /// 丢掉分钟号大于 `minute` 的数据（墙钟跳到未来时记下的分钟，D103）。
+    public mutating func discard(after minute: Int64) {
+        buckets = buckets.filter { $0.key <= minute }
+    }
 }
 
 /// 能耗锚点：上一次提交时的累加器读数（kv 表的 `energy.anchor`）。
@@ -158,6 +163,7 @@ extension HistoryStore {
                 """)
             for row in rows { try upsert.run([.int(row.minute), .double(row.joules), .double(row.covered)]) }
         }
+        markDirty(sample: nil, energy: rows.lazy.map(\.minute).min())
     }
 
     static let energyTables: [(table: String, source: Int64)] = [("energy_minute", 0), ("energy_fill_minute", 1)]
@@ -171,7 +177,11 @@ extension HistoryStore {
                 try db.statement("SELECT MAX(t) FROM energy_hour WHERE source = ?").query([.int(source)]) { $0.optionalInt(0) }
                 .first ?? nil
             let firstMinute = try db.statement("SELECT MIN(t) FROM \(table)").query { $0.optionalInt(0) }.first ?? nil
-            guard let start = lastHour ?? firstMinute.map({ Self.floorDiv($0, 60) }), start <= throughHour else { continue }
+            guard
+                let start = Self.rollUpStart(
+                    last: lastHour ?? firstMinute.map({ Self.floorDiv($0, 60) }), dirty: dirtyEnergyHour, through: throughHour),
+                start <= throughHour
+            else { continue }
             try db.statement(
                 """
                 INSERT OR REPLACE INTO energy_hour(t, source, joules, covered_s)
@@ -179,6 +189,7 @@ extension HistoryStore {
                 """
             ).run([.int(start * 60), .int((throughHour + 1) * 60)])
         }
+        if let dirty = dirtyEnergyHour, dirty <= throughHour { dirtyEnergyHour = nil }
     }
 
     /// 一段时间内的能耗（按分钟边界）：分钟级保留期内取分钟表，更早的部分取小时汇总（按小时边界）。

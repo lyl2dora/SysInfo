@@ -274,4 +274,66 @@ import SysModel
         _ = try store.stats()  // 读页数等 PRAGMA
         try store.checkpoint()  // 不能因为上面留着的读语句报 SQLITE_LOCKED
     }
+
+    @Test func stepErrorResetsTheStatement() throws {
+        // 第二行在 step 时出错（整数溢出）：语句要复位，不能留着读事务（A36）。
+        let store = try HistoryStore.inMemory()
+        try store.write(rows: [row(1, avg: 0.5, max: nil), row(2, avg: 0.5, max: nil)], apps: [])
+        let sql = "SELECT CASE WHEN t = 2 THEN abs(-9223372036854775807 - 1) ELSE t END FROM sample_minute ORDER BY t"
+        #expect(throws: SQLiteError.self) { try store.db.statement(sql).query { $0.int(0) } }
+        #expect(!store.db.hasActiveStatement)
+    }
+
+    @Test func backdatedMinutesRecomputeTheirHour() throws {
+        // 墙钟回拨：第 10 小时已汇总后，又写进第 9、10 小时的分钟（D103）。
+        let store = try HistoryStore.inMemory()
+        try store.write(rows: [row(540, avg: 0.1, max: nil), row(600, avg: 0.1, max: nil)], apps: [])
+        try store.rollUpHours(through: 10)
+        try store.write(rows: [row(541, avg: 0.5, max: nil), row(601, avg: 0.5, max: nil)], apps: [])
+        try store.rollUpHours(through: 10)
+        let hours = try store.series(.cpuUsageTotal, from: 540, to: 660, granularity: .hour)
+        #expect(hours.map(\.n) == [120, 120])
+        #expect(hours.allSatisfy { abs($0.avg - 0.3) < 1e-12 })
+    }
+
+    @Test func rollUpStartSkipsHoursOlderThanMinuteRetention() {
+        let retentionHours = Int64(HistoryStore.minuteRetention / 3600)
+        #expect(HistoryStore.rollUpStart(last: 100, dirty: nil, through: 100) == 100)
+        #expect(HistoryStore.rollUpStart(last: 1000, dirty: 990, through: 1000) == 990)
+        #expect(HistoryStore.rollUpStart(last: 1000, dirty: 1001, through: 1000) == 1000)
+        // 太早的小时分钟已被清理：最早只到保留期内第一个完整小时
+        #expect(HistoryStore.rollUpStart(last: 1000, dirty: 0, through: 1000) == 1000 + 2 - retentionHours)
+        #expect(HistoryStore.rollUpStart(last: nil, dirty: 5, through: 10) == 5)
+    }
+
+    @Test func removeFutureDropsRowsAndClosesSpans() throws {
+        // 墙钟曾跳到第 100 小时，现在回到第 10 小时（分钟 600–659）（D103）。
+        let store = try HistoryStore.inMemory()
+        let app = AppIdentity(key: "com.example.a", name: "A")
+        try store.write(
+            rows: [row(600, avg: 0.1, max: nil), row(6000, avg: 0.9, max: nil)],
+            apps: [AppMinuteRow(minute: 6000, app: app, cpuNanos: 5, energyNanojoules: nil)],
+            energy: [EnergyMinuteRow(minute: 6000, joules: 1, covered: 60)])
+        try store.rollUpHours(through: 100)
+        try store.rollUpEnergyHours(through: 100)
+        let now = Date(timeIntervalSince1970: 610 * 60)
+        let past = try store.openAssertion(app: app, type: "PreventUserIdleSystemSleep", name: "a", holder: "", start: Date(timeIntervalSince1970: 590 * 60))
+        try store.closeAssertion(id: past, end: Date(timeIntervalSince1970: 6000 * 60))
+        _ = try store.openAssertion(app: app, type: "PreventUserIdleSystemSleep", name: "b", holder: "", start: Date(timeIntervalSince1970: 6000 * 60))
+        let spans = try store.removeFuture(afterMinute: 615, afterHour: 10, now: now)
+        #expect(spans == 2)
+        let stats = try store.stats()
+        #expect(stats.minuteRows == 1)
+        #expect(stats.appRows == 0)
+        #expect(try store.series(.cpuUsageTotal, from: 0, to: 10_000, granularity: .hour).map(\.minute) == [600])
+        #expect(try store.energyHours(from: 0, to: 1000).isEmpty)
+        let left = try store.assertionSpans(from: .distantPast, to: .distantFuture)
+        #expect(left.count == 1)
+        #expect(left.first?.end == now)
+        #expect(left.first?.endEstimated == true)
+        // 汇总不再卡在未来的小时
+        try store.write(rows: [row(660, avg: 0.2, max: nil)], apps: [])
+        try store.rollUpHours(through: 11)
+        #expect(try store.series(.cpuUsageTotal, from: 0, to: 10_000, granularity: .hour).map(\.minute) == [600, 660])
+    }
 }

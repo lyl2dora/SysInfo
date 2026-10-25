@@ -226,10 +226,28 @@ public actor HistoryRecorder {
         try? store.checkpoint()
     }
 
+    /// 记录的分钟指标模块。
+    static func modules(_ configuration: Configuration) -> Set<HistoryModule> {
+        var modules: Set<HistoryModule> = []
+        if configuration.recordSystem { modules.insert(.cpu) }
+        if configuration.recordPower { modules.insert(.power) }
+        if configuration.recordMemory { modules.insert(.memory) }
+        if configuration.recordStorage { modules.insert(.storage) }
+        if configuration.recordGPU { modules.insert(.gpu) }
+        if configuration.recordNetwork { modules.insert(.network) }
+        if configuration.recordDevices { modules.insert(.devices) }
+        return modules
+    }
+
     public func setConfiguration(_ configuration: Configuration) async {
         guard configuration != self.configuration else { return }
         let wasRecordingApps = self.configuration.recordApps
         let wasRecordingDevices = self.configuration.recordDevices
+        if !Self.modules(configuration).isSubset(of: Self.modules(self.configuration)) {
+            // 新开的模块：关闭期间没有需求、可能也没有 tick，各采集器上一次运行的时刻不可信，
+            // 下一个样本丢弃，不把整段关闭期摊进去（审计 A38）。
+            aggregator.noteWake()
+        }
         self.configuration = configuration
         if !configuration.recordApps { aggregator.clearApps() }
         if pump != nil {
@@ -354,15 +372,8 @@ public actor HistoryRecorder {
             return
         }
         guard case .tick(let result) = event else { return }
-        var modules: Set<HistoryModule> = []
-        if configuration.recordSystem { modules.insert(.cpu) }
-        if configuration.recordPower { modules.insert(.power) }
-        if configuration.recordMemory { modules.insert(.memory) }
-        if configuration.recordStorage { modules.insert(.storage) }
-        if configuration.recordGPU { modules.insert(.gpu) }
-        if configuration.recordNetwork { modules.insert(.network) }
-        if configuration.recordDevices { modules.insert(.devices) }
-        if !modules.isEmpty { aggregator.ingest(result, modules: modules) }
+        // 模块全关时也要喂：更新各采集器的运行时刻（审计 A38）。
+        aggregator.ingest(result, modules: Self.modules(configuration))
         if configuration.recordEnergy, let sample = result.samples.first(where: { $0.id == .powerSystem }), let watts = sample.value {
             energy.ingest(watts: watts, at: sample.time)
             fillGapIfNeeded()
@@ -571,10 +582,16 @@ public actor HistoryRecorder {
     /// 写库持续失败时，内存里最多留这么多分钟的待写数据，更早的丢掉。
     static let maxPendingMinutes: Int64 = 60
 
+    /// 晚于「现在」这么多分钟的历史视为墙钟跳到未来时记下的，提交时删掉（D103）。
+    static let futureToleranceMinutes: Int64 = 5
+
     private func commit(includeCurrent: Bool) {
         let now = Date()
         let current = MinuteAggregator.minute(of: now)
         let cutoff = includeCurrent ? nil : current
+        let futureLimit = current + Self.futureToleranceMinutes
+        aggregator.discard(after: futureLimit)
+        energy.discard(after: futureLimit)
         // 先看后取：写库成功后才出队，失败时数据留在内存里，下次提交重试。
         let taken = aggregator.pending(before: cutoff)
         let energyRows = energy.pending(before: cutoff)
@@ -588,6 +605,11 @@ public actor HistoryRecorder {
             try store.write(rows: taken.rows, apps: taken.apps, energy: energyRows)
             aggregator.discard(before: cutoff)
             energy.discard(before: cutoff)
+            let currentHour = HistoryStore.floorDiv(current, 60)
+            if try store.removeFuture(afterMinute: futureLimit, afterHour: currentHour, now: now) > 0 {
+                logger.notice("删掉了开始时刻在未来的区间（墙钟曾跳到未来），重新同步进行中的区间")
+                resyncSpans()
+            }
             try store.rollUpHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try store.rollUpEnergyHours(through: HistoryStore.floorDiv(current, 60) - 1)
             try saveAnchorAndPMGR()
@@ -598,7 +620,8 @@ public actor HistoryRecorder {
             if configuration.recordApps, assertions != nil {
                 try store.setEncoded(now.timeIntervalSince1970, forKey: Self.assertionsLastSeenKey)
             }
-            if lastPrune.map({ now.timeIntervalSince($0) >= 86_400 }) ?? true {
+            // 按绝对值：墙钟回拨后 lastPrune 在未来，不能因此停摆（D103）。
+            if lastPrune.map({ abs(now.timeIntervalSince($0)) >= 86_400 }) ?? true {
                 try store.prune(before: current - Int64(HistoryStore.minuteRetention / 60))
                 lastPrune = now
             }
@@ -672,6 +695,21 @@ public actor HistoryRecorder {
     public func clearAppData() throws {
         aggregator.clearApps()
         try store.clearAppData()
+        // 进行中的断言行也被清掉了：按当前快照重新开（审计 A37）。
+        openSpans = [:]
+        if configuration.recordApps, let latest = assertions?.latestSnapshot { ingestAssertions(latest) }
+    }
+
+    /// 进行中的断言与 UPS 区间的行被删掉或改动后，按当前快照重新开。
+    private func resyncSpans() {
+        if !openSpans.isEmpty {
+            openSpans = [:]
+            if configuration.recordApps, let latest = assertions?.latestSnapshot { ingestAssertions(latest) }
+        }
+        if openUPSSpan != nil {
+            openUPSSpan = nil
+            if configuration.recordDevices, let powerSources { ingestPowerSources(powerSources.latest) }
+        }
     }
 
     /// 读一个指标（先提交内存里的数据，让图表包含最近几分钟）。

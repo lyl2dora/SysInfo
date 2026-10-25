@@ -95,6 +95,16 @@ final class SQLiteDatabase {
     var lastInsertRowID: Int64 { sqlite3_last_insert_rowid(handle) }
     var changes: Int { Int(sqlite3_changes(handle)) }
 
+    /// 有没有执行到一半、没有复位的语句（测试用：这样的语句让读事务一直挂着）。
+    var hasActiveStatement: Bool {
+        var statement = sqlite3_next_stmt(handle, nil)
+        while let current = statement {
+            if sqlite3_stmt_busy(current) != 0 { return true }
+            statement = sqlite3_next_stmt(handle, current)
+        }
+        return false
+    }
+
     struct Statement {
         let raw: OpaquePointer
         unowned let database: SQLiteDatabase
@@ -127,18 +137,19 @@ final class SQLiteDatabase {
         }
 
         /// 绑定并执行到底（不返回行的语句）。
+        /// step 出错时同样复位：否则语句停在执行中，读事务一直挂着，WAL 无法收缩（审计 A36）。
         func run(_ values: [SQLiteValue] = []) throws(SQLiteError) {
+            defer { sqlite3_reset(raw) }
             try bind(values)
             while try step() {}
-            sqlite3_reset(raw)
         }
 
         /// 绑定并逐行读取。
         func query<T>(_ values: [SQLiteValue] = [], _ row: (Statement) -> T) throws(SQLiteError) -> [T] {
+            defer { sqlite3_reset(raw) }
             try bind(values)
             var out: [T] = []
             while try step() { out.append(row(self)) }
-            sqlite3_reset(raw)
             return out
         }
 

@@ -118,6 +118,10 @@ public final class HistoryStore {
     /// 分钟级与每应用数据的保留期（D30）。
     public static let minuteRetention: TimeInterval = 30 * 86_400
 
+    /// 写入后需要重算的最早小时：墙钟回拨后，新分钟会落进已经汇总过的小时（D103）。指标与能耗各一份。
+    var dirtySampleHour: Int64?
+    var dirtyEnergyHour: Int64?
+
     let db: SQLiteDatabase
     private var metricIDs: [MetricID: Int64] = [:]
     private var appIDs: [String: (id: Int64, name: String)] = [:]
@@ -272,6 +276,7 @@ public final class HistoryStore {
                 try upsertMinutes(rows: rows, apps: apps)
                 try upsertEnergy(energy)
             }
+            markDirty(sample: rows.lazy.map(\.minute).min(), energy: energy.lazy.map(\.minute).min())
         } catch {
             // 回滚后，事务里新插入的 metric / app 行已不存在；缓存一起退回，否则 rowid 被复用时两个名字会共用一行。
             metricIDs = savedMetricIDs
@@ -338,12 +343,57 @@ public final class HistoryStore {
         return true
     }
 
+    /// 记下新写入的最早分钟所在的小时，下次汇总从那里起重算（D103）。
+    func markDirty(sample: Int64?, energy: Int64?) {
+        if let sample { dirtySampleHour = min(dirtySampleHour ?? .max, Self.floorDiv(sample, 60)) }
+        if let energy { dirtyEnergyHour = min(dirtyEnergyHour ?? .max, Self.floorDiv(energy, 60)) }
+    }
+
+    /// 汇总的起点：已汇总的最后一小时（没有时为分钟表的第一小时），与写入过的最早小时取较早者。
+    /// 早于分钟保留期的小时不重算：那里的分钟已被清理，重算会用残缺的分钟覆盖原有的小时值。
+    static func rollUpStart(last: Int64?, dirty: Int64?, through throughHour: Int64) -> Int64? {
+        guard let dirty else { return last }
+        let floor = throughHour + 2 - Int64(minuteRetention / 3600)
+        let start = max(dirty, floor)
+        return last.map { min($0, start) } ?? start
+    }
+
+    /// 删掉时间在未来的历史（D103：墙钟跳到未来、之后又调回）：晚于 `afterMinute` 的分钟行、晚于 `afterHour` 的小时行、
+    /// 开始时刻晚于 `afterMinute` 的断言与 UPS 区间；结束时刻在未来的区间收尾到 `now`，标「估计」。
+    /// 返回删掉或改动的区间行数（调用方据此重新同步进行中的区间）。
+    @discardableResult
+    public func removeFuture(afterMinute: Int64, afterHour: Int64, now: Date) throws -> Int {
+        try db.transaction { () throws(SQLiteError) -> Int in
+            for table in ["sample_minute", "app_minute", "energy_minute", "energy_fill_minute"] {
+                try db.statement("DELETE FROM \(table) WHERE t > ?").run([.int(afterMinute)])
+            }
+            for table in ["sample_hour", "energy_hour"] {
+                try db.statement("DELETE FROM \(table) WHERE t > ?").run([.int(afterHour)])
+            }
+            let limit = SQLiteValue.double(Double(afterMinute) * 60)
+            let end = SQLiteValue.double(now.timeIntervalSince1970)
+            var spans = 0
+            for table in ["power_assertion", "ups_power_span"] {
+                try db.statement("DELETE FROM \(table) WHERE start_s > ?").run([limit])
+                spans += db.changes
+                try db.statement("UPDATE \(table) SET end_s = MAX(start_s, ?), end_estimated = 1 WHERE end_s > ?").run([end, limit])
+                spans += db.changes
+            }
+            return spans
+        }
+    }
+
     /// 从分钟表重算小时汇总，直到 `throughHour`（含）。从已有的最后一个小时（含，补上迟到的分钟）开始，
-    /// 没有小时数据时从分钟表的第一个小时开始。按 n 加权；峰值只在这一小时每行都有峰值时给出。
+    /// 没有小时数据时从分钟表的第一个小时开始；墙钟回拨后写进更早小时的分钟，从那一小时起重算（D103）。
+    /// 按 n 加权；峰值只在这一小时每行都有峰值时给出。
     public func rollUpHours(through throughHour: Int64) throws {
         let lastHour = try db.statement("SELECT MAX(t) FROM sample_hour").query { $0.optionalInt(0) }.first ?? nil
         let firstMinute = try db.statement("SELECT MIN(t) FROM sample_minute").query { $0.optionalInt(0) }.first ?? nil
-        guard let start = lastHour ?? firstMinute.map({ Self.floorDiv($0, 60) }), start <= throughHour else { return }
+        guard
+            let start = Self.rollUpStart(
+                last: lastHour ?? firstMinute.map({ Self.floorDiv($0, 60) }), dirty: dirtySampleHour, through: throughHour),
+            start <= throughHour
+        else { return }
         try db.statement(
             """
             INSERT OR REPLACE INTO sample_hour(t, metric, avg, max, n, q)
@@ -352,6 +402,7 @@ public final class HistoryStore {
             FROM sample_minute WHERE t >= ? AND t < ? GROUP BY t / 60, metric
             """
         ).run([.int(start * 60), .int((throughHour + 1) * 60)])
+        if let dirty = dirtySampleHour, dirty <= throughHour { dirtySampleHour = nil }
     }
 
     /// 删掉早于 `minute` 的分钟数据与每应用数据，清掉不再被引用的应用，并归还空闲页。
