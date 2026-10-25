@@ -305,20 +305,22 @@ public final class HistoryStore {
                 cpu_ns = cpu_ns + excluded.cpu_ns,
                 energy_nj = CASE WHEN energy_nj IS NULL OR excluded.energy_nj IS NULL THEN NULL
                                  ELSE energy_nj + excluded.energy_nj END,
-                gpu_ns = COALESCE(gpu_ns, 0) + excluded.gpu_ns,
-                gpu_nj = COALESCE(gpu_nj, 0) + excluded.gpu_nj,
-                ane_nj = COALESCE(ane_nj, 0) + excluded.ane_nj,
-                disk_r = COALESCE(disk_r, 0) + excluded.disk_r,
-                disk_w = COALESCE(disk_w, 0) + excluded.disk_w,
-                wakeups = COALESCE(wakeups, 0) + excluded.wakeups,
-                footprint = MAX(COALESCE(footprint, 0), excluded.footprint)
+                -- 空值表示没有可信值，与 energy_nj 一样任一份为空结果就为空（D98）；SQLite 的 + 与多参数 MAX 遇 NULL 得 NULL。
+                gpu_ns = gpu_ns + excluded.gpu_ns,
+                gpu_nj = gpu_nj + excluded.gpu_nj,
+                ane_nj = ane_nj + excluded.ane_nj,
+                disk_r = disk_r + excluded.disk_r,
+                disk_w = disk_w + excluded.disk_w,
+                wakeups = wakeups + excluded.wakeups,
+                footprint = MAX(footprint, excluded.footprint)
             """)
         for row in apps {
             let app = try appRowID(row.app)
             func v(_ x: UInt64) -> SQLiteValue { .int(Int64(clamping: x)) }
+            func o(_ x: UInt64?) -> SQLiteValue { .optional(x.map { Int64(clamping: $0) }) }
             try upsertApp.run([
                 .int(row.minute), .int(app), v(row.cpuNanos), .optional(row.energyNanojoules.map { Int64(clamping: $0) }),
-                v(row.gpuNanos), v(row.gpuEnergyNanojoules), v(row.aneEnergyNanojoules), v(row.diskReadBytes),
+                o(row.gpuNanos), o(row.gpuEnergyNanojoules), o(row.aneEnergyNanojoules), v(row.diskReadBytes),
                 v(row.diskWrittenBytes), v(row.wakeups), v(row.footprintBytes),
             ])
         }
