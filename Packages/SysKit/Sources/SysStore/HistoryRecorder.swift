@@ -133,6 +133,10 @@ public actor HistoryRecorder {
     private var configuration: Configuration
     private var aggregator = MinuteAggregator()
     private var tokens: [DemandToken] = []
+    /// `start()` 之后、`stop()` 之前。actor 在 await 处会重入，生命周期不能只看 `pump`。
+    private var isRunning = false
+    /// 每次重登需求或停止时加一：await 回来后世代变了，说明已被更新的一次或 `stop()` 取代，手里的 token 作废。
+    private var demandGeneration = 0
     private var pump: Task<Void, Never>?
     private var timer: Task<Void, Never>?
     private var lastPrune: Date?
@@ -182,13 +186,15 @@ public actor HistoryRecorder {
 
     /// 开始记录：订阅引擎事件、登记后台需求、排定提交。重复调用没有副作用。
     public func start() async {
-        guard pump == nil else { return }
+        guard !isRunning else { return }
+        isRunning = true
         // PMGR：恢复上一次运行的批次状态，重启后能立即显示上一批（功耗与散热模块设计 §4.4）。
         if let pmgr = power.pmgr, let saved = try? store.decoded(PMGRState.self, forKey: Self.pmgrKey) {
             pmgr.restore(saved)
             savedPMGR = saved
         }
         let stream = await engine.events()
+        guard isRunning else { return }  // 等事件流期间已经 stop()
         pump = Task { [weak self] in
             for await event in stream {
                 guard let self else { return }
@@ -196,6 +202,7 @@ public actor HistoryRecorder {
             }
         }
         await applyDemands()
+        guard isRunning else { return }  // 登记需求期间已经 stop()
         startAssertions()
         startPowerSources()
         scheduleFlush()
@@ -204,6 +211,8 @@ public actor HistoryRecorder {
 
     /// 停止记录：注销需求、提交剩余数据。
     public func stop() async {
+        isRunning = false
+        demandGeneration += 1
         tokens.forEach { $0.cancel() }
         tokens = []
         appSampler?.setRetainsWindows(false)
@@ -233,8 +242,11 @@ public actor HistoryRecorder {
     }
 
     private func applyDemands() async {
+        demandGeneration += 1
+        let generation = demandGeneration
         tokens.forEach { $0.cancel() }
         tokens = []
+        guard isRunning else { return }
         var demands: [Demand] = []
         let recordApps = configuration.recordApps && appSampler != nil
         if configuration.recordSystem {
@@ -314,7 +326,12 @@ public actor HistoryRecorder {
         }
         appSampler?.setRetainsWindows(recordApps)
         for demand in demands {
-            tokens.append(await engine.addDemand(demand))
+            let token = await engine.addDemand(demand)
+            guard generation == demandGeneration else {
+                token.cancel()
+                return
+            }
+            tokens.append(token)
         }
     }
 
