@@ -204,9 +204,11 @@ struct AppActivityHardwareTests {
         let sampler = AppSampler()
         #expect(sampler.selfTest().isUsable)
         _ = sampler.sample(at: .now())
+        _ = sampler.sample(at: .now())
         let builder = TopNBuilder()
         let mine = try #require(CoalitionReader.coalition(ofPID: getpid()))
-        _ = builder.detail(coalitionID: mine, window: nil, footprints: nil, slotsTrusted: true)  // 成员 CPU 建立基线
+        // 成员 CPU 的基线记在第一个窗口上，紧接着的下一个窗口才出数
+        _ = builder.detail(coalitionID: mine, window: sampler.latestWindow, footprints: nil, slotsTrusted: true)
         let end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 300_000_000
         var x: UInt64 = 1
         while clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < end { x = x &* 3 &+ 1 }
