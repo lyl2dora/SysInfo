@@ -686,7 +686,12 @@ final class LatencyDrawView: LiveDrawView {
             let rttText: String =
                 if let v = rtt?.value { Formatting.latency(v) }
                 else if case .unavailable(let reason)? = rtt?.quality {
-                    reason.code == "timeout" ? String(localized: "超时") : reason.code == "noTarget" ? String(localized: "无目标") : "—"
+                    switch reason.code {
+                    case "timeout": String(localized: "超时")
+                    case "noTarget": String(localized: "无目标")
+                    case "localNetwork": String(localized: "同网段，不测")
+                    default: "—"
+                    }
                 } else { String(localized: "等待回包…") }
             let loss = latest[.networkLatencyLoss(target)]?.value
             let lossText = loss.map { PercentFormat.string(fromRatio: $0) } ?? "—"

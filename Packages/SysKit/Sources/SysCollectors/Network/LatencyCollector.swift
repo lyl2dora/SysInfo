@@ -2,6 +2,7 @@
 //
 // - 默认关（D22：默认没有出站连接）；目标由 app 设置：默认网关（来自清单，发往网关不需要本地网络授权，
 //   2026-10-17 实测）与 / 或自定义地址（IP 字面量或主机名；主机名在目标变化时与每 10 分钟解析一次）；
+// - 自定义地址格式不合法时不解析；解析出的地址在本机直连网段内时不发包（D102，见 LatencyTargetPolicy）；
 // - 只在延迟开启、且网络面板可见或延迟 widget 打开时有需求，间隔不少于 2 s；
 // - 回包由私有队列上的 DispatchSource 异步接收，按 id + seq 匹配（IPv6 另按 type 过滤）；`sample()` 只发新的探测包、
 //   汇总上一间隔收到的回包，不阻塞引擎；超过 2 s 没回的算丢失；
@@ -136,13 +137,19 @@ public final class LatencyCollector: Collector {
         for target in MetricID.LatencyTarget.allCases {
             let enabled = target == .gateway ? targets.gateway : (targets.custom != nil)
             guard enabled else { continue }
-            guard let host = wanted[target], let (address, family) = resolve(host) else {
-                state.withLock { s in
-                    s.hosts[target] = wanted[target] ?? ""
-                    if let prober = s.probers.removeValue(forKey: target) { prober.source.cancel() }
-                }
-                samples.append(.unavailable(.networkLatencyRTT(target), reason: .noTarget(), at: time))
+            let host = wanted[target]
+            let valid = target == .gateway || host.map(LatencyTargetPolicy.isValidHost) == true
+            guard let host, valid, let (address, family) = resolve(host) else {
+                samples.append(drop(target, host: host, reason: .noTarget(), at: time))
                 continue
+            }
+            if target == .custom {
+                let snapshot = inventory.snapshot()
+                let gateways = [snapshot.gatewayIPv4, snapshot.gatewayIPv6].compactMap { $0 }
+                if LatencyTargetPolicy.isLocalNetwork(address, prefixes: LatencyTargetPolicy.onLinkPrefixes(), gateways: gateways) {
+                    samples.append(drop(target, host: host, reason: .localNetwork(), at: time))
+                    continue
+                }
             }
             samples += collect(target: target, host: host, address: address, family: family, time: time)
         }
@@ -157,6 +164,15 @@ public final class LatencyCollector: Collector {
                 prober.timedOutThisInterval = 0
             }
         }
+    }
+
+    /// 这个目标本间隔不测：关掉它的探测器，输出不可用。
+    private func drop(_ target: MetricID.LatencyTarget, host: String?, reason: UnavailableReason, at time: SampleTime) -> Sample {
+        state.withLock { s in
+            s.hosts[target] = host ?? ""
+            if let prober = s.probers.removeValue(forKey: target) { prober.source.cancel() }
+        }
+        return .unavailable(.networkLatencyRTT(target), reason: reason, at: time)
     }
 
     // MARK: - 探测
