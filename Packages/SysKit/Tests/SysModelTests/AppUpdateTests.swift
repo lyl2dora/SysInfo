@@ -63,6 +63,31 @@ import SysModel
                 == nil)
     }
 
+    @Test func parsesBuildVersionsWithSuffix() throws {
+        let rc = try #require(AppVersion(build: "1.1.0-rc1"))
+        #expect(rc.isPrerelease)
+        #expect(rc < AppVersion(major: 1, minor: 1, patch: 0))
+        #expect(rc > AppVersion(major: 1, minor: 0, patch: 9))
+        #expect(AppVersion(build: "1.0") == AppVersion(major: 1, minor: 0, patch: 0))
+        #expect(AppVersion(build: "1.0.0+5") == AppVersion(major: 1, minor: 0, patch: 0))
+        #expect(AppVersion(build: "1.0.0-") == nil)
+        #expect(AppVersion(build: "?") == nil)
+    }
+
+    /// A29：CI 产物按 MARKETING_VERSION 原文命名，两段版本号时不补成三段。
+    @Test func matchesAssetNamesByTagText() throws {
+        let current = try #require(AppVersion("1.0.0"))
+        let r = try Self.release(tag: "v1.1", assets: ["SysInfo-1.1.zip", "SysInfo-1.1.zip.sha256"])
+        let offer = try #require(UpdateOffer.make(from: r, current: current))
+        #expect(offer.version == AppVersion("1.1.0"))
+        #expect(offer.archiveURL.lastPathComponent == "SysInfo-1.1.zip")
+        let rc = try #require(AppVersion(build: "1.1.0-rc1"))
+        let final = try Self.release(tag: "v1.1.0", assets: ["SysInfo-1.1.0.zip", "SysInfo-1.1.0.zip.sha256"])
+        #expect(UpdateOffer.make(from: final, current: rc) != nil)
+        let older = try Self.release(tag: "v1.0.9", assets: ["SysInfo-1.0.9.zip", "SysInfo-1.0.9.zip.sha256"])
+        #expect(UpdateOffer.make(from: older, current: rc) == nil)
+    }
+
     @Test func parsesChecksumFiles() {
         let hex = String(repeating: "aB", count: 32)
         #expect(UpdateOffer.parseChecksum("\(hex)  SysInfo-1.0.0.zip\n") == hex.lowercased())
@@ -80,5 +105,21 @@ import SysModel
         #expect(!UpdateCheckFrequency.daily.isDue(lastCheck: now.addingTimeInterval(-3_600), now: now))
         #expect(UpdateCheckFrequency.daily.isDue(lastCheck: now.addingTimeInterval(3_600), now: now))
         #expect(!UpdateCheckFrequency.off.isDue(lastCheck: nil, now: now))
+    }
+
+    /// D100：自动检查失败后按天重试，成功后回到原周期。
+    @Test func retriesDailyAfterFailure() {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let weekAgo = now.addingTimeInterval(-8 * 86_400)
+        let f = UpdateCheckFrequency.weekly
+        #expect(!f.isDue(lastCheck: weekAgo, lastFailure: now.addingTimeInterval(-3_600), now: now))
+        #expect(f.isDue(lastCheck: weekAgo, lastFailure: now.addingTimeInterval(-86_400), now: now))
+        #expect(!f.isDue(lastCheck: nil, lastFailure: now.addingTimeInterval(-3_600), now: now))
+        #expect(f.isDue(lastCheck: nil, lastFailure: now.addingTimeInterval(-86_400), now: now))
+        // 失败早于上次成功：按成功时间算周期。
+        let recent = now.addingTimeInterval(-2 * 86_400)
+        #expect(!f.isDue(lastCheck: recent, lastFailure: recent.addingTimeInterval(-86_400), now: now))
+        #expect(f.isDue(lastCheck: weekAgo, lastFailure: now.addingTimeInterval(3_600), now: now))
+        #expect(!UpdateCheckFrequency.off.isDue(lastCheck: nil, lastFailure: weekAgo, now: now))
     }
 }

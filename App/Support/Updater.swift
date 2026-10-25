@@ -32,9 +32,12 @@ final class Updater {
     static let releaseBundleIdentifier = "zone.lyl.sysinfo"
     static let teamIdentifier = "D8MFB2YNN3"
     private static let lastCheckKey = "update.lastCheck"
+    private static let lastFailureKey = "update.lastFailure"
 
     private(set) var state: State = .idle
     private(set) var lastCheck: Date?
+    /// 上次自动检查失败的时间（D100）：比上次成功晚时，按天重试。
+    @ObservationIgnored private var lastFailure: Date?
     /// 本构建是否检查更新：只有日用版（D76）。
     let isEnabled: Bool
     /// 能否就地替换：从 /Applications 运行，且有写权限。不能时只提示，附 Release 页面链接。
@@ -59,6 +62,8 @@ final class Updater {
             && FileManager.default.isWritableFile(atPath: parent) && FileManager.default.isWritableFile(atPath: bundleURL.path)
         let stamp = defaults.double(forKey: Self.lastCheckKey)
         lastCheck = stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
+        let failed = defaults.double(forKey: Self.lastFailureKey)
+        lastFailure = failed > 0 ? Date(timeIntervalSince1970: failed) : nil
     }
 
     var availableOffer: UpdateOffer? {
@@ -75,7 +80,7 @@ final class Updater {
         }
     }
 
-    /// 启动后约 1 分钟查一次是否到期，之后每小时看一次；到期才真的联网。
+    /// 启动后约 1 分钟查一次是否到期，之后每小时看一次；到期才真的联网（失败后按天重试，D100）。
     func start() {
         guard isEnabled, timer == nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in self?.checkIfDue() }
@@ -88,7 +93,8 @@ final class Updater {
     }
 
     func checkIfDue() {
-        guard isEnabled, !isBusy, settings.updateFrequency.isDue(lastCheck: lastCheck, now: .now) else { return }
+        guard isEnabled, !isBusy, settings.updateFrequency.isDue(lastCheck: lastCheck, lastFailure: lastFailure, now: .now)
+        else { return }
         checkNow(automatic: true)
     }
 
@@ -96,7 +102,10 @@ final class Updater {
     func checkNow(automatic: Bool = false) {
         guard isEnabled, !isBusy else { return }
         state = .checking
-        let current = AppVersion(BuildInfo.version) ?? AppVersion(major: 0, minor: 0, patch: 0)
+        guard let current = AppVersion(build: BuildInfo.version) else {
+            state = .failed(String(localized: "无法识别当前版本号 \(BuildInfo.version)"))
+            return
+        }
         Task {
             do {
                 let offer = try await UpdateClient.latestOffer(repository: Self.repository, current: current)
@@ -111,6 +120,12 @@ final class Updater {
                     state = .upToDate
                 }
             } catch {
+                // 只记自动检查的失败（D100）：手动「立即检查」失败不提前下一次自动检查。
+                if automatic {
+                    let now = Date.now
+                    lastFailure = now
+                    defaults.set(now.timeIntervalSince1970, forKey: Self.lastFailureKey)
+                }
                 state = .failed(String(localized: "检查更新失败：\(error.localizedDescription)"))
                 Log.app.error("检查更新失败：\(error.localizedDescription, privacy: .public)")
             }

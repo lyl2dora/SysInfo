@@ -4,3 +4,5 @@
 9f8e7d6c-5b4a-4938-8271-605f4e3d2c1b
 # 通用卷名
 /Volumes/External
+# 导出脱敏的卷名占位（D101）
+/Volumes/<volume>
