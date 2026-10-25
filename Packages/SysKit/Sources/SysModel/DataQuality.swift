@@ -48,6 +48,8 @@ public struct UnavailableReason: Sendable, Hashable, Codable, CustomStringConver
     public static func selfTestFailed(_ detail: String? = nil) -> Self { Self(code: "selfTestFailed", detail: detail) }
     /// 计数器回退，按复位处理，丢弃这一段。
     public static func counterReset(_ detail: String? = nil) -> Self { Self(code: "counterReset", detail: detail) }
+    /// 算出的数值不是有限数（除零等），按不可用处理。
+    public static func nonFinite(_ detail: String? = nil) -> Self { Self(code: "nonFinite", detail: detail) }
     /// 两次读数之间计数器没有前进，无法算出比例。
     public static func noElapsedTicks(_ detail: String? = nil) -> Self { Self(code: "noElapsedTicks", detail: detail) }
     /// 簇几乎不活跃，频率没有意义（UI 显示「空闲」）。

@@ -355,7 +355,7 @@ public final class MemoryCollector: Collector {
 
     /// 读页面队列；`statistics` 给出时同时填入被压缩页与压缩器里的原始页数。
     static func readCounts(statistics: VMStatistics?) -> MemoryCounts? {
-        guard let pageSize = sysctlUInt64("hw.pagesize"), pageSize > 0, let physical = sysctlUInt64("hw.memsize"),
+        guard let pageSize = sysctlUInt64("hw.pagesize"), pageSize > 0, let physical = sysctlUInt64("hw.memsize"), physical > 0,
             let free = sysctlUInt64("vm.page_free_count"), let internalPages = sysctlUInt64("vm.page_pageable_internal_count"),
             let externalPages = sysctlUInt64("vm.page_pageable_external_count"),
             let purgeable = sysctlUInt64("vm.page_purgeable_count"), let wired = sysctlUInt64("vm.page_wired_count")

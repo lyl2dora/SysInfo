@@ -57,12 +57,18 @@ public struct Sample: Sendable, Hashable, Codable {
     public let time: SampleTime
 
     /// 有数值的样本。`quality` 不能是 `.unavailable`，不可用请用 `Sample.unavailable(_:reason:at:)`。
+    /// 数值不是有限数（除零得出的 inf / NaN）时按不可用处理，不让 NaN 冒充读数（K17）。
     public init(id: MetricID, value: Double, quality: DataQuality = .measured, time: SampleTime) {
         precondition(!quality.isUnavailable, "有数值的样本不能标为不可用；请用 Sample.unavailable")
         self.id = id
-        self.value = value
-        self.quality = quality
         self.time = time
+        if value.isFinite {
+            self.value = value
+            self.quality = quality
+        } else {
+            self.value = nil
+            self.quality = .unavailable(.nonFinite())
+        }
     }
 
     /// 不可用的样本：没有数值，只有原因。
