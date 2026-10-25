@@ -145,6 +145,8 @@ final class NetworkModel {
         let structureChanged =
             state.interfaces.map { [$0.name, $0.kind.rawValue] } != self.state.interfaces.map { [$0.name, $0.kind.rawValue] }
             || state.primary != self.state.primary
+            // Wi-Fi 开关不改接口清单，只改活跃状态：Wi-Fi 卡片与 CoreWLAN 需求要跟着变（D10）。
+            || state.activeWiFi?.name != self.state.activeWiFi?.name
         self.state = state
         if structureChanged { onStructureChange?() }
     }
@@ -292,6 +294,8 @@ final class TopNModel {
         isFallback = active && (!coalitionUsable || sampler == nil)
         guard active else {
             rows = []
+            // 悬停中进详情或关面板时收不到 onHover(false)，在这里解冻，否则再打开一直是空表。
+            isFrozen = false
             return
         }
         // 后台历史每 10 s 扫一次 coalition，`latestWindow` 里通常已有不超过 10 s 的窗口：
@@ -424,6 +428,8 @@ final class TopNModel {
             await MainActor.run {
                 guard let self else { return }
                 self.building = false
+                // 组装期间面板关了、换成 coalition 路径或开始悬停：不写回旧行。
+                guard self.isActive, self.isFallback, !self.isFrozen else { return }
                 self.rows = result.rows
                 self.hiddenCount = result.hiddenCount
             }
@@ -443,7 +449,8 @@ final class TopNModel {
             await MainActor.run {
                 guard let self else { return }
                 self.isRefreshingAll = false
-                if let result {
+                // 用户点的刷新，悬停中也写回；面板已关或不再回退时丢弃。
+                if let result, self.isActive, self.isFallback {
                     self.rows = result
                     self.hiddenCount = 0
                 }
@@ -603,9 +610,33 @@ final class AppServices {
         self.interruptDemand = DemandSlot(engine: engine)
     }
 
-    func setInterruptSourcesVisible(_ visible: Bool) {
+    /// 「中断来源」展开着的视图个数。面板原地换内容时，新视图的 onAppear 可能早于旧视图的 onDisappear，
+    /// 所以按计数，不按最后一次调用。
+    private var interruptViewers = 0
+    /// CPU tab 在面板里可见（PanelController 每次重算需求时给出）。
+    private var interruptAllowed = false
+
+    func interruptSourcesAppeared() {
+        interruptViewers += 1
+        applyInterruptDemand()
+    }
+
+    func interruptSourcesDisappeared() {
+        interruptViewers = max(interruptViewers - 1, 0)
+        applyInterruptDemand()
+    }
+
+    /// CPU tab 不可见时清零计数：之后才到的旧视图 onDisappear 不会再把计数减成负数。
+    func setInterruptSourcesAllowed(_ allowed: Bool) {
+        interruptAllowed = allowed
+        if !allowed { interruptViewers = 0 }
+        applyInterruptDemand()
+    }
+
+    private func applyInterruptDemand() {
         interruptDemand.set(
-            visible ? Demand(collectors: [InterruptDeviceCollector.collectorID], interval: 5, source: .panel) : nil)
+            interruptAllowed && interruptViewers > 0
+                ? Demand(collectors: [InterruptDeviceCollector.collectorID], interval: 5, source: .panel) : nil)
     }
 
     /// 引擎事件（在 MainActor 上，由 AppDelegate 的事件泵转来）。

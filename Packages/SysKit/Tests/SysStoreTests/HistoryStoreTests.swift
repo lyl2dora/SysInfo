@@ -112,6 +112,41 @@ import SysModel
         #expect(abs((series.first?.watts ?? 0) - 0.05) < 1e-9)  // 3 J ÷ 60 s
     }
 
+    @Test func unknownAuxiliaryColumnsStayUnknownAndMarkTotalsPartial() throws {
+        let store = try HistoryStore.inMemory()
+        let a = AppIdentity(key: "a", name: "A")
+        let known = AppMinuteRow(
+            minute: 1, app: a, cpuNanos: 60_000_000_000, energyNanojoules: 1_000_000_000, gpuNanos: 5,
+            gpuEnergyNanojoules: 2_000_000_000, aneEnergyNanojoules: 1, diskReadBytes: 10, diskWrittenBytes: 20, wakeups: 3,
+            footprintBytes: 100)
+        // 第 2 分钟 S4 不过：CPU、GPU、ANE 能耗与 GPU 时间都为空（D96）
+        let untrusted = AppMinuteRow(
+            minute: 2, app: a, cpuNanos: 60_000_000_000, energyNanojoules: nil, gpuNanos: nil, gpuEnergyNanojoules: nil,
+            aneEnergyNanojoules: nil, diskReadBytes: 1, diskWrittenBytes: 2, wakeups: 4, footprintBytes: 300)
+        try store.write(rows: [], apps: [known, untrusted])
+        // 同一分钟再合并一份已知的：空值不被当成 0 加回来（D98）
+        try store.write(rows: [], apps: [AppMinuteRow(minute: 2, app: a, cpuNanos: 1, energyNanojoules: 1, gpuNanos: 7)])
+        let total = try #require(try store.appTotals(from: 0, to: 10).first)
+        #expect(total.gpuNanos == 5)
+        #expect(total.aneEnergyNanojoules == 1)
+        #expect(total.energyNanojoules == 3_000_000_001)
+        #expect(!total.energyComplete)
+        #expect(total.partial == [.gpuTime, .ane])
+        #expect(total.wakeups == 7)
+        let series = try store.appSeries(key: "a", from: 0, to: 10, bucketMinutes: 1)
+        #expect(series.count == 2)
+        #expect(series[0].watts != nil)
+        #expect(series[1].watts == nil)
+        // 只有空值的时段：显示「—」而不是 0
+        let onlyUnknown = try #require(try store.appTotals(from: 2, to: 3).first)
+        #expect(onlyUnknown.gpuNanos == nil)
+        #expect(onlyUnknown.energyNanojoules == nil)
+        #expect(onlyUnknown.partial.isEmpty)
+        let row = total.row(appPath: nil, isApp: false)
+        #expect(row.historyPartial == [.gpuTime, .ane])
+        #expect(row.energyPartial)
+    }
+
     @Test func assertionSpansOpenCloseAndReopen() throws {
         let store = try HistoryStore.inMemory()
         let app = AppIdentity(key: "com.example.vm", name: "VM")

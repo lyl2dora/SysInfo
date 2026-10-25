@@ -415,6 +415,12 @@ extension AppActivityColumn {
         }
     }
 
+    /// 历史时段的一格：这一列只合计了部分分钟时加「*」与提示（D98）。
+    private static func partial(_ text: String?, _ row: AppActivityRow, _ column: AppHistoryPartial) -> (String?, String?) {
+        guard let text, row.historyPartial.contains(column) else { return (text, nil) }
+        return (text + "*", String(localized: "* 部分分钟没有可信值（槽位核对未通过或旧版本未记录），只计已知部分"))
+    }
+
     /// 单元格文字与提示；nil 显示「—」。
     func text(_ row: AppActivityRow, isNow: Bool) -> (String?, String?) {
         switch self {
@@ -426,19 +432,26 @@ extension AppActivityColumn {
             if isNow { return (row.watts.map(Formatting.watts), nil) }
             return (
                 row.energyJoules.map { Formatting.appEnergy($0) + (row.energyPartial ? "*" : "") },
-                row.energyPartial ? String(localized: "* 部分分钟的能耗未知（槽位核对未通过），只计已知部分") : nil
+                row.energyPartial ? String(localized: "* 部分分钟的能耗未知（槽位核对未通过或旧版本未记录），只计已知部分") : nil
             )
-        case .memory: return (row.footprint.flatMap { $0 > 0 ? Formatting.memory(Double($0)) : nil }, nil)
+        case .memory:
+            if isNow { return (row.footprint.flatMap { $0 > 0 ? Formatting.memory(Double($0)) : nil }, nil) }
+            return Self.partial(row.footprint.flatMap { $0 > 0 ? Formatting.memory(Double($0)) : nil }, row, .footprint)
         case .gpu:
-            return (
-                isNow
-                    ? row.gpuShare.map { PercentFormat.string(fromRatio: min($0, 1)) }
-                    : row.gpuTimeNanos.map { $0 > 0 ? AppActivityView.duration($0) : "0" }, nil
-            )
-        case .ane: return (isNow ? row.aneWatts.map(Formatting.watts) : row.aneJoules.map(Formatting.appEnergy), nil)
-        case .diskRead: return (row.diskRead.map { isNow ? Formatting.diskRate($0) : Formatting.diskBytes($0) }, nil)
-        case .diskWrite: return (row.diskWrite.map { isNow ? Formatting.diskRate($0) : Formatting.diskBytes($0) }, nil)
-        case .wakeups: return (row.wakeups.map { isNow ? Formatting.rate($0) : Formatting.count($0) }, nil)
+            if isNow { return (row.gpuShare.map { PercentFormat.string(fromRatio: min($0, 1)) }, nil) }
+            return Self.partial(row.gpuTimeNanos.map { $0 > 0 ? AppActivityView.duration($0) : "0" }, row, .gpuTime)
+        case .ane:
+            if isNow { return (row.aneWatts.map(Formatting.watts), nil) }
+            return Self.partial(row.aneJoules.map(Formatting.appEnergy), row, .ane)
+        case .diskRead:
+            if isNow { return (row.diskRead.map(Formatting.diskRate), nil) }
+            return Self.partial(row.diskRead.map(Formatting.diskBytes), row, .diskRead)
+        case .diskWrite:
+            if isNow { return (row.diskWrite.map(Formatting.diskRate), nil) }
+            return Self.partial(row.diskWrite.map(Formatting.diskBytes), row, .diskWrite)
+        case .wakeups:
+            if isNow { return (row.wakeups.map(Formatting.rate), nil) }
+            return Self.partial(row.wakeups.map(Formatting.count), row, .wakeups)
         case .sleep:
             let sleeping = row.assertions.filter { $0.kind.preventsSleep }
             let help = sleeping.map {

@@ -30,14 +30,14 @@
 | A17 | Top N 与应用详情：缺失的磁盘、GPU 值显示为 0；辅助槽不可信时只屏蔽 CPU 能耗 | 中 | 已修 21c72fd（D96 显示部分；历史库部分见 A65） |
 | A18 | `cpu.freq` 自检失败只返回空样本，不逐簇给原因 | 低 | 已修 17a8a2e |
 | A19 | `Sample` 不拦非有限值；`memory.usage` 除以 `hw.memsize` 前不判零 | 低 | 已修 08a9cf7 |
-| A20 | Top N 悬停冻结残留：悬停时进详情或 Esc 关面板，再开一直空表 | 中高 | 待修 · 第二批 |
-| A21 | 网络 tab 的 CoreWLAN 需求不跟 Wi-Fi 开关变化，关掉 Wi-Fi 后仍每 5 s 读（违反 D10） | 中高 | 待修 · 第二批 |
-| A22 | `WiFiCollector.selfTest()` 在启动、唤醒时调用 CoreWLAN（违反 D10） | 低 | 待修 · 第二批 |
-| A23 | HistoryRecorder `applyDemands` 的 actor 重入，`stop()` 后仍有后台需求存活 | 中 | 待修 · 第二批 |
-| A24 | 已有内置电池时插 UPS，电源设备 tab 不登记 UPS 需求 | 低 | 待修 · 第二批 |
-| A25 | 「中断来源」需求只靠 SwiftUI onAppear / onDisappear，原地换内容时顺序不确定 | 低 | 待修 · 第二批 |
-| A26 | Top N 回退刷新不检查 `isActive`，关面板后写回旧行 | 低 | 待修 · 第二批 |
-| A27 | Top N 成员 CPU / 磁盘基线与 coalition 窗口不对齐；`pruneCaches` 是空操作 | 中高 | 待修 · 第二批 |
+| A20 | Top N 悬停冻结残留：悬停时进详情或 Esc 关面板，再开一直空表 | 中高 | 已修 aad2703 |
+| A21 | 网络 tab 的 CoreWLAN 需求不跟 Wi-Fi 开关变化，关掉 Wi-Fi 后仍每 5 s 读（违反 D10） | 中高 | 已修 aad2703 |
+| A22 | `WiFiCollector.selfTest()` 在启动、唤醒时调用 CoreWLAN（违反 D10） | 低 | 已修 629d1dd（D99） |
+| A23 | HistoryRecorder `applyDemands` 的 actor 重入，`stop()` 后仍有后台需求存活 | 中 | 已修 1e3a118 |
+| A24 | 已有内置电池时插 UPS，电源设备 tab 不登记 UPS 需求 | 低 | 已修 aad2703 |
+| A25 | 「中断来源」需求只靠 SwiftUI onAppear / onDisappear，原地换内容时顺序不确定 | 低 | 已修 aad2703 |
+| A26 | Top N 回退刷新不检查 `isActive`，关面板后写回旧行 | 低 | 已修 aad2703 |
+| A27 | Top N 成员 CPU / 磁盘基线与 coalition 窗口不对齐；`pruneCaches` 是空操作 | 中高 | 已修 0b5636a |
 | A28 | 更新器：检查失败后每小时重试，不是每周（D76） | 中 | 待修 · 第三批（需决策） |
 | A29 | 更新器：两段版本号拼出的资产名与 CI 产物不符；带后缀的当前版本按 0.0.0 比较 | 低 | 待修 · 第三批 |
 | A30 | 导出脱敏不完整：可执行路径带出家目录用户名、模拟器与转移路径 UUID、卷名 | 中 | 待修 · 第三批（需决策） |
@@ -75,7 +75,7 @@
 | A62 | 阻塞采集器建基线期间引擎每秒空唤醒，`skippedBusyCount` 虚高 | 低 | 暂缓 |
 | A63 | 阻塞通道上的 sample 与 actor 上的 selfTest / resetBaseline 可并发，与协议注释不符 | 低 | 暂缓 |
 | A64 | 其他小项：`exclusiveAccess` 常量实为 `kIOReturnNoResources`；InstanceLock 的 errno 读取时机；`make stop` 无产物时静默失败；check-private-imports 不扫 .cpp / 符号链接、原始字符串解析有缺口；同 socID 只看第一个档案；build 号变化复检只记日志 | 低 | 暂缓 |
-| A65 | D96 历史库部分：S4 不过时 `app_minute` 的 GPU 时间、GPU 能耗、ANE 能耗列仍按数值写入；要改为空值，需同时调整列的 NULL 语义（v3 迁移前的旧行）与读取、汇总、界面 | 低 | 待修 · 第二批 |
+| A65 | D96 历史库部分：S4 不过时 `app_minute` 的 GPU 时间、GPU 能耗、ANE 能耗列仍按数值写入；要改为空值，需同时调整列的 NULL 语义（v3 迁移前的旧行）与读取、汇总、界面 | 低 | 已修 2bacd89（D98） |
 
 ## 位置与触发场景
 
@@ -117,6 +117,8 @@
 - **A26** `App/Support/AppServices.swift:417`。
 - **A27** `SysCollectors/Apps/TopNBuilder.swift:397、480、539、552`。
 - **A65** `SysStore/MinuteAggregator.swift:93`（GPU / ANE 照常累加）、`SysStore/HistoryStore.swift` 的 `app_minute` UPSERT（`COALESCE(gpu_ns, 0)` 把 NULL 当 0）、`SysStore/AppHistory.swift:99`（按非空整数读）。
+
+第二批（A20–A27、A65）已在 `fix/audit-batch2` 分支修复：两台机器 `make test-hw` / `remote-test` 通过，自检全部通过。A65 按 D98 把磁盘读写、唤醒、footprint 的旧行空值一并纳入；A22 按 D99 改走 SystemConfiguration。A20、A21、A24、A25 的面板交互只有代码路径与构建验证，真实点击待用户验收。
 
 ### 第三批：策略与隐私
 

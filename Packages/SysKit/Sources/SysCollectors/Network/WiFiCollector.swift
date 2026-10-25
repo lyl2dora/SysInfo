@@ -6,12 +6,14 @@
 // - 发送功率只进诊断页原值（M4 实测读出 1496 mW，不可信）；
 // - 接口关闭或未关联（RSSI 为 0）时样本不可用。
 //
-// 自检（K19）：有 Wi-Fi 接口（提示：没有 Wi-Fi 的机器不算失败）。
+// 自检（K19）：有 Wi-Fi 接口（提示：没有 Wi-Fi 的机器不算失败）。用 SystemConfiguration 枚举 IEEE80211 接口，
+// 启动、唤醒时的复检不碰 CoreWLAN（D99、D10）。
 
 import CoreWLAN
 import Foundation
 import Synchronization
 import SysModel
+import SystemConfiguration
 
 public final class WiFiCollector: Collector {
     public static let collectorID: CollectorID = "network.wifi"
@@ -38,12 +40,21 @@ public final class WiFiCollector: Collector {
     }
 
     public func selfTest() -> SelfTestResult {
-        let names = CWWiFiClient.shared().interfaceNames() ?? []
+        let names = Self.systemWiFiInterfaces()
         return SelfTestResult(
             checks: [
                 SelfTestCheck(
                     name: "network.wifi.interface", passed: !names.isEmpty, detail: "interfaces=\(names.count)", severity: .advisory)
             ], dataPath: Self.dataPath)
+    }
+
+    /// 系统网络配置里的 Wi-Fi 接口名（BSD 名）。
+    static func systemWiFiInterfaces() -> [String] {
+        let all = SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] ?? []
+        return all.compactMap { interface in
+            guard SCNetworkInterfaceGetInterfaceType(interface) == kSCNetworkInterfaceTypeIEEE80211 else { return nil }
+            return SCNetworkInterfaceGetBSDName(interface) as String?
+        }
     }
 
     public func sample(at time: SampleTime) -> CollectorOutput {

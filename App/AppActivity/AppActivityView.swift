@@ -362,6 +362,12 @@ private struct HistorySummary: View {
     let row: AppActivityRow
     let range: AppActivityRange
 
+    /// 没有值显示「—」；只合计了部分分钟时注明（D98）。
+    private func value(_ text: String?, _ column: AppHistoryPartial) -> String {
+        guard let text else { return "—" }
+        return row.historyPartial.contains(column) ? text + String(localized: "（部分分钟未知）") : text
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -378,13 +384,15 @@ private struct HistorySummary: View {
                     KeyValue(
                         title: String(localized: "能耗"),
                         value: row.energyJoules.map { Formatting.appEnergy($0) + (row.energyPartial ? String(localized: "（部分分钟未知）") : "") } ?? "—")
-                    KeyValue(title: String(localized: "内存峰值"), value: row.footprint.map { Formatting.memory(Double($0)) } ?? "—")
-                    KeyValue(title: String(localized: "GPU 时间"), value: row.gpuTimeNanos.map(AppActivityView.duration) ?? "—")
-                    KeyValue(title: String(localized: "ANE 能耗"), value: row.aneJoules.map(Formatting.appEnergy) ?? "—")
+                    KeyValue(
+                        title: String(localized: "内存峰值"),
+                        value: value(row.footprint.map { Formatting.memory(Double($0)) }, .footprint))
+                    KeyValue(title: String(localized: "GPU 时间"), value: value(row.gpuTimeNanos.map(AppActivityView.duration), .gpuTime))
+                    KeyValue(title: String(localized: "ANE 能耗"), value: value(row.aneJoules.map(Formatting.appEnergy), .ane))
                     KeyValue(
                         title: String(localized: "读取 / 写入"),
-                        value: "\(Formatting.diskBytes(row.diskRead ?? 0)) / \(Formatting.diskBytes(row.diskWrite ?? 0))")
-                    KeyValue(title: String(localized: "唤醒"), value: row.wakeups.map(Formatting.count) ?? "—")
+                        value: "\(value(row.diskRead.map(Formatting.diskBytes), .diskRead)) / \(value(row.diskWrite.map(Formatting.diskBytes), .diskWrite))")
+                    KeyValue(title: String(localized: "唤醒"), value: value(row.wakeups.map(Formatting.count), .wakeups))
                     KeyValue(title: String(localized: "有记录的分钟"), value: row.activeMinutes.map(String.init) ?? "—")
                 }
                 .monospacedDigit()

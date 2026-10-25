@@ -55,6 +55,29 @@ private func time(_ seconds: Int64) -> SampleTime {
         #expect(TopNBuilder.resolveName(path: "/usr/sbin/cfprefsd", command: "cfprefsd", pid: 7).name == "cfprefsd")
     }
 
+    @Test func memberRatesOnlyComeFromConsecutiveWindows() {
+        // 读自己进程的 rusage（公开 API）；窗口是合成的，只看对齐规则。
+        let builder = TopNBuilder()
+        let pid = getpid()
+        func span(end: Int64, elapsed: Int64) -> TopNBuilder.MemberWindow {
+            TopNBuilder.MemberWindow(AppActivityWindow(time: time(end), elapsedNanos: UInt64(elapsed) * 1_000_000_000, coalitions: []))
+        }
+        #expect(builder.measure(pid: pid, span: span(end: 10, elapsed: 2)) == nil)  // 只记基线
+        var spin = 0.0
+        for i in 0..<200_000 { spin += sin(Double(i)) }
+        #expect(spin.isFinite)
+        let rate = builder.measure(pid: pid, span: span(end: 12, elapsed: 2))
+        #expect(rate != nil)
+        // 同一个窗口再组装一次：复用这个窗口的值，不重算
+        #expect(builder.measure(pid: pid, span: span(end: 12, elapsed: 2)) == rate)
+        // 跳过了窗口（面板关了一阵后重开）：只记基线，不把间隔摊进这个窗口
+        #expect(builder.measure(pid: pid, span: span(end: 60, elapsed: 2)) == nil)
+        #expect(builder.measure(pid: pid, span: span(end: 62, elapsed: 2)) != nil)
+        #expect(builder.measureDisk(pid: pid, span: span(end: 62, elapsed: 2)) == nil)
+        #expect(builder.measureDisk(pid: pid, span: span(end: 64, elapsed: 2)) != nil)
+        #expect(builder.measure(pid: pid, span: nil) == nil)
+    }
+
     @Test func summarySamplesReconstructPerLevelFrequency() throws {
         let ns: UInt64 = 2_000_000_000
         let window = AppActivityWindow(
@@ -181,9 +204,11 @@ struct AppActivityHardwareTests {
         let sampler = AppSampler()
         #expect(sampler.selfTest().isUsable)
         _ = sampler.sample(at: .now())
+        _ = sampler.sample(at: .now())
         let builder = TopNBuilder()
         let mine = try #require(CoalitionReader.coalition(ofPID: getpid()))
-        _ = builder.detail(coalitionID: mine, window: nil, footprints: nil, slotsTrusted: true)  // 成员 CPU 建立基线
+        // 成员 CPU 的基线记在第一个窗口上，紧接着的下一个窗口才出数
+        _ = builder.detail(coalitionID: mine, window: sampler.latestWindow, footprints: nil, slotsTrusted: true)
         let end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 300_000_000
         var x: UInt64 = 1
         while clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < end { x = x &* 3 &+ 1 }

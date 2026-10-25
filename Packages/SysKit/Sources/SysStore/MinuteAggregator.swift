@@ -32,17 +32,18 @@ public struct AppMinuteRow: Hashable, Sendable {
     public var cpuNanos: UInt64
     /// CPU 能耗（槽位 11）；这一分钟里有窗口的能耗槽不可信时为 nil。
     public var energyNanojoules: UInt64?
-    /// GPU 时间（纳秒）、GPU 能耗、ANE 能耗（nJ）、磁盘读 / 写（字节）、唤醒次数、footprint 峰值（字节）（D68）。
-    public var gpuNanos: UInt64 = 0
-    public var gpuEnergyNanojoules: UInt64 = 0
-    public var aneEnergyNanojoules: UInt64 = 0
+    /// GPU 时间（纳秒）、GPU 能耗、ANE 能耗（nJ）（D68）；与 CPU 能耗一样，辅助槽不可信时为 nil（D96、D98）。
+    public var gpuNanos: UInt64? = 0
+    public var gpuEnergyNanojoules: UInt64? = 0
+    public var aneEnergyNanojoules: UInt64? = 0
+    /// 磁盘读 / 写（字节）、唤醒次数、footprint 峰值（字节）（D68）。
     public var diskReadBytes: UInt64 = 0
     public var diskWrittenBytes: UInt64 = 0
     public var wakeups: UInt64 = 0
     public var footprintBytes: UInt64 = 0
 
-    /// CPU + GPU + ANE 能耗（CPU 能耗不可信时只算 GPU + ANE）。
-    var totalEnergy: UInt64 { (energyNanojoules ?? 0) &+ gpuEnergyNanojoules &+ aneEnergyNanojoules }
+    /// CPU + GPU + ANE 能耗，只算已知部分（选前 10 用）。
+    var totalEnergy: UInt64 { (energyNanojoules ?? 0) &+ (gpuEnergyNanojoules ?? 0) &+ (aneEnergyNanojoules ?? 0) }
 }
 
 extension AppIdentity {
@@ -107,7 +108,9 @@ public struct MinuteAggregator: Sendable {
         func row(minute: Int64, app: AppIdentity) -> AppMinuteRow {
             AppMinuteRow(
                 minute: minute, app: app, cpuNanos: cpuNanos, energyNanojoules: energyValid ? energyNanojoules : nil,
-                gpuNanos: gpuNanos, gpuEnergyNanojoules: gpuEnergyNanojoules, aneEnergyNanojoules: aneEnergyNanojoules,
+                // S4 不过时 GPU、ANE 辅助槽与 CPU 能耗一起记为空（D96、D98）。
+                gpuNanos: energyValid ? gpuNanos : nil, gpuEnergyNanojoules: energyValid ? gpuEnergyNanojoules : nil,
+                aneEnergyNanojoules: energyValid ? aneEnergyNanojoules : nil,
                 diskReadBytes: diskReadBytes, diskWrittenBytes: diskWrittenBytes, wakeups: wakeups, footprintBytes: footprintMax)
         }
 
@@ -254,7 +257,8 @@ public struct MinuteAggregator: Sendable {
     static func selectRows(minute: Int64, _ all: [AppMinuteRow]) -> [AppMinuteRow] {
         let candidates = all.filter { $0.app.key != AppIdentity.other.key }
         let columns: [(AppMinuteRow) -> UInt64] = [
-            \.cpuNanos, \.totalEnergy, \.gpuNanos, \.aneEnergyNanojoules, { $0.diskReadBytes &+ $0.diskWrittenBytes },
+            \.cpuNanos, \.totalEnergy, { $0.gpuNanos ?? 0 }, { $0.aneEnergyNanojoules ?? 0 },
+            { $0.diskReadBytes &+ $0.diskWrittenBytes },
             \.wakeups, \.footprintBytes,
         ]
         var keep = Set<String>()
@@ -267,19 +271,22 @@ public struct MinuteAggregator: Sendable {
             ?? AppMinuteRow(minute: minute, app: .other, cpuNanos: 0, energyNanojoules: 0)
         for row in candidates where !keep.contains(row.app.key) {
             other.cpuNanos &+= row.cpuNanos
-            other.energyNanojoules = other.energyNanojoules.flatMap { a in row.energyNanojoules.map { a &+ $0 } }
-            other.gpuNanos &+= row.gpuNanos
-            other.gpuEnergyNanojoules &+= row.gpuEnergyNanojoules
-            other.aneEnergyNanojoules &+= row.aneEnergyNanojoules
+            other.energyNanojoules = Self.sum(other.energyNanojoules, row.energyNanojoules)
+            other.gpuNanos = Self.sum(other.gpuNanos, row.gpuNanos)
+            other.gpuEnergyNanojoules = Self.sum(other.gpuEnergyNanojoules, row.gpuEnergyNanojoules)
+            other.aneEnergyNanojoules = Self.sum(other.aneEnergyNanojoules, row.aneEnergyNanojoules)
             other.diskReadBytes &+= row.diskReadBytes
             other.diskWrittenBytes &+= row.diskWrittenBytes
             other.wakeups &+= row.wakeups
             other.footprintBytes &+= row.footprintBytes
         }
         other.app = .other
-        let otherIdle = other.cpuNanos == 0 && other.gpuNanos == 0 && other.aneEnergyNanojoules == 0
+        let otherIdle = other.cpuNanos == 0 && (other.gpuNanos ?? 0) == 0 && (other.aneEnergyNanojoules ?? 0) == 0
             && other.diskReadBytes == 0 && other.diskWrittenBytes == 0 && other.wakeups == 0 && other.footprintBytes == 0
         if !otherIdle { out.append(other) }
         return out
     }
+
+    /// 两份都已知才相加，任一份为空结果就为空（D98）。
+    static func sum(_ a: UInt64?, _ b: UInt64?) -> UInt64? { a.flatMap { a in b.map { a &+ $0 } } }
 }

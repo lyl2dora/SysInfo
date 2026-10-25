@@ -11,7 +11,10 @@
 //   同 uid 成员用 `ri_diskio_bytesread/written` 差分拆分，外部成员归入残差（只在窗口内成员没有变化时才算，钳到 ≥0）；
 // - GPU（D57 G7）：按 coalition 槽位 8（GPU 时间）的窗口差分排序，附槽位 41（GPU 能耗）与 39（ANE 能耗）。
 //   没有按进程的公开 GPU 计数，成员只列名字不拆数值；按进程视图里多成员 coalition 保持一行；
-// - 名称按开机期间唯一 id 缓存（PROC_PIDUNIQIDENTIFIERINFO），pid 复用不会张冠李戴；
+// - 同 uid 成员的 CPU 与磁盘按 coalition 窗口差分：基线记在所属窗口上，只有上一次基线正好是紧邻的前一个窗口时
+//   才出数，分母用窗口长度，与 coalition 的值同口径（rusage 在组装时读，比扫描晚几毫秒，前后两端偏移相同）；
+//   跳过窗口、面板关了很久后重开时，这一轮只记基线；
+// - 名称按开机期间唯一 id 缓存（PROC_PIDUNIQIDENTIFIERINFO），pid 复用不会张冠李戴；缓存按存活的 pid 清理；
 // - 只为排在前面的 coalition 读成员和进程信息，扫描本身由 AppSampler 完成。
 
 import Darwin
@@ -86,13 +89,42 @@ public final class TopNBuilder: Sendable {
         public var path: String?
     }
 
+    /// 成员差分所属的 coalition 窗口。
+    struct MemberWindow {
+        /// 窗口结束（扫描）时的单调时钟纳秒。
+        var end: UInt64
+        var elapsed: UInt64
+        var start: UInt64 { end &- elapsed }
+
+        init(_ window: AppActivityWindow) {
+            end = window.time.monotonicNanos
+            elapsed = window.elapsedNanos
+        }
+    }
+
+    private struct MemberCPU {
+        var pid: pid_t
+        var ticks: UInt64
+        var windowEnd: UInt64
+        /// 这个窗口算出的值：同一个窗口再组装一次（面板重开时复用最近的窗口）时直接用它。
+        var rate: Double?
+    }
+
+    private struct MemberDisk {
+        var pid: pid_t
+        var read: UInt64
+        var written: UInt64
+        var windowEnd: UInt64
+        var rate: (read: Double, write: Double)?
+    }
+
     private struct State {
-        /// 唯一 id → 名称。
-        var names: [UInt64: NameInfo] = [:]
-        /// 唯一 id → (rusage CPU tick, 读取时的单调时钟纳秒)。
-        var memberCPU: [UInt64: (ticks: UInt64, nanos: UInt64)] = [:]
-        /// 唯一 id → (rusage 磁盘读、写字节, 读取时的单调时钟纳秒)。
-        var memberDisk: [UInt64: (read: UInt64, written: UInt64, nanos: UInt64)] = [:]
+        /// 唯一 id → 名称（连同 pid，清理用）。
+        var names: [UInt64: (pid: pid_t, info: NameInfo)] = [:]
+        /// 唯一 id → 上一次的 rusage CPU tick。
+        var memberCPU: [UInt64: MemberCPU] = [:]
+        /// 唯一 id → 上一次的 rusage 磁盘读、写字节。
+        var memberDisk: [UInt64: MemberDisk] = [:]
     }
 
     private let state = Mutex(State())
@@ -108,14 +140,14 @@ public final class TopNBuilder: Sendable {
         guard rows > 0 else { return [] }
         let table = ProcessTable.snapshot()
         let elapsed = Double(window.elapsedNanos)
-        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let span = MemberWindow(window)
         // 按进程视图里一个多成员 coalition 会拆成多行，所以多看一些 coalition。
         let candidates = window.coalitions.prefix(grouping == .byApp ? rows : rows * 3)
         var out: [TopNRow] = []
         for delta in candidates where delta.cpuNanos > 0 {
             let pids = CoalitionReader.members(of: delta.id, tasksHint: Int(delta.tasks)) ?? []
             let row = coalitionRow(
-                delta, pids: pids, table: table, elapsed: elapsed, now: now, showPerfLevel0: showPerfLevel0,
+                delta, pids: pids, table: table, elapsed: elapsed, span: span, showPerfLevel0: showPerfLevel0,
                 slotsTrusted: slotsTrusted)
             switch grouping {
             case .byApp:
@@ -130,7 +162,7 @@ public final class TopNBuilder: Sendable {
     }
 
     private func coalitionRow(
-        _ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double, now: UInt64,
+        _ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double, span: MemberWindow,
         showPerfLevel0: Bool, slotsTrusted: Bool
     ) -> TopNRow {
         let ownUID = getuid()
@@ -143,7 +175,7 @@ public final class TopNBuilder: Sendable {
         var sameUIDCPU = 0.0
         var allMeasured = true
         for (entry, info) in infos where entry.uid == ownUID {
-            let memberCPU = measure(pid: entry.pid, now: now)
+            let memberCPU = measure(pid: entry.pid, span: span)
             if let memberCPU { sameUIDCPU += memberCPU } else { allMeasured = false }
             members.append(
                 TopNMember(
@@ -295,14 +327,14 @@ public final class TopNBuilder: Sendable {
         let table = ProcessTable.snapshot()
         let elapsed = Double(window.elapsedNanos)
         guard elapsed > 0 else { return [] }
-        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let span = MemberWindow(window)
         let sorted = window.coalitions
             .filter { $0.diskReadBytes > 0 || $0.diskWrittenBytes > 0 }
             .sorted { $0.diskReadBytes &+ $0.diskWrittenBytes > $1.diskReadBytes &+ $1.diskWrittenBytes }
         var out: [TopNRow] = []
         for delta in sorted.prefix(grouping == .byApp ? rows : rows * 3) {
             let pids = CoalitionReader.members(of: delta.id, tasksHint: Int(delta.tasks)) ?? []
-            let row = diskRow(delta, pids: pids, table: table, elapsed: elapsed, now: now)
+            let row = diskRow(delta, pids: pids, table: table, elapsed: elapsed, span: span)
             switch grouping {
             case .byApp: out.append(row)
             case .byProcess: out.append(contentsOf: diskProcessRows(from: row))
@@ -314,7 +346,7 @@ public final class TopNBuilder: Sendable {
     }
 
     private func diskRow(
-        _ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double, now: UInt64
+        _ delta: CoalitionDelta, pids: [pid_t], table: [pid_t: ProcessEntry], elapsed: Double, span: MemberWindow
     ) -> TopNRow {
         let ownUID = getuid()
         let entries = pids.compactMap { table[$0] }
@@ -328,7 +360,7 @@ public final class TopNBuilder: Sendable {
         var sameWrite = 0.0
         var allMeasured = true
         for (entry, info) in infos where entry.uid == ownUID {
-            let io = measureDisk(pid: entry.pid, now: now)
+            let io = measureDisk(pid: entry.pid, span: span)
             if let io {
                 sameRead += io.read
                 sameWrite += io.write
@@ -393,17 +425,23 @@ public final class TopNBuilder: Sendable {
         return out
     }
 
-    /// 同 uid 成员在两次 build 之间的磁盘读写（B/s）；第一次见到时只记基线。
-    private func measureDisk(pid: pid_t, now: UInt64) -> (read: Double, write: Double)? {
-        guard let unique = ProcessPrivateInfo.uniqueID(of: pid), let r = ProcessInfoReader.rusage(of: pid) else { return nil }
+    /// 同 uid 成员在这个窗口里的磁盘读写（B/s）；上一次基线不是紧邻的前一个窗口时只记基线。
+    func measureDisk(pid: pid_t, span: MemberWindow?) -> (read: Double, write: Double)? {
+        guard let span, span.elapsed > 0, let unique = ProcessPrivateInfo.uniqueID(of: pid),
+            let r = ProcessInfoReader.rusage(of: pid)
+        else { return nil }
         let read = r.ri_diskio_bytesread
         let written = r.ri_diskio_byteswritten
         return state.withLock { s in
-            defer { s.memberDisk[unique] = (read, written, now) }
-            guard let previous = s.memberDisk[unique], now > previous.nanos, read >= previous.read, written >= previous.written
-            else { return nil }
-            let seconds = Double(now - previous.nanos) / 1e9
-            return (Double(read - previous.read) / seconds, Double(written - previous.written) / seconds)
+            let previous = s.memberDisk[unique]
+            if let previous, previous.windowEnd == span.end { return previous.rate }
+            var rate: (read: Double, write: Double)?
+            if let previous, previous.windowEnd == span.start, read >= previous.read, written >= previous.written {
+                let seconds = Double(span.elapsed) / 1e9
+                rate = (Double(read - previous.read) / seconds, Double(written - previous.written) / seconds)
+            }
+            s.memberDisk[unique] = MemberDisk(pid: pid, read: read, written: written, windowEnd: span.end, rate: rate)
+            return rate
         }
     }
 
@@ -474,17 +512,17 @@ public final class TopNBuilder: Sendable {
         let hint = Int(delta?.tasks ?? footprint?.tasks ?? 0)
         guard let pids = CoalitionReader.members(of: coalitionID, tasksHint: hint), !pids.isEmpty else { return nil }
         let table = ProcessTable.snapshot()
-        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let span = window.map(MemberWindow.init)
         let ownUID = getuid()
         let entries = pids.compactMap { table[$0] }
         let infos: [(ProcessEntry, NameInfo)] = entries.map { ($0, name(of: $0)) }
         let representative = Self.representative(infos)
         var members: [TopNMember] = []
         for (entry, info) in infos where entry.uid == ownUID {
-            let disk = measureDisk(pid: entry.pid, now: now)
+            let disk = measureDisk(pid: entry.pid, span: span)
             members.append(
                 TopNMember(
-                    pid: entry.pid, name: info.name, path: info.path, cpu: measure(pid: entry.pid, now: now),
+                    pid: entry.pid, name: info.name, path: info.path, cpu: measure(pid: entry.pid, span: span),
                     eligibility: ProcessControl.eligibility(uid: entry.uid, pid: entry.pid),
                     footprint: ProcessInfoReader.rusage(of: entry.pid)?.ri_phys_footprint, diskRead: disk?.read,
                     diskWrite: disk?.write))
@@ -516,10 +554,10 @@ public final class TopNBuilder: Sendable {
 
     private func name(of entry: ProcessEntry) -> NameInfo {
         let unique = ProcessPrivateInfo.uniqueID(of: entry.pid)
-        if let unique, let hit = state.withLock({ $0.names[unique] }) { return hit }
+        if let unique, let hit = state.withLock({ $0.names[unique] }) { return hit.info }
         let path = ProcessInfoReader.path(of: entry.pid)
         let info = Self.resolveName(path: path, command: entry.command, pid: entry.pid)
-        if let unique { state.withLock { $0.names[unique] = info } }
+        if let unique { state.withLock { $0.names[unique] = (entry.pid, info) } }
         return info
     }
 
@@ -544,26 +582,30 @@ public final class TopNBuilder: Sendable {
         return String(path[..<range.lowerBound]) + ".app"
     }
 
-    /// 同 uid 成员在两次 build 之间的 CPU（按单核比例）；第一次见到时只记基线。
-    private func measure(pid: pid_t, now: UInt64) -> Double? {
-        guard let unique = ProcessPrivateInfo.uniqueID(of: pid), let r = ProcessInfoReader.rusage(of: pid),
-            let timebase = MachTimebase.current
+    /// 同 uid 成员在这个窗口里的 CPU（按单核比例）；上一次基线不是紧邻的前一个窗口时只记基线。
+    func measure(pid: pid_t, span: MemberWindow?) -> Double? {
+        guard let span, span.elapsed > 0, let unique = ProcessPrivateInfo.uniqueID(of: pid),
+            let r = ProcessInfoReader.rusage(of: pid), let timebase = MachTimebase.current
         else { return nil }
         let ticks = r.ri_user_time + r.ri_system_time
         return state.withLock { s in
-            defer { s.memberCPU[unique] = (ticks, now) }
-            guard let previous = s.memberCPU[unique], now > previous.nanos, ticks >= previous.ticks else { return nil }
-            return Double(timebase.nanoseconds(fromTicks: ticks - previous.ticks)) / Double(now - previous.nanos)
+            let previous = s.memberCPU[unique]
+            if let previous, previous.windowEnd == span.end { return previous.rate }
+            var rate: Double?
+            if let previous, previous.windowEnd == span.start, ticks >= previous.ticks {
+                rate = Double(timebase.nanoseconds(fromTicks: ticks - previous.ticks)) / Double(span.elapsed)
+            }
+            s.memberCPU[unique] = MemberCPU(pid: pid, ticks: ticks, windowEnd: span.end, rate: rate)
+            return rate
         }
     }
 
-    /// 只保留还活着的进程的缓存（按 pid 粗略判断，唯一 id 缓存随之变小）。
+    /// 只保留还活着的进程的缓存（唯一 id 作键，按记下的 pid 判断存活）。
     private func pruneCaches(alive: Set<pid_t>) {
         state.withLock { s in
-            if s.names.count > 4096 { s.names.removeAll(keepingCapacity: true) }
-            if s.memberCPU.count > 4096 { s.memberCPU.removeAll(keepingCapacity: true) }
-            if s.memberDisk.count > 4096 { s.memberDisk.removeAll(keepingCapacity: true) }
+            s.names = s.names.filter { alive.contains($0.value.pid) }
+            s.memberCPU = s.memberCPU.filter { alive.contains($0.value.pid) }
+            s.memberDisk = s.memberDisk.filter { alive.contains($0.value.pid) }
         }
-        _ = alive
     }
 }

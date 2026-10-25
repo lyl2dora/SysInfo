@@ -406,6 +406,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         updateNetworkDemands(visible: visible && state.selectedTab == .network)
         updateDevicesDemands(visible: visible && state.selectedTab == .devices)
         let cpuVisible = visible && state.selectedTab == .cpu
+        services.setInterruptSourcesAllowed(cpuVisible)
         guard cpuVisible else {
             [usageDemand, frequencyDemand, topNDemand].forEach { $0.set(nil) }
             if !powerVisible { sensorDemand.set(nil) }
@@ -535,6 +536,7 @@ final class PanelController: NSObject, NSStatusItemExpandedInterfaceDelegate {
         }
         networkDemand.set(Demand(collectors: [NetworkIOCollector.collectorID], interval: 1, source: .panel))
         // Wi-Fi 卡片只在有活跃 Wi-Fi 接口时出现；CoreWLAN 只在这时读（D10）。
+        // Wi-Fi 开关、关联变化时 NetworkModel 会触发重算。
         let hasWiFi = services.networkModel.state.activeWiFi != nil || services.networkModel.state.interfaces.isEmpty
         wifiDemand.set(hasWiFi ? Demand(collectors: [WiFiCollector.collectorID], interval: 5, source: .panel) : nil)
         latencyDemand.set(

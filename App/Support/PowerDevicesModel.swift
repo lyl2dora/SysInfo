@@ -28,7 +28,8 @@ final class PowerDevicesModel {
     /// 本机有没有 UPS 或内置电池，去抖后（出现立刻为真，消失 10 s 后才为假）。
     /// 电源设备 widget 的开关用户没动过时按它定（D89）。启动时第一份快照直接定值，不等去抖。
     private(set) var hasUPSOrBattery = false
-    /// 设备的有无变了（第一台出现或最后一台消失，或去抖后的 UPS / 电池有无变了）：面板切换器、widget 开关与绑定要更新。
+    /// 设备的有无变了（第一台出现或最后一台消失，或去抖后的 UPS / 电池有无变了），或 UPS 的有无变了：
+    /// 面板切换器、widget 开关与绑定、电源设备 tab 的 UPS 需求要更新。
     @ObservationIgnored var onPresenceChange: (() -> Void)?
     @ObservationIgnored private var observation: PowerSourceMonitor.Observation?
     @ObservationIgnored private var presence: PresenceLatch?
@@ -48,10 +49,13 @@ final class PowerDevicesModel {
 
     private func apply(_ snapshot: PowerDeviceSnapshot) {
         let hadDevices = !self.snapshot.devices.isEmpty
+        let hadUPS = self.snapshot.primaryUPS != nil
         let changed = snapshot.devices != self.snapshot.devices || snapshot.accessoriesAvailable != self.snapshot.accessoriesAvailable
         if changed { self.snapshot = snapshot }
         let presenceChanged = updatePresence()
-        if (changed && hadDevices != !snapshot.devices.isEmpty) || presenceChanged { onPresenceChange?() }
+        // 已有内置电池时插上 UPS，去抖后的「UPS 或电池」不变，但 UPS 的 HID 需求要登记。
+        let upsChanged = changed && hadUPS != (snapshot.primaryUPS != nil)
+        if (changed && hadDevices != !snapshot.devices.isEmpty) || presenceChanged || upsChanged { onPresenceChange?() }
     }
 
     /// 把当前快照喂给去抖；还在等消失确认时排一个到点的复查。返回去抖后的值是否变了。

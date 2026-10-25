@@ -219,6 +219,11 @@ let sensors = SensorCollector.collectorID
         #expect(apps.count == 1)
         #expect(apps[0].cpuNanos == 200)
         #expect(apps[0].energyNanojoules == nil)
+        // GPU、ANE 辅助槽与 CPU 能耗一起记为空（D96、D98），磁盘、唤醒照常
+        #expect(apps[0].gpuNanos == nil)
+        #expect(apps[0].gpuEnergyNanojoules == nil)
+        #expect(apps[0].aneEnergyNanojoules == nil)
+        #expect(apps[0].wakeups == 0)
     }
 
     @Test func nextFlushIsOneMinuteAfterAFiveMinuteBoundary() {

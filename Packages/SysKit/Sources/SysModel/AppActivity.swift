@@ -38,6 +38,19 @@ public enum AppActivityRange: String, Hashable, Codable, Sendable, CaseIterable 
 }
 
 /// 一个应用在应用活动表格里的一行。
+/// 历史时段里只合计了部分分钟的列：有的分钟没有可信值（S4 不过，或 v3 之前没记），只计已知部分（D98）。
+public struct AppHistoryPartial: OptionSet, Hashable, Sendable {
+    public let rawValue: UInt8
+    public init(rawValue: UInt8) { self.rawValue = rawValue }
+
+    public static let gpuTime = AppHistoryPartial(rawValue: 1 << 0)
+    public static let ane = AppHistoryPartial(rawValue: 1 << 1)
+    public static let diskRead = AppHistoryPartial(rawValue: 1 << 2)
+    public static let diskWrite = AppHistoryPartial(rawValue: 1 << 3)
+    public static let wakeups = AppHistoryPartial(rawValue: 1 << 4)
+    public static let footprint = AppHistoryPartial(rawValue: 1 << 5)
+}
+
 public struct AppActivityRow: Hashable, Sendable, Identifiable {
     /// 「现在」档为 `c<coalition id>`，历史时段为应用身份键。
     public var id: String
@@ -87,8 +100,10 @@ public struct AppActivityRow: Hashable, Sendable, Identifiable {
     public var aneJoules: Double?
     /// 时段内有记录的分钟数（应用活跃的分钟）。
     public var activeMinutes: Int?
-    /// 能耗只合计了已知的分钟（有分钟的槽位核对未通过），偏低。
+    /// 能耗只合计了已知的分钟（有分钟的槽位核对未通过，或旧版本没记 GPU、ANE），偏低。
     public var energyPartial: Bool
+    /// 历史时段里其余只合计了部分分钟的列（D98）。
+    public var historyPartial: AppHistoryPartial
     /// 时段内阻止睡眠（含显示器睡眠）的时长，秒（D69，断言区间的并集按条累加，同一时刻多条会重复计）。
     public var sleepPreventionSeconds: Double?
 
@@ -101,10 +116,11 @@ public struct AppActivityRow: Hashable, Sendable, Identifiable {
         cpuTimeNanos: UInt64? = nil, watts: Double? = nil, gpuShare: Double? = nil, aneWatts: Double? = nil,
         diskRead: Double? = nil, diskWrite: Double? = nil, wakeups: Double? = nil, pageins: Double? = nil,
         perfLevel0Share: Double? = nil, footprint: UInt64? = nil, energyJoules: Double? = nil, gpuTimeNanos: UInt64? = nil,
-        aneJoules: Double? = nil, activeMinutes: Int? = nil, energyPartial: Bool = false, sleepPreventionSeconds: Double? = nil,
-        assertions: [PowerAssertion] = []
+        aneJoules: Double? = nil, activeMinutes: Int? = nil, energyPartial: Bool = false,
+        historyPartial: AppHistoryPartial = [], sleepPreventionSeconds: Double? = nil, assertions: [PowerAssertion] = []
     ) {
         self.energyPartial = energyPartial
+        self.historyPartial = historyPartial
         self.sleepPreventionSeconds = sleepPreventionSeconds
         self.id = id
         self.key = key

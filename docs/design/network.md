@@ -226,7 +226,7 @@ public struct NetworkState {
 ### 5.3 `network.wifi`（inline，只在面板 Wi-Fi 卡片可见时有需求，5 s，D60 N5）
 - 懒创建 `CWWiFiClient`（首次 2–4 ms），读当前接口的 RSSI、噪声、发送速率、信道、PHY、发送功率（只进诊断页原值）。不读 SSID / BSSID。
 - 接口关闭或未关联（RSSI 为 0）时样本 unavailable(`notAssociated`)。
-- 自检：有 Wi-Fi 接口（提示：没有 Wi-Fi 的机器不算失败）。
+- 自检：有 Wi-Fi 接口（提示：没有 Wi-Fi 的机器不算失败）。用 SystemConfiguration 枚举 IEEE80211 接口，不调用 CoreWLAN（D99）。
 
 ### 5.4 `network.latency`（inline，只在延迟开启、且网络面板可见或延迟 widget 打开时有需求，D61）
 - 目标由 app 设置：网关（来自清单）与 / 或自定义地址（IP 字面量或主机名，主机名在目标变化时与每 10 分钟用 `getaddrinfo` 解析一次）。
