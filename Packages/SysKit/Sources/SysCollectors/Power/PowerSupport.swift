@@ -8,44 +8,77 @@ import SysModel
 // MARK: - 遥测
 
 /// 读 `AppleSmartBattery.PowerTelemetryData`（未文档的 IORegistry 属性，只读，0.15–0.23 ms/次）。
-/// 台式机上也有这个服务（`BatteryInstalled = No`），不能据此判断有无电池（调研报告 §1.7）。
+/// 台式机上也有这个服务（`BatteryInstalled = No`），不能据服务是否存在判断有无电池（调研报告 §1.7），要看这个属性。
 public final class TelemetryReader: Sendable {
-    private let service = Mutex<io_service_t>(0)
+    private struct State {
+        var service: io_service_t = 0
+        var batteryInstalled: Bool?
+
+        /// 找到服务时返回 true。
+        mutating func openService() -> Bool {
+            if service == 0 { service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery")) }
+            return service != 0
+        }
+
+        /// 有没有内置电池（硬件属性，读到一次就不再读）。服务不存在时为 false。
+        mutating func resolveBatteryInstalled() -> Bool {
+            if let batteryInstalled { return batteryInstalled }
+            guard openService() else { return false }
+            let raw = IORegistryEntryCreateCFProperty(service, "BatteryInstalled" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue()
+            let installed = (raw as? Bool) ?? false
+            batteryInstalled = installed
+            return installed
+        }
+    }
+
+    private let state = Mutex(State())
 
     public init() {}
 
     deinit {
-        service.withLock { s in
-            if s != 0 { IOObjectRelease(s) }
+        state.withLock { s in
+            if s.service != 0 { IOObjectRelease(s.service) }
         }
     }
 
+    /// 这台机器有没有内置电池（`BatteryInstalled`，D107）。
+    public var batteryInstalled: Bool { state.withLock { $0.resolveBatteryInstalled() } }
+
     /// 读一次；服务或属性不存在时为 nil。
     public func read(at date: Date = Date()) -> PowerTelemetryReading? {
-        service.withLock { s -> PowerTelemetryReading? in
-            if s == 0 { s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery")) }
-            guard s != 0,
-                let raw = IORegistryEntryCreateCFProperty(s, "PowerTelemetryData" as CFString, kCFAllocatorDefault, 0)?
+        state.withLock { s -> PowerTelemetryReading? in
+            let batteryInstalled = s.resolveBatteryInstalled()
+            guard s.openService(),
+                let raw = IORegistryEntryCreateCFProperty(s.service, "PowerTelemetryData" as CFString, kCFAllocatorDefault, 0)?
                     .takeRetainedValue(),
                 let dict = raw as? [String: Any]
             else { return nil }
-            func int(_ key: String) -> Int64? { (dict[key] as? NSNumber)?.int64Value }
-            guard let power = int("AccumulatedSystemPowerIn"), let count = int("SystemPowerInAccumulatorCount") else {
-                return nil
-            }
-            return PowerTelemetryReading(
-                accumulatedSystemPowerIn: power, accumulatorCount: count,
-                accumulatedWallEnergy: int("AccumulatedWallEnergyEstimate") ?? 0, wallClock: date)
+            return TelemetryMath.parse(dict, batteryInstalled: batteryInstalled, at: date)
         }
     }
 }
 
 /// 遥测换算（纯函数，单测覆盖）。
 public enum TelemetryMath {
-    /// 两次读数之间的遥测均值，W（ΔAccumulatedSystemPowerIn 是毫焦，Δcount 约等于秒数）。
+    /// 按有无内置电池取能量累加器（D107）：有电池时取整机负载，否则取电源输入。
+    /// 有电池却缺 `AccumulatedSystemLoad` 时为 nil，不退回电源输入（电池供电时它接近 0，会把能耗算错）。
+    public static func parse(_ dict: [String: Any], batteryInstalled: Bool, at date: Date) -> PowerTelemetryReading? {
+        func int(_ key: String) -> Int64? { (dict[key] as? NSNumber)?.int64Value }
+        let source: TelemetryEnergySource = batteryInstalled ? .systemLoad : .systemPowerIn
+        let (energyKey, countKey) =
+            batteryInstalled
+            ? ("AccumulatedSystemLoad", "SystemLoadAccumulatorCount") : ("AccumulatedSystemPowerIn", "SystemPowerInAccumulatorCount")
+        guard let energy = int(energyKey), let count = int(countKey) else { return nil }
+        return PowerTelemetryReading(
+            accumulatedSystemEnergy: energy, energySource: source, accumulatorCount: count,
+            accumulatedWallEnergy: int("AccumulatedWallEnergyEstimate") ?? 0, wallClock: date)
+    }
+
+    /// 两次读数之间的遥测均值，W（能量累加器的差是毫焦，Δcount 约等于秒数）。
     public static func meanWatts(from a: PowerTelemetryReading, to b: PowerTelemetryReading) -> Double? {
         let count = b.accumulatorCount - a.accumulatorCount
-        let energy = b.accumulatedSystemPowerIn - a.accumulatedSystemPowerIn
+        let energy = b.accumulatedSystemEnergy - a.accumulatedSystemEnergy
         guard count > 0, energy >= 0 else { return nil }
         return Double(energy) / 1000 / Double(count)
     }
@@ -298,6 +331,15 @@ enum PowerProfiles {
     static let fallback = SystemProfile(
         systemPowerKey: "PDTR", socPowerKey: "PZC0", socInputPowerKey: "PHPC", dramPowerKey: "PZD1", hotspotKey: nil,
         hotspotNote: nil, pmgrComponents: [:], catalogGroups: [:], placeholders: [])
+
+    /// 有内置电池的机器读的整机功率键（D107）：`PDTR` 只是电源输入，电池供电时接近 0。
+    static let batterySystemPowerKey = "PSTR"
+
+    /// 选整机功率键。有电池时不算来自档案（档案是在台式机上校准的）：先标 inferred，遥测对账一致后才升为 measured。
+    static func systemPowerKey(system: SystemProfile?, batteryInstalled: Bool) -> (key: String, fromProfile: Bool) {
+        if batteryInstalled { return (batterySystemPowerKey, false) }
+        return (system?.systemPowerKey ?? fallback.systemPowerKey, system != nil)
+    }
 }
 
 extension SMCReader {

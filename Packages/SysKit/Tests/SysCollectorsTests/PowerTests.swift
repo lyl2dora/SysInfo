@@ -7,7 +7,7 @@ import Testing
 
 private func reading(_ energyMilliJ: Int64, _ count: Int64, wall: Int64 = 0, at seconds: Double) -> PowerTelemetryReading {
     PowerTelemetryReading(
-        accumulatedSystemPowerIn: energyMilliJ, accumulatorCount: count, accumulatedWallEnergy: wall,
+        accumulatedSystemEnergy: energyMilliJ, accumulatorCount: count, accumulatedWallEnergy: wall,
         wallClock: Date(timeIntervalSince1970: seconds))
 }
 
@@ -21,6 +21,43 @@ private func reading(_ energyMilliJ: Int64, _ count: Int64, wall: Int64 = 0, at 
         // 计数不前进或能量倒退时没有数值
         #expect(TelemetryMath.meanWatts(from: b, to: b) == nil)
         #expect(TelemetryMath.meanWatts(from: b, to: reading(1_000, 200, at: 120)) == nil)
+    }
+
+    @Test func accumulatorFollowsBatteryPresence() throws {
+        // 取自带电池的机器由电池供电时的实测（D107）：电源输入约为 0，整机负载才是真实功耗。
+        let dict: [String: Any] = [
+            "AccumulatedSystemPowerIn": NSNumber(value: 43_611_685), "SystemPowerInAccumulatorCount": NSNumber(value: 6251),
+            "AccumulatedSystemLoad": NSNumber(value: 89_273_373), "SystemLoadAccumulatorCount": NSNumber(value: 6252),
+            "AccumulatedWallEnergyEstimate": NSNumber(value: 13_305_870),
+        ]
+        let date = Date(timeIntervalSince1970: 100)
+        let battery = try #require(TelemetryMath.parse(dict, batteryInstalled: true, at: date))
+        #expect(battery.accumulatedSystemEnergy == 89_273_373)
+        #expect(battery.accumulatorCount == 6252)
+        #expect(battery.energySource == .systemLoad)
+        let desktop = try #require(TelemetryMath.parse(dict, batteryInstalled: false, at: date))
+        #expect(desktop.accumulatedSystemEnergy == 43_611_685)
+        #expect(desktop.accumulatorCount == 6251)
+        #expect(desktop.energySource == .systemPowerIn)
+        // 有电池却没有整机负载：不退回电源输入
+        var partial = dict
+        partial["AccumulatedSystemLoad"] = nil
+        #expect(TelemetryMath.parse(partial, batteryInstalled: true, at: date) == nil)
+        #expect(TelemetryMath.parse(partial, batteryInstalled: false, at: date) != nil)
+    }
+
+    @Test func systemPowerKeyFollowsBatteryPresence() {
+        // 有电池：PSTR，不算来自档案（要经遥测对账才升为 measured）
+        let battery = PowerProfiles.systemPowerKey(system: PowerProfiles.fallback, batteryInstalled: true)
+        #expect(battery.key == "PSTR")
+        #expect(!battery.fromProfile)
+        // 台式机：行为不变
+        let desktop = PowerProfiles.systemPowerKey(system: PowerProfiles.fallback, batteryInstalled: false)
+        #expect(desktop.key == "PDTR")
+        #expect(desktop.fromProfile)
+        let unknown = PowerProfiles.systemPowerKey(system: nil, batteryInstalled: false)
+        #expect(unknown.key == "PDTR")
+        #expect(!unknown.fromProfile)
     }
 
     @Test func droppedSegmentIsFlagged() {

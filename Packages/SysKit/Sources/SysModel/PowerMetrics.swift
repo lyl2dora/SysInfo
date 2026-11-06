@@ -3,7 +3,7 @@
 import Foundation
 
 extension MetricID {
-    /// 整机直流功率，W（SMC `PDTR`，1 Hz 实时）。
+    /// 整机功率，W（SMC，1 Hz 实时）：台式机读 `PDTR`，有内置电池的机器读 `PSTR`（D107）。
     public static let powerSystem: MetricID = "power.system"
     /// 墙插功率，W：`PowerTelemetryData` 每 60 s 的估算值（= 1.035 × 直流 + 1.6 W 的公式，D46），质量为 estimated。
     public static let powerWall: MetricID = "power.wall"
@@ -40,28 +40,51 @@ extension MetricID {
     }
 }
 
+/// 遥测能量累加器的来源（D107）。
+public enum TelemetryEnergySource: String, Hashable, Sendable, Codable {
+    /// `AccumulatedSystemPowerIn`：电源输入。台式机上等于整机功耗；笔记本由电池供电时接近 0。
+    case systemPowerIn
+    /// `AccumulatedSystemLoad`：整机负载，不论由电源还是电池供电。用于有内置电池的机器。
+    case systemLoad
+}
+
 /// `AppleSmartBattery.PowerTelemetryData` 的一次读数（未文档键，只读）。
 ///
 /// 累加器跨 app 重启保留、从开机起算；但满载约 73 W 以上时会整分钟漏记（D46），所以只用来补 app 没运行的时段。
 public struct PowerTelemetryReading: Hashable, Sendable, Codable {
-    /// `AccumulatedSystemPowerIn`，毫焦。
-    public var accumulatedSystemPowerIn: Int64
-    /// `SystemPowerInAccumulatorCount`：约每秒加一，每 60 s 发布一次。
+    /// 能量累加器的值，毫焦；含义见 `energySource`。
+    public var accumulatedSystemEnergy: Int64
+    /// `accumulatedSystemEnergy` 的来源。旧版本写下的锚点没有这个字段（nil），当时只有 `systemPowerIn`。
+    public var energySource: TelemetryEnergySource?
+    /// 与能量累加器配对的计数：约每秒加一，每 60 s 发布一次。
     public var accumulatorCount: Int64
     /// `AccumulatedWallEnergyEstimate`，微瓦时（× 3.6 / 1000 得焦耳）。
     public var accumulatedWallEnergy: Int64
     /// 读到它的墙钟时刻。
     public var wallClock: Date
 
-    public init(accumulatedSystemPowerIn: Int64, accumulatorCount: Int64, accumulatedWallEnergy: Int64, wallClock: Date) {
-        self.accumulatedSystemPowerIn = accumulatedSystemPowerIn
+    /// JSON 键沿用旧名，旧版本写下的能耗锚点才解得开。
+    private enum CodingKeys: String, CodingKey {
+        case accumulatedSystemEnergy = "accumulatedSystemPowerIn"
+        case energySource, accumulatorCount, accumulatedWallEnergy, wallClock
+    }
+
+    public init(
+        accumulatedSystemEnergy: Int64, energySource: TelemetryEnergySource = .systemPowerIn, accumulatorCount: Int64,
+        accumulatedWallEnergy: Int64, wallClock: Date
+    ) {
+        self.accumulatedSystemEnergy = accumulatedSystemEnergy
+        self.energySource = energySource
         self.accumulatorCount = accumulatorCount
         self.accumulatedWallEnergy = accumulatedWallEnergy
         self.wallClock = wallClock
     }
+
+    /// 实际来源：没有标记的旧读数是 `systemPowerIn`。
+    public var resolvedEnergySource: TelemetryEnergySource { energySource ?? .systemPowerIn }
 }
 
-/// 遥测一次发布（计数器变化）与同期 PDTR 积分的对账结果（诊断页，D46）。
+/// 遥测一次发布（计数器变化）与同期整机功率积分的对账结果（诊断页，D46）。
 public struct TelemetrySegment: Hashable, Sendable, Codable {
     /// 本段结束（检测到计数变化）的墙钟时刻。
     public var end: Date

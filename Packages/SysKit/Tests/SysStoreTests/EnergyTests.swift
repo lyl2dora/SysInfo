@@ -11,9 +11,11 @@ private func t(_ seconds: Double, wall: Double) -> SampleTime {
     SampleTime(monotonicNanos: UInt64(seconds * 1e9), wallClock: Date(timeIntervalSince1970: wall))
 }
 
-private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReading {
+private func reading(
+    _ milliJ: Int64, at seconds: Double, source: TelemetryEnergySource = .systemPowerIn
+) -> PowerTelemetryReading {
     PowerTelemetryReading(
-        accumulatedSystemPowerIn: milliJ, accumulatorCount: 0, accumulatedWallEnergy: 0,
+        accumulatedSystemEnergy: milliJ, energySource: source, accumulatorCount: 0, accumulatedWallEnergy: 0,
         wallClock: Date(timeIntervalSince1970: seconds))
 }
 
@@ -96,6 +98,32 @@ private func reading(_ milliJ: Int64, at seconds: Double) -> PowerTelemetryReadi
         let legacy = try JSONDecoder().decode(EnergyAnchor.self, from: JSONSerialization.data(withJSONObject: object))
         #expect(legacy.bootSessionUUID == nil)
         #expect(legacy.bootTime == boot)
+    }
+
+    @Test func anchorFromAnotherAccumulatorIsNotSubtracted() throws {
+        // 升级前的锚点是电源输入累加器，现在读的是整机负载（D107）：同一次开机内不可相减，这段不补。
+        let anchor = EnergyAnchor(telemetry: reading(1_000_000, at: 1_010_000), boot: session)
+        let now = reading(90_000_000, at: 1_013_600, source: .systemLoad)
+        #expect(EnergyGap.fill(anchor: anchor, now: now, boot: session) == nil)
+        // 同一来源照常补
+        let sameSource = EnergyAnchor(telemetry: reading(89_000_000, at: 1_010_000, source: .systemLoad), boot: session)
+        #expect(try #require(EnergyGap.fill(anchor: sameSource, now: now, boot: session)).joules == 1000)
+        // 开机变了：累加器从开机起算，与锚点无关
+        let otherBoot = BootSession(time: boot.addingTimeInterval(1000), uuid: nil)
+        #expect(try #require(EnergyGap.fill(anchor: anchor, now: now, boot: otherBoot)).joules == 90_000)
+    }
+
+    @Test func legacyReadingDecodesAsSystemPowerIn() throws {
+        // 旧版本的锚点：键名是 accumulatedSystemPowerIn，没有 energySource
+        let json = #"{"accumulatedSystemPowerIn":5000,"accumulatorCount":7,"accumulatedWallEnergy":0,"wallClock":0}"#
+        let decoded = try JSONDecoder().decode(PowerTelemetryReading.self, from: Data(json.utf8))
+        #expect(decoded.accumulatedSystemEnergy == 5000)
+        #expect(decoded.energySource == nil)
+        #expect(decoded.resolvedEnergySource == .systemPowerIn)
+        // 新读数往返后保留来源
+        let new = reading(5000, at: 100, source: .systemLoad)
+        let roundTrip = try JSONDecoder().decode(PowerTelemetryReading.self, from: JSONEncoder().encode(new))
+        #expect(roundTrip.resolvedEnergySource == .systemLoad)
     }
 
     @Test func shortOrBackwardGapsAreSkipped() {

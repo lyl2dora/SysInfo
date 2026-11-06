@@ -1,6 +1,6 @@
 // 整机能耗（功耗与散热模块设计 §5，D46）：
 //
-// - EnergyIntegrator：对 `power.system`（PDTR）做矩形积分。一个样本覆盖到上一个样本，单样本最多 1.05 s，
+// - EnergyIntegrator：对 `power.system`（台式机 PDTR、有电池的机器 PSTR，D107）做矩形积分。一个样本覆盖到上一个样本，单样本最多 1.05 s，
 //   超出部分不外推；唤醒后第一个样本丢弃。按 UTC 分钟累加焦耳数与覆盖秒数；
 // - EnergyGap：app 没运行的时段，用 `PowerTelemetryData` 累加器的差值补上（同一次开机比锚点；开机变了从开机算起），
 //   按时长均摊进所跨的分钟（系统累计：累加器在满载时会漏记，可能偏低）；
@@ -15,13 +15,13 @@ import SysModel
 public struct EnergyMinuteRow: Hashable, Sendable {
     public var minute: Int64
     public var joules: Double
-    /// 有 PDTR 样本覆盖的秒数（≤60；不足说明这一分钟有缺口）。
+    /// 有整机功率样本覆盖的秒数（≤60；不足说明这一分钟有缺口）。
     public var covered: Double
 }
 
 /// 能耗汇总（面板「能耗」卡片）。
 public struct EnergySummary: Hashable, Sendable {
-    /// PDTR 积分的焦耳数。
+    /// 整机功率积分的焦耳数。
     public var integrated: Double
     /// 系统累计补数的焦耳数（app 没运行的时段）。
     public var filled: Double
@@ -118,16 +118,18 @@ public enum EnergyGap {
     ) -> (start: Date, end: Date, joules: Double)? {
         let bootTime = boot.time
         if let anchor, anchor.boot.isSameBoot(as: boot) {
+            // 锚点来自另一个累加器（升级前的版本，D107）：两者不可相减，这段不补。
+            guard anchor.telemetry.resolvedEnergySource == now.resolvedEnergySource else { return nil }
             // 同一次开机：累加器差值。倒退（不应发生）时不补。
-            let delta = now.accumulatedSystemPowerIn - anchor.telemetry.accumulatedSystemPowerIn
+            let delta = now.accumulatedSystemEnergy - anchor.telemetry.accumulatedSystemEnergy
             let seconds = now.wallClock.timeIntervalSince(anchor.telemetry.wallClock)
             guard delta >= 0, seconds >= minimumSeconds else { return nil }
             return (anchor.telemetry.wallClock, now.wallClock, Double(delta) / 1000)
         }
         // 开机变了（或第一次运行）：累加器从开机起算。第一次运行时也补上本次开机以来的能耗。
         let seconds = now.wallClock.timeIntervalSince(bootTime)
-        guard seconds >= minimumSeconds, now.accumulatedSystemPowerIn >= 0 else { return nil }
-        return (bootTime, now.wallClock, Double(now.accumulatedSystemPowerIn) / 1000)
+        guard seconds >= minimumSeconds, now.accumulatedSystemEnergy >= 0 else { return nil }
+        return (bootTime, now.wallClock, Double(now.accumulatedSystemEnergy) / 1000)
     }
 
     /// 把一段能量按时长均摊进所跨的 UTC 分钟（`covered` 为该分钟里被缺口覆盖的秒数）。

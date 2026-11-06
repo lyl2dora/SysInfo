@@ -22,7 +22,7 @@ extension SysInfoCLI {
             }
         }
         if !json {
-            print("\(machineLine()) · 热点 \(describe(sensors.hotspotSource)) · 风扇 \(sensors.fans.count) 个")
+            print("\(machineLine()) · 整机键 \(rail.key ?? "—") · 热点 \(describe(sensors.hotspotSource)) · 风扇 \(sensors.fans.count) 个")
         }
         let encoder = makeEncoder()
         var deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
@@ -59,7 +59,7 @@ extension SysInfoCLI {
                 let integrated = segment.integratedWatts.map { String(format: "%.2f W", $0) } ?? "覆盖不足"
                 let verdict = segment.isDropped ? "累加器漏记" : segment.deviation.map { String(format: "%+.1f%%", $0 * 100) } ?? "—"
                 print(
-                    "    遥测：\(Int(segment.countDelta)) 次计数 \(String(format: "%.0f", segment.seconds)) s，均值 \(String(format: "%.2f W", segment.telemetryWatts))，PDTR 积分 \(integrated)，\(verdict)")
+                    "    遥测：\(Int(segment.countDelta)) 次计数 \(String(format: "%.0f", segment.seconds)) s，均值 \(String(format: "%.2f W", segment.telemetryWatts))，\(rail.key ?? "整机功率") 积分 \(integrated)，\(verdict)")
             }
             fflush(stdout)
         }

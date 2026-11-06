@@ -1,7 +1,7 @@
 // 历史导出（CPU 模块设计 §6 Exporter，D30，边界稿 §5.5）。只在用户手动触发时运行。
 //
 // - CSV：一个文件夹，`system.csv` 是宽表（ISO 8601 UTC 时间，每个指标 avg、max 两列，空洞留空）、
-//   `apps.csv` 是长表、`energy.csv` 是按小时的能耗（source：integrated 为 PDTR 积分，filled 为系统累计补数，D46）、
+//   `apps.csv` 是长表、`energy.csv` 是按小时的能耗（source：integrated 为整机功率积分，filled 为系统累计补数，D46）、
 //   `metadata.json` 写机型、芯片、档名与核数、单位和 app 版本；
 // - JSON Lines：长表，首行是元数据，能耗为 `energy` 记录；
 // - 不导出任何设备唯一标识：库里本来就没有序列号、UUID、MAC、IP；机型标识和芯片名不是唯一标识，照常包含。
@@ -189,7 +189,7 @@ public enum HistoryExporter {
                 "avg/max are per-\(options.granularity.rawValue) aggregates in SI units; empty max means the samples covered windows too long to have a peak.",
                 "apps: per minute, the union of the top \(MinuteAggregator.appsPerMinute) apps by each of CPU, energy, GPU, ANE, disk, wakeups and memory, plus one __other__ row with the rest (before schema 3 only the top \(MinuteAggregator.appsPerMinute) by CPU, without the extra columns); cpu_cores = cpu_ns / 60e9; energy_j is CPU energy, gpu_j and ane_j are separate; footprint is the peak in the minute.",
                 "assertions: power assertions that prevented system or display sleep, recorded while SysInfo was running; end_estimated = the app quit or crashed before the assertion ended.",
-                "energy: hourly joules; source integrated = 1 Hz PDTR integral, filled = PowerTelemetryData accumulator for periods when SysInfo was not running (may be low under heavy load).",
+                "energy: hourly joules; source integrated = 1 Hz SMC system power integral, filled = PowerTelemetryData accumulator for periods when SysInfo was not running (may be low under heavy load).",
                 "storage: disk and volume-group keys are locally salted hashes (no serial numbers); storageDevices maps them to model and position.",
                 "devices: devices.ups.* are the primary UPS (charge and input voltage from IOPS, load from HID); upsPowerSpans lists the periods the UPS ran on battery, end_estimated = SysInfo quit before mains returned.",
             ], storageDevices: storageDevices.filter { usedKeys.contains($0.key) })

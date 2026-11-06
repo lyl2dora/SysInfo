@@ -256,7 +256,7 @@ struct SysInfoCLI {
                                                       中断来源：按设备的每秒中断次数（IOReport Interrupt Statistics）
               power [--interval 1] [--count 5] [--json]
                                                       整机 / SoC / GPU / DRAM 功率、墙插估算、SoC 最热点、风扇、低功耗模式，
-                                                      以及遥测与 PDTR 积分的逐段对账
+                                                      以及遥测与整机功率积分的逐段对账
               memory [--interval 1] [--count 5] [--bandwidth] [--json]
                                                       内存总量与构成（活动监视器口径）、压力、Swap、压缩比与各速率；
                                                       --bandwidth 同时打印 DRAM 带宽的分档估算（相对量）
