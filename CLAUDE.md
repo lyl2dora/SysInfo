@@ -4,8 +4,8 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
 
 - Release 版 Bundle ID 是 `zone.lyl.sysinfo`。
 - Debug 版是 `zone.lyl.sysinfo.dev`，显示名「SysInfo Dev」，不注册登录项。开发和测试时只读写 `.dev` 的 defaults 域和数据目录，不动用户日用版（D16）。
-- 目标设备是用户的多台 Apple 芯片 Mac，不只是开发机 M5 Pro（D20）。当前清单见 D28（取代 D25 的清单）：
-  - 本机：M5 Pro，6 Super + 12 Performance。
+- 目标设备是用户的多台 Apple 芯片 Mac，不只是开发机 M5 Pro（D20）。当前清单见 D28（取代 D25 的清单）与 D108：
+  - 本机：Mac17,8，M5 Pro，6 Super + 12 Performance，内置电池、刘海屏（D108）。
   - 对照机 Mac mini：M4 Pro，10 Performance + 4 Efficiency，可以 ssh 访问（地址见不进库的 `CLAUDE.local.md` 与 `Config/remote.local.mk`，D77），已装 Xcode 27。原来的 Mac Studio（M2 Max）已被替换，不再是目标设备，它的实测只作旁证。
   - 在对照机上构建或运行 CLI 与探针时，同样遵守 D18 的操作边界。每个模块验收时都要附上两台机器的对照结果。
   - 对照机上可以构建并启动 Debug 版 app 做截图自查，用完按 D39 清场。
@@ -67,6 +67,7 @@ SysInfo 是一个从零设计的自用 macOS 27 菜单栏系统监控 app，**�
     - IOReport Energy Model 中由 PMGR 驱动的通道（CPU、ANE、DRAM、GPU0 等）每 30 分钟才批量发布一次，不能用作实时功耗。
     - AGX 的 `GPU Energy` 是例外，它是实时的，是 GPU 功耗的首选来源。
     - 实时 CPU、DRAM、SoC 功耗改用 SMC（调研报告 §0-2）。
+    - `PDTR` 只是电源输入，由电池供电时接近 0：有内置电池的机器，整机功率读 `PSTR`，累加器读 `AccumulatedSystemLoad`（D107）。
     - `PowerTelemetryData` 累加器在高负载下会整分钟漏记，长期能耗用 `PDTR` 积分（D46）；CPU 专用轨不乘 PMGR 系数（D45）；M4 的 SMC GPU 轨不是 GPU 功率，GPU 一律用 AGX（D44）。
   - `host_statistics` 受全系统节流：页面计数改读 `vm.page_*` sysctl；与上次逐字节相同的结果视为陈旧。
   - 传感器：
