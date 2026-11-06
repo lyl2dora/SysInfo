@@ -32,7 +32,7 @@ public actor HistoryRecorder {
         public var highPrecision: Bool
         /// 记录功耗与散热指标（设置「记录功耗与散热历史」）：SoC/GPU 功率、最热点、风扇每 10 s，PMGR 批次每 60 s。
         public var recordPower: Bool
-        /// 记录能耗（D46）：PDTR 每 1 s 积分。
+        /// 记录能耗（D46）：整机功率每 1 s 积分。
         public var recordEnergy: Bool
         /// 记录内存指标（D49）：后台每 10 s。
         public var recordMemory: Bool
@@ -74,7 +74,7 @@ public actor HistoryRecorder {
         }
     }
 
-    /// PDTR 积分的间隔（D46：1 s）、PMGR 批次检查的间隔。
+    /// 整机功率积分的间隔（D46：1 s）、PMGR 批次检查的间隔。
     public static let energyInterval = 1
     public static let pmgrInterval = 60
     static let anchorKey = "energy.anchor"

@@ -144,7 +144,7 @@ enum WidgetInfo {
         case .power:
             return String(localized: "CPU 各簇功耗之和，不含 GPU；没有专用功耗轨的芯片显示「—」。\(CostLabel.text(collector: SensorCollector.collectorID, interval: interval, store: store))")
         case .systemPower:
-            return String(localized: "整机直流功率（SMC PDTR），约 2 秒平滑。\(CostLabel.text(collector: PowerRailCollector.collectorID, interval: interval, store: store))")
+            return String(localized: "整机功率（SMC），约 2 秒平滑。\(CostLabel.text(collector: PowerRailCollector.collectorID, interval: interval, store: store))")
         case .socHotspot:
             return String(localized: "SoC 上最热的读数，随 CPU 和 GPU 负载变化。\(CostLabel.text(collector: PowerSensorCollector.collectorID, interval: interval, store: store))")
         case .socPower:

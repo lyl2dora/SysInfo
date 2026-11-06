@@ -1,7 +1,7 @@
 // 诊断页的功耗与散热部分（功耗与散热模块设计 §7.4，D44–D46）：
 // - 数据源与键：整机 / SoC / DRAM 键来自档案还是默认；GPU 通道；最热点来源（M4 的旧值说明）；风扇模式键；PMGR 部件；
 // - 原始功率键（PHPC 等只在这里显示）；
-// - 遥测对账：最近的 60 s 段，PDTR 积分与累加器均值，漏记的段标出（D46）；
+// - 遥测对账：最近的 60 s 段，整机功率积分与累加器均值，漏记的段标出（D46）；
 // - PMGR 最近一批与交叉核对（D44 §7）；
 // - 传感器目录：默认折叠，展开时才登记 sensors.catalog 需求（D44 PT6）。
 
@@ -112,7 +112,7 @@ struct PowerDiagnosticsSection: View {
                         Text(Formatting.time(segment.end)).monospacedDigit()
                         Spacer()
                         Text(
-                            "遥测 \(Formatting.watts(segment.telemetryWatts)) · PDTR \(segment.integratedWatts.map(Formatting.watts) ?? "—") · 计数 \(segment.countDelta)"
+                            "遥测 \(Formatting.watts(segment.telemetryWatts)) · 积分 \(segment.integratedWatts.map(Formatting.watts) ?? "—") · 计数 \(segment.countDelta)"
                         )
                         .monospacedDigit()
                         Text(segment.isDropped ? String(localized: "漏记") : segment.deviation.map { String(format: "%+.1f%%", $0 * 100) } ?? "—")
@@ -125,7 +125,7 @@ struct PowerDiagnosticsSection: View {
         } header: {
             Text("遥测对账")
         } footer: {
-            Text("PowerTelemetryData 累加器在满载时会整分钟漏记，所以能耗按 PDTR 每秒积分，累加器只用来补 SysInfo 没运行的时段（D46）。")
+            Text("PowerTelemetryData 累加器在满载时会整分钟漏记，所以能耗按整机功率每秒积分，累加器只用来补 SysInfo 没运行的时段（D46）。")
         }
     }
 

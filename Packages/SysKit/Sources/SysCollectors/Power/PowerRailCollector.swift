@@ -1,10 +1,12 @@
 // 整机功率采集器 `power.rail`（功耗与散热模块设计 §4.1，D44、D46）。走阻塞通道：SMC 读取会阻塞。
 //
-// - 每次读一个 SMC 键（档案的 systemPowerKey，没有档案时用 PDTR），输出 `power.system`；
+// - 每次读一个 SMC 键，输出 `power.system`（D107）：
+//   - 没有内置电池：档案的 systemPowerKey，没有档案时用 PDTR；
+//   - 有内置电池：PSTR。PDTR 只是电源输入，由电池供电时接近 0；
 // - 每次顺带读 `PowerTelemetryData`（0.15–0.23 ms）。计数器变化时：
 //   - 输出 `power.wall`（公式值，estimated，D46）；
-//   - 把这一段的 PDTR 积分与遥测均值对账，记进账本（诊断页逐段列出，累加器漏记的段标出）；
-// - 未知芯片的 PDTR 先标 inferred，遥测对账连续 3 段一致后升为 measured（功耗与散热模块设计 §4.1）。
+//   - 把这一段的整机功率积分与遥测均值对账，记进账本（诊断页逐段列出，累加器漏记的段标出）；
+// - 键不来自档案（未知芯片、有电池的机器）时先标 inferred，遥测对账连续 3 段一致后升为 measured（功耗与散热模块设计 §4.1）。
 
 import Foundation
 import Synchronization
@@ -12,7 +14,7 @@ import SysModel
 
 public final class PowerRailCollector: Collector {
     public static let collectorID: CollectorID = "power.rail"
-    public static let dataPath = "AppleSMC PDTR (read-only) + AppleSmartBattery.PowerTelemetryData"
+    public static let dataPath = "AppleSMC PDTR / PSTR (read-only) + AppleSmartBattery.PowerTelemetryData"
 
     /// 积分时单个样本最多覆盖的秒数（D46）：超出部分不外推。
     static let maxSampleSpan: Double = 1.05
@@ -31,7 +33,7 @@ public final class PowerRailCollector: Collector {
         var lastTime: SampleTime?
         var lastWatts: Double?
         var lastTelemetry: PowerTelemetryReading?
-        /// 上一次遥测变化以来的 PDTR 积分与覆盖秒数。
+        /// 上一次遥测变化以来的整机功率积分与覆盖秒数。
         var segmentJoules = 0.0
         var segmentCovered = 0.0
         /// 当前这一段是否从一次计数变化开始：第一次读到的累加器值来自上一次发布，到下一次变化之间的差值
@@ -60,7 +62,7 @@ public final class PowerRailCollector: Collector {
 
     /// 当前读的键；未通过自检时为 nil。
     public var key: String? { state.withLock { $0.key } }
-    /// 键来自芯片档案（否则是默认的 PDTR）。
+    /// 键来自芯片档案（否则是默认的 PDTR，或有电池时的 PSTR）。
     public var keyFromProfile: Bool { state.withLock { $0.fromProfile } }
 
     // MARK: - Collector
@@ -68,13 +70,15 @@ public final class PowerRailCollector: Collector {
     public func selfTest() -> SelfTestResult {
         var checks: [SelfTestCheck] = []
         let system = resolveProfile()?.profile.system
-        let key = system?.systemPowerKey ?? PowerProfiles.fallback.systemPowerKey
+        let batteryInstalled = telemetry.batteryInstalled
+        let (key, fromProfile) = PowerProfiles.systemPowerKey(system: system, batteryInstalled: batteryInstalled)
         let value = smc.value(key)
         let plausible = value.map { $0 >= 0.3 && $0 <= 1000 } ?? false
+        let origin = batteryInstalled ? " (battery)" : fromProfile ? "" : " (default)"
         checks.append(
             SelfTestCheck(
                 name: "power.rail.key", passed: plausible,
-                detail: "\(key)\(system == nil ? " (default)" : "") = \(value.map { String(format: "%.2f W", $0) } ?? "unreadable")"))
+                detail: "\(key)\(origin) = \(value.map { String(format: "%.2f W", $0) } ?? "unreadable")"))
         let reading = telemetry.read()
         checks.append(
             SelfTestCheck(
@@ -83,7 +87,7 @@ public final class PowerRailCollector: Collector {
         let result = SelfTestResult(checks: checks, dataPath: Self.dataPath)
         state.withLock {
             $0.key = plausible ? key : nil
-            $0.fromProfile = system != nil
+            $0.fromProfile = fromProfile
             $0.usable = result.isUsable
             $0.lastTime = nil
             $0.lastWatts = nil
