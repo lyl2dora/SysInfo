@@ -51,7 +51,7 @@
 - **L05** `SysCollectors/Storage/` 的 `DiskInventory`。`sysinfo-cli storage` 显示「物理盘 2 块」，第二块是 `? · Built In SDXC Reader`，没有 BSD 名和容量。`StorageTests.swift:347、348`（`findsPhysicalDisksWithStatistics`）失败；`StorageTests.swift:386`（`focusLimitsReadsToFocusedDisks`）也失败，可能同因，未证实。修之前要想清楚插卡后的行为。
 - **L06** `SysCollectors/Sensors/SensorCollector.swift:200–219`，档案 `AppleT6050PMGR.json`。`PPSR` 是档案里的 `sharedRails`，只进诊断，不参与簇功耗合计；温度与簇功耗照常输出，所以读数不受影响，只是状态一直降级。失败的测试：`PrivateLayerHardwareTests.swift:103`、`HardwareTests.swift:91`。档案描述也还写着 Mac17,16。要定的是：同一块芯片的档案怎么表达「共享轨随机型不同」，以及 26B123 怎么加进已验证列表。
 - **L11** 19:34:35 出现 `NSHostingView is being laid out reentrantly`，紧接 `-layoutSubtreeIfNeeded` 的 AppKit 报错。`App/Panel/PanelController.swift:720`（`fitToContent`）与 `:741`（`fittingSize`）有嫌疑，未证实。只出现过 1 次，要先能复现。
-- **L13** `sysinfo-cli/Power.swift:60`。判断「本段刚结束」的时间窗比采样间隔宽，同一段会连续命中两次。只影响 CLI 输出。
+- **L13** `sysinfo-cli/Power.swift:58`。判断「本段刚结束」的时间窗比采样间隔宽，同一段会连续命中两次。只影响 CLI 输出。
 
 ### 待定（要用户决定）
 
